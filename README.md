@@ -9,7 +9,7 @@ The binary is `ta`; the crate is `taska`.
 
 ```console
 $ ta create api status=open
-$ ta create db status=done
+$ ta create db status=closed
 $ ta block api db          # api depends on db
 $ ta ready                 # db is done, so api is actionable
 api  {"status":"open"}  deps=["db"]
@@ -43,24 +43,24 @@ Run `ta init` once per clone (inside a git repository). It creates the `.taska/`
 
 ```console
 $ git init && ta init
-$ ta create db status=done
+$ ta create db status=closed
 $ ta create api status=open priority=3
 $ ta block api db                 # api depends on db
 
 $ ta list
 api  {"priority":3,"status":"open"}  deps=["db"]
-db   {"status":"done"}
+db   {"status":"closed"}
 
 $ ta ready                        # not-done tasks whose deps are all done
 api  {"priority":3,"status":"open"}  deps=["db"]
 
-$ ta update api status=done
+$ ta update api status=closed
 $ ta ready
 (nothing ready)
 
-$ ta search status done
-api  {"priority":3,"status":"done"}
-db   {"status":"done"}
+$ ta search status closed
+api  {"priority":3,"status":"closed"}
+db   {"status":"closed"}
 ```
 
 Commit `.taska/` and `.gitattributes` along with your code — they travel with the repo.
@@ -114,7 +114,7 @@ keep_days = 30
 # The field that records status, and the value that means "done".
 # `ta ready` treats a dependency as satisfied once it reaches done_status.
 status_field = "status"
-done_status = "done"
+done_status = "closed"
 
 [merge]
 on_conflict = "surface"

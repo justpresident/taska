@@ -1,10 +1,12 @@
 //! End-to-end tests driving the real `ta` binary against throwaway git repos.
 //!
-//! Cargo builds the binary and hands us its path via `CARGO_BIN_EXE_ta`, and a
-//! per-suite scratch directory via `CARGO_TARGET_TMPDIR`. Each test gets its own
-//! subdirectory so the suite is parallel-safe. The git merge-driver test needs
-//! git to find `ta` on `PATH`, so every spawned command runs with the binary's
-//! directory prepended to `PATH`.
+//! Cargo builds the binary and hands us its path via `CARGO_BIN_EXE_ta`. Each
+//! test gets its own throwaway subdirectory under the *system* temp dir —
+//! deliberately outside the project tree, so `ta`'s walk-up store discovery
+//! can't climb into the repo's own `.taska` (e.g. a dogfooding store) and
+//! read/write that instead of the test's isolated one. The git merge-driver
+//! test needs git to find `ta` on `PATH`, so every spawned command runs with the
+//! binary's directory prepended to `PATH`.
 
 use std::ffi::OsString;
 use std::fs;
@@ -29,9 +31,11 @@ fn path_with_bin() -> OsString {
     std::env::join_paths(dirs).unwrap()
 }
 
-/// A fresh, empty scratch directory unique to `name`.
+/// A fresh, empty scratch directory unique to `name`, under the system temp dir
+/// (NOT `CARGO_TARGET_TMPDIR`, which lives inside the project tree where `ta`'s
+/// store discovery would find the repo's own `.taska` in an ancestor).
 fn fresh_dir(name: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let dir = std::env::temp_dir().join("taska-e2e").join(name);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -113,7 +117,7 @@ fn crud_search_and_ready_workflow() {
     init_repo(&dir);
     ta(&dir, &["init"]);
 
-    ta(&dir, &["create", "db", "status=done"]);
+    ta(&dir, &["create", "db", "status=closed"]);
     ta(&dir, &["create", "api", "status=open", "priority=3"]);
     ta(&dir, &["block", "api", "db"]);
 
@@ -131,7 +135,7 @@ fn crud_search_and_ready_workflow() {
     assert!(lists_task(&ready, "api"), "ready: {ready}");
 
     // Once api is done too, nothing is ready.
-    ta(&dir, &["update", "api", "status=done"]);
+    ta(&dir, &["update", "api", "status=closed"]);
     assert_eq!(ta(&dir, &["ready"]).trim(), "(nothing ready)");
 
     ta(&dir, &["delete", "db"]);
@@ -350,7 +354,7 @@ fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
 
     // main and feature overlap on status+owner, but each adds a disjoint field.
     git(&dir, &["branch", "feature"]);
-    ta(&dir, &["update", "X", "status=done", "owner=alice", "scope=project"]);
+    ta(&dir, &["update", "X", "status=closed", "owner=alice", "scope=project"]);
     git(&dir, &["commit", "-aqm", "main edit"]);
 
     git(&dir, &["checkout", "-q", "feature"]);

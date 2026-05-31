@@ -24,7 +24,7 @@ keep_days = 30
 # task complete. `ta ready` treats a dependency as satisfied once it reaches
 # `done_status`.
 status_field = "status"
-done_status = "done"
+done_status = "closed"
 
 [merge]
 # What to do when concurrent branches change the SAME field (or dependency) to

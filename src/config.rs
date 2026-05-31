@@ -117,7 +117,7 @@ impl Default for WorkflowConfig {
     fn default() -> Self {
         WorkflowConfig {
             status_field: "status".to_string(),
-            done_status: "done".to_string(),
+            done_status: "closed".to_string(),
         }
     }
 }
