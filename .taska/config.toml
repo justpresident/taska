@@ -1,0 +1,37 @@
+# taska configuration
+#
+# Created by `ta init`. Edit freely — `ta init` will not overwrite this file
+# once it exists. Missing keys fall back to the defaults shown below.
+
+[compaction]
+# `ta compact` folds old events into the baseline snapshot to keep the log
+# small. These settings control how much recent history stays in the log.
+#
+# Recent events must be retained: the git merge driver reconciles divergent
+# branches from the events still in the log, so anything already folded into the
+# baseline can no longer be reconciled. Keep enough history to cover your
+# longest-lived branch.
+#
+# Keep at least this many of the most recent events (minimum 100); also
+# the minimum log size before compaction does anything.
+keep_events = 1000
+# Also keep every event from at least this many days back (0 disables the time
+# window). An event is retained if it is recent by either rule.
+keep_days = 30
+
+[workflow]
+# The custom field that records a task's status, and the value that marks a
+# task complete. `ta ready` treats a dependency as satisfied once it reaches
+# `done_status`.
+status_field = "status"
+done_status = "done"
+
+[merge]
+# What to do when concurrent branches change the SAME field (or dependency) to
+# incompatible values. Non-overlapping changes always merge cleanly; this only
+# governs genuine contradictions, and it resolves them per-field:
+#   "surface" — stop the merge and let a human resolve it (run `ta resolve`)
+#   "latest"  — keep the most recently written value (by timestamp)
+#   "ours"    — keep the value on the branch being merged INTO
+#   "theirs"  — keep the value from the branch being merged IN
+on_conflict = "surface"
