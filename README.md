@@ -1,5 +1,5 @@
 ![CI](https://github.com/justpresident/rcypher/actions/workflows/ci.yml/badge.svg)
-![Coverage](https://raw.githubusercontent.com/justpresident/rcypher/main/.github/badges/coverage.svg)
+![Coverage](https://raw.githubusercontent.com/justpresident/taska/main/.github/badges/coverage.svg)
 # taska
 
 [![Crates.io](https://img.shields.io/crates/v/taska.svg)](https://crates.io/crates/taska)
