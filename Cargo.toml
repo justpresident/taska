@@ -2,6 +2,16 @@
 name = "taska"
 version = "0.1.0"
 edition = "2021"
+authors = ["Roman Studenikin <justpresident@gmail.com>"]
+description = "Local-first, git-native task & dependency engine for human and agent workflows"
+repository = "https://github.com/justpresident/taska"
+homepage = "https://github.com/justpresident/taska"
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["task", "todo", "agentic", "git", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+# Keep the published tarball to the crate itself; internal/draft docs stay in the repo.
+exclude = ["/docs"]
 
 [[bin]]
 name = "ta"
