@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use serde_json::{Map, Value};
 
-use crate::config::{CompactionConfig, WorkflowConfig};
+use crate::config::{CompactionConfig, Config, WorkflowConfig};
 use crate::engine::Engine;
 use crate::error::DynError;
 use crate::git;
@@ -51,9 +51,21 @@ enum Commands {
     Ready,
     /// Fold the mutation log into the baseline snapshot
     Compact,
-    /// Git custom merge driver entrypoint (invoked by Git, not humans)
+    /// Review and clear a surfaced merge conflict
+    Resolve,
+    /// Git event-log merge driver entrypoint (invoked by Git, not humans)
     #[command(name = "git-merge")]
     GitMerge {
+        ancestor: String,
+        current: String,
+        incoming: String,
+        /// Original pathname (%P); accepted for Git compatibility, unused.
+        #[arg(default_value = "")]
+        path: String,
+    },
+    /// Git baseline merge driver entrypoint (invoked by Git, not humans)
+    #[command(name = "git-merge-baseline")]
+    GitMergeBaseline {
         ancestor: String,
         current: String,
         incoming: String,
@@ -74,30 +86,77 @@ pub fn run() -> Result<(), DynError> {
             current,
             incoming,
             path: _,
-        } => merge::execute_git_merge(&ancestor, &current, &incoming),
+        } => {
+            // Git invokes the driver from the repo root; read the conflict policy
+            // and marker location from the store if it's discoverable, else fall
+            // back to defaults so a merge never fails merely for lack of config.
+            let store = FileStore::discover().ok();
+            let on_conflict = store
+                .as_ref()
+                .map(|s| s.config().merge.on_conflict)
+                .unwrap_or_default();
+            let marker = store.as_ref().map(|s| s.base_dir.join("merge-conflict.json"));
+            merge::execute_git_merge(&ancestor, &current, &incoming, on_conflict, marker.as_deref())
+        }
+        Commands::GitMergeBaseline {
+            ancestor,
+            current,
+            incoming,
+            path: _,
+        } => merge::execute_git_merge_baseline(&ancestor, &current, &incoming),
 
-        // Store-backed commands: resolve the store, then hand off to a handler
-        // that only knows the `EventStore` abstraction.
-        Commands::Create { id, fields } => cmd_create(&FileStore::discover()?, id, fields),
-        Commands::Update { id, fields } => cmd_update(&FileStore::discover()?, id, fields),
+        // Reviewing a surfaced conflict must work even if the config is currently
+        // invalid, so it resolves the store without the validation gate.
+        Commands::Resolve => cmd_resolve(&FileStore::discover()?),
+
+        // Everything else resolves the store once and validates its config
+        // before dispatching, so a bad config edit surfaces on the next command.
+        store_command => {
+            let store = FileStore::discover()?;
+            enforce_config(store.config())?;
+            dispatch_store_command(store_command, &store)
+        }
+    }
+}
+
+/// Validate config on every store-backed command. Tests that deliberately drive
+/// tiny retention values set `TASKA_ALLOW_UNSAFE_RETENTION` to bypass the floor.
+fn enforce_config(cfg: &Config) -> Result<(), DynError> {
+    if std::env::var_os("TASKA_ALLOW_UNSAFE_RETENTION").is_some() {
+        return Ok(());
+    }
+    cfg.validate()
+}
+
+/// Dispatch a command that operates on an already-resolved, already-validated
+/// store. Handlers depend only on the `EventStore` abstraction.
+fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), DynError> {
+    match command {
+        Commands::Create { id, fields } => cmd_create(store, id, fields),
+        Commands::Update { id, fields } => cmd_update(store, id, fields),
         Commands::Block { task_id, depends_on } => {
-            cmd_dep(&FileStore::discover()?, task_id, depends_on, OpType::AddDep)
+            cmd_dep(store, task_id, depends_on, OpType::AddDep)
         }
         Commands::Unblock { task_id, depends_on } => {
-            cmd_dep(&FileStore::discover()?, task_id, depends_on, OpType::RemoveDep)
+            cmd_dep(store, task_id, depends_on, OpType::RemoveDep)
         }
-        Commands::Delete { id } => cmd_delete(&FileStore::discover()?, id),
-        Commands::List => cmd_list(&FileStore::discover()?),
-        Commands::Search { key, val } => cmd_search(&FileStore::discover()?, key, val),
+        Commands::Delete { id } => cmd_delete(store, id),
+        Commands::List => cmd_list(store),
+        Commands::Search { key, val } => cmd_search(store, key, val),
         Commands::Ready => {
-            let store = FileStore::discover()?;
             let workflow = store.config().workflow.clone();
-            cmd_ready(&store, &workflow)
+            cmd_ready(store, &workflow)
         }
         Commands::Compact => {
-            let store = FileStore::discover()?;
             let cfg = store.config().compaction.clone();
-            cmd_compact(&store, &cfg, Utc::now())
+            cmd_compact(store, &cfg, Utc::now())
+        }
+        // Resolved before dispatch in `run`.
+        Commands::Init
+        | Commands::Resolve
+        | Commands::GitMerge { .. }
+        | Commands::GitMergeBaseline { .. } => {
+            unreachable!("non-store commands are handled before dispatch")
         }
     }
 }
@@ -110,6 +169,11 @@ fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskState>, DynEr
     ))
 }
 
+/// Event keys that are struct fields, not schema-agnostic task fields. Letting a
+/// user field shadow one of these would either collide with the event envelope
+/// or be silently swallowed by `_meta`, so we reject them up front.
+const RESERVED_FIELD_KEYS: &[&str] = &["seq", "timestamp", "op", "task_id", "_meta"];
+
 /// Parse `key=value` strings; values are parsed as JSON, falling back to a
 /// plain string when that fails (so `status=open` stays a string).
 fn parse_fields(fields: &[String]) -> Result<Map<String, Value>, DynError> {
@@ -118,6 +182,9 @@ fn parse_fields(fields: &[String]) -> Result<Map<String, Value>, DynError> {
         let (key, val) = raw
             .split_once('=')
             .ok_or_else(|| format!("invalid field `{}` (expected key=value)", raw))?;
+        if RESERVED_FIELD_KEYS.contains(&key) {
+            return Err(format!("field name `{}` is reserved and can't be used", key).into());
+        }
         let value =
             serde_json::from_str::<Value>(val).unwrap_or_else(|_| Value::String(val.to_string()));
         map.insert(key.to_string(), value);
@@ -271,6 +338,52 @@ fn cmd_compact(
     Ok(())
 }
 
+/// Report and clear a surfaced merge conflict. The deterministic merge is
+/// already written to the log by the driver, so for now this acknowledges the
+/// conflicts and removes the marker; per-field resolution is future work.
+fn cmd_resolve(store: &FileStore) -> Result<(), DynError> {
+    let marker = store.base_dir.join("merge-conflict.json");
+    if !marker.exists() {
+        println!("No merge conflicts to resolve.");
+        return Ok(());
+    }
+
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(&marker)?)?;
+    let conflicts = doc.get("conflicts").and_then(|c| c.as_array());
+    match conflicts {
+        Some(items) if !items.is_empty() => {
+            println!(
+                "{} field conflict(s) were merged tentatively (keeping ours):",
+                items.len()
+            );
+            for item in items {
+                let task = item.get("task_id").and_then(|v| v.as_str()).unwrap_or("?");
+                let field = item.get("field").and_then(|v| v.as_str());
+                let ours = item.get("ours").cloned().unwrap_or(Value::Null);
+                let theirs = item.get("theirs").cloned().unwrap_or(Value::Null);
+                let kept = item.get("kept").and_then(|v| v.as_str()).unwrap_or("ours");
+                match field {
+                    Some(f) => println!(
+                        "  - `{task}`.{f}: ours={ours} / theirs={theirs} -> kept {kept}"
+                    ),
+                    None => println!(
+                        "  - `{task}` (whole task): ours={ours} / theirs={theirs} -> kept {kept}"
+                    ),
+                }
+            }
+            println!(
+                "\nThe tentative merge is already written to the log. To accept it, `git add` \
+                 the files and commit; to pick differently, edit the log or re-merge with a \
+                 different `on_conflict` strategy."
+            );
+        }
+        _ => println!("Merge marker present but lists no conflicts."),
+    }
+
+    std::fs::remove_file(&marker)?;
+    Ok(())
+}
+
 fn print_task(task: &TaskState) {
     let fields = serde_json::to_string(&task.custom_fields).unwrap_or_default();
     if task.depends_on.is_empty() {
@@ -300,8 +413,14 @@ mod tests {
         fn load_mutations(&self) -> Result<Vec<MutationEvent>, DynError> {
             Ok(self.events.borrow().clone())
         }
-        fn append_events(&self, new_events: &[MutationEvent]) -> Result<(), DynError> {
-            self.events.borrow_mut().extend_from_slice(new_events);
+        fn append_events(&self, drafts: &[MutationEvent]) -> Result<(), DynError> {
+            let mut events = self.events.borrow_mut();
+            let start = events.iter().map(|e| e.seq).max().map_or(1, |m| m + 1);
+            for (seq, draft) in (start..).zip(drafts) {
+                let mut event = draft.clone();
+                event.seq = seq;
+                events.push(event);
+            }
             Ok(())
         }
         fn compact(&self, baseline: &[TaskState], retained: &[MutationEvent]) -> Result<(), DynError> {
@@ -326,11 +445,12 @@ mod tests {
         let store = InMemoryStore::default();
         cmd_create(&store, "a".into(), vec![]).unwrap();
         cmd_create(&store, "b".into(), vec![]).unwrap();
-        // keep nothing -> fold the whole log into the baseline.
+        // keep_events = 0 still retains the most recent event (the log never
+        // empties, so the seq watermark stays derivable); the rest folds.
         let cfg = CompactionConfig { keep_events: 0, keep_days: 0 };
         cmd_compact(&store, &cfg, Utc::now()).unwrap();
-        assert!(store.load_mutations().unwrap().is_empty(), "log cleared");
-        assert_eq!(store.load_baseline().unwrap().len(), 2, "folded into baseline");
+        assert_eq!(store.load_mutations().unwrap().len(), 1, "one event retained");
+        assert_eq!(store.load_baseline().unwrap().len(), 1, "the rest folded");
         // Appends still work and overlay the baseline post-compaction.
         cmd_create(&store, "c".into(), vec![]).unwrap();
         assert_eq!(state_of(&store).unwrap().len(), 3);

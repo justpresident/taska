@@ -72,14 +72,21 @@ impl Engine {
         state_map
     }
 
-    /// Split point for the chronologically-ordered mutation log: events at
-    /// indices `[0, split)` are old enough to fold into the baseline, and
-    /// `[split, len)` are retained in the log.
+    /// Split point for the seq-ordered mutation log: events at indices
+    /// `[0, split)` are old enough to fold into the baseline, and `[split, len)`
+    /// are retained in the log.
     ///
     /// An event is retained if it is within the most recent `keep_events` **or**
     /// newer than `keep_days` (0 disables the time window) — kept if either rule
-    /// says so. Because the log is chronological, each rule yields a suffix, and
-    /// the union is the longer suffix, i.e. the smaller fold index.
+    /// says so. The count rule yields a seq-suffix directly; the time rule folds
+    /// only up to the first event newer than the window, so no recent event is
+    /// ever folded even if timestamps are non-monotonic along the seq order (as
+    /// they are after a merge restacks another branch's events). The smaller fold
+    /// index keeps the union of what each rule wants to retain.
+    ///
+    /// The result is clamped so it never folds the *last* event: the log must
+    /// stay non-empty so the compaction watermark `W = min(seq) - 1` remains
+    /// derivable (an empty log is indistinguishable from a fresh store).
     pub fn retention_split(
         mutations: &[MutationEvent],
         keep_events: usize,
@@ -97,7 +104,8 @@ impl Engine {
                 .position(|e| e.timestamp >= cutoff)
                 .unwrap_or(n)
         };
-        by_count.min(by_time)
+        // Never fold the final event, so the log can't be emptied.
+        by_count.min(by_time).min(n.saturating_sub(1))
     }
 
     /// Return tasks whose `key` field exactly equals `val`.
@@ -185,6 +193,17 @@ mod tests {
         assert_eq!(Engine::retention_split(&events, 3, 0, now), 7);
         // Keeping more than exist -> fold nothing (below the threshold).
         assert_eq!(Engine::retention_split(&events, 100, 0, now), 0);
+    }
+
+    #[test]
+    fn retention_split_never_empties_the_log() {
+        let now = chrono::Utc::now();
+        let events: Vec<_> = (0..3).map(|_| aged(0, now)).collect();
+        // keep_events = 0 would fold everything, but the clamp keeps the last one
+        // so the seq watermark stays derivable.
+        assert_eq!(Engine::retention_split(&events, 0, 0, now), 2);
+        // An empty log has nothing to fold.
+        assert_eq!(Engine::retention_split(&[], 0, 0, now), 0);
     }
 
     #[test]

@@ -73,6 +73,12 @@ impl FileStore {
             fs::write(&config_path, crate::config::default_toml())?;
         }
 
+        // The merge-conflict marker is transient per-clone state, never history.
+        let gitignore = base_dir.join(".gitignore");
+        if !gitignore.exists() {
+            fs::write(&gitignore, "merge-conflict.json\n")?;
+        }
+
         let store = FileStore::at(base_dir)?;
         // Touch the (configured) log files so subsequent reads never fail.
         OpenOptions::new()
@@ -129,11 +135,17 @@ impl EventStore for FileStore {
     /// Append-only write path for normal operations. Never rewrites or reorders
     /// existing lines, which is what keeps the log Git-merge-friendly (branches
     /// only ever append).
-    fn append_events(&self, new_events: &[MutationEvent]) -> Result<(), DynError> {
-        if new_events.is_empty() {
+    ///
+    /// Sequence numbers are minted here, under the lock: the next `seq` is one
+    /// past the largest already in the log (or 1 for a fresh/fully-overlaid log).
+    /// Minting under the same lock as the write is what stops two concurrent
+    /// writers from handing out the same `seq`.
+    fn append_events(&self, drafts: &[MutationEvent]) -> Result<(), DynError> {
+        if drafts.is_empty() {
             return Ok(());
         }
-        // `append(true)` keeps the write offset pinned to EOF for every write.
+        // `append(true)` keeps the write offset pinned to EOF for every write,
+        // even after we seek to the start to read the current max `seq`.
         let file = OpenOptions::new()
             .read(true)
             .append(true)
@@ -141,12 +153,15 @@ impl EventStore for FileStore {
             .open(self.mutations_path())?;
 
         // OS advisory write lock so concurrent writers can't interleave partial
-        // lines into the log.
+        // lines into the log or race on sequence assignment.
         let mut lock = RwLock::new(file);
         let mut locked_file = lock.write()?;
 
-        for event in new_events {
-            writeln!(locked_file, "{}", serde_json::to_string(event)?)?;
+        let start = max_seq(&mut locked_file)?.map_or(1, |m| m + 1);
+        for (seq, draft) in (start..).zip(drafts) {
+            let mut event = draft.clone();
+            event.seq = seq;
+            writeln!(locked_file, "{}", serde_json::to_string(&event)?)?;
         }
         locked_file.flush()?;
         Ok(())
@@ -202,5 +217,27 @@ fn read_events(path: &Path) -> Result<Vec<MutationEvent>, DynError> {
             Err(e) => eprintln!("warning: skipping corrupt event on line {}: {}", idx + 1, e),
         }
     }
+    // `seq` is the authoritative order, and every write path keeps the file in
+    // that order. Verify rather than sort: an out-of-order log is corruption we
+    // must surface, not silently repair.
+    crate::model::verify_seq_order(&out)?;
     Ok(out)
+}
+
+/// Largest `seq` in the open log, or `None` when it holds no events. Seeks to the
+/// start to scan; with the file opened `append(true)`, later writes still land at
+/// EOF regardless of where this leaves the read cursor.
+fn max_seq(file: &mut File) -> Result<Option<u64>, DynError> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut max: Option<u64> = None;
+    for line in BufReader::new(&mut *file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(event) = serde_json::from_str::<MutationEvent>(&line) {
+            max = Some(max.map_or(event.seq, |m| m.max(event.seq)));
+        }
+    }
+    Ok(max)
 }

@@ -1,48 +1,771 @@
-//! Git custom merge driver: structurally union diverged event logs.
+//! Git custom merge drivers for the event log and its baseline.
 //!
-//! Both branches only ever append events with unique ids, so a merge is simply
-//! the union of all events, re-sorted onto a single deterministic timeline.
+//! The log is a *sequence*, not a timestamp-keyed CRDT. Merging two diverged
+//! branches is a **rebase**: keep our events, restack the other branch's
+//! concurrent events on top, and then settle any genuine contradictions with an
+//! explicit, appended **resolution event** so the decision is visible in the
+//! history rather than hidden in an ordering trick.
+//!
+//! Resolution is **per-field**: only a field (or dependency edge, or whole-task
+//! delete) that *both* branches changed to incompatible values is a conflict;
+//! everything else merges untouched. Each conflict is settled by the
+//! `[merge] on_conflict` policy — `surface` (stop for a human), or one of three
+//! predictable strategies: `latest` (newest timestamp wins), `ours`, `theirs`.
+//!
+//! The baseline gets its own keep-ours driver: two branches that both compacted
+//! folded the same shared history to different depths, so our own baseline plus
+//! the (separately reconciled) log already reconstructs the state.
 
-use std::collections::BTreeMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use serde_json::{Map, Value};
+
+use crate::config::OnConflict;
 use crate::error::DynError;
-use crate::model::MutationEvent;
+use crate::model::{MutationEvent, OpType, TaskState};
 
-/// Merge `ancestor` + `current` + `incoming` event files into `current` (Git's
-/// `%A`). Returns Ok(()) on a clean structural resolution.
-pub fn execute_git_merge(ancestor: &str, current: &str, incoming: &str) -> Result<(), DynError> {
-    // BTreeMap keeps the unified timeline sorted by (timestamp, id).
-    let mut unified_timeline: BTreeMap<String, MutationEvent> = BTreeMap::new();
+/// `ta git-merge %O %A %B` — reconcile diverged mutation logs into `current`
+/// (Git's `%A` = "ours"; `incoming` is `%B` = "theirs"). `marker_path`, when
+/// known, is where a surfaced conflict is recorded for `ta resolve`.
+pub fn execute_git_merge(
+    ancestor: &str,
+    current: &str,
+    incoming: &str,
+    on_conflict: OnConflict,
+    marker_path: Option<&Path>,
+) -> Result<(), DynError> {
+    let anc = read_log(ancestor)?;
+    let ours = read_log(current)?;
+    let theirs = read_log(incoming)?;
 
-    let mut extract_events = |file_path: &str| -> Result<(), DynError> {
-        if std::path::Path::new(file_path).exists() {
-            let file = File::open(file_path)?;
-            for line in BufReader::new(file).lines() {
-                let line = line?;
-                if !line.trim().is_empty() {
-                    let event: MutationEvent = serde_json::from_str(&line)?;
-                    // Compound key: chronological, with id as a tiebreaker so
-                    // same-microsecond events never collide.
-                    let compound_key = format!("{}_{}", event.timestamp.to_rfc3339(), event.id);
-                    unified_timeline.insert(compound_key, event);
+    // The last sequence number both branches share. Everything above it on each
+    // side is that branch's concurrent work since the fork.
+    let fork = anc.iter().map(|e| e.seq).max().unwrap_or(0);
+
+    let shared_tail: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq <= fork).collect();
+    let ours_concurrent: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
+    let theirs_concurrent: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
+
+    // `surface` still writes a valid, deterministic file (resolving tentatively
+    // as `ours`) so it's never broken, then flags the conflicts and fails so Git
+    // marks the path unmerged.
+    let strategy = Strategy::for_policy(on_conflict);
+    let plan = resolve(&summarize(&ours_concurrent), &summarize(&theirs_concurrent), strategy);
+
+    let merged = assemble(
+        &shared_tail,
+        &ours_concurrent,
+        &theirs_concurrent,
+        &plan,
+        fork,
+    );
+    write_log(current, &merged)?;
+
+    if on_conflict == OnConflict::Surface && !plan.conflicts.is_empty() {
+        if let Some(path) = marker_path {
+            write_conflict_marker(path, &plan.conflicts)?;
+        }
+        eprintln!(
+            "taska: {} event-log merge conflict(s); a tentative merge (keeping ours) was \
+             written but flagged. Review with `ta resolve`, then `git add` and commit.",
+            plan.conflicts.len()
+        );
+        return Err(format!("{} unresolved merge conflict(s)", plan.conflicts.len()).into());
+    }
+
+    Ok(())
+}
+
+/// `ta git-merge-baseline %O %A %B` — keep our baseline. `current` (`%A`) already
+/// holds our version, so we leave it untouched and only sanity-check for a sign
+/// that someone compacted past their fork (which `keep_events` is meant to
+/// prevent): a task unchanged from the ancestor on our side but different on
+/// theirs.
+pub fn execute_git_merge_baseline(
+    ancestor: &str,
+    current: &str,
+    incoming: &str,
+) -> Result<(), DynError> {
+    let base = index_baseline(read_baseline(ancestor)?);
+    let ours = index_baseline(read_baseline(current)?);
+    let theirs = index_baseline(read_baseline(incoming)?);
+
+    for (id, base_task) in &base {
+        if let (Some(our_task), Some(their_task)) = (ours.get(id), theirs.get(id)) {
+            if our_task == base_task && their_task != base_task {
+                eprintln!(
+                    "taska: warning: baseline task `{}` diverged across branches; a compaction \
+                     may have folded events past its fork (consider raising keep_events).",
+                    id
+                );
+            }
+        }
+    }
+
+    // Leaving `current` as-is keeps ours.
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Per-branch summary
+// ---------------------------------------------------------------------------
+
+/// What one branch did to a single task since the fork: the last value written
+/// to each field, the last add/remove of each dependency edge, and whether it
+/// net-deleted the task. Timestamps are carried so `latest` can compare writes.
+#[derive(Default)]
+struct Delta {
+    fields: HashMap<String, FieldWrite>,
+    deps: HashMap<String, DepWrite>,
+    deleted: Option<DateTime<Utc>>,
+    last_change: Option<DateTime<Utc>>,
+}
+
+struct FieldWrite {
+    value: Value,
+    ts: DateTime<Utc>,
+}
+
+struct DepWrite {
+    added: bool,
+    ts: DateTime<Utc>,
+}
+
+/// Collapse a branch's concurrent events into one [`Delta`] per task.
+fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
+    let mut deltas: HashMap<String, Delta> = HashMap::new();
+    for event in events {
+        let delta = deltas.entry(event.task_id.clone()).or_default();
+        match event.op {
+            OpType::Create | OpType::Update => {
+                if matches!(event.op, OpType::Create) {
+                    delta.deleted = None; // a (re)create undoes an earlier delete
+                }
+                for (key, value) in &event.payload {
+                    delta.fields.insert(
+                        key.clone(),
+                        FieldWrite { value: value.clone(), ts: event.timestamp },
+                    );
+                }
+                delta.last_change = max_ts(delta.last_change, event.timestamp);
+            }
+            OpType::Delete => delta.deleted = Some(event.timestamp),
+            OpType::AddDep | OpType::RemoveDep => {
+                if let Some(dep) = event.payload.get("dep").and_then(|v| v.as_str()) {
+                    delta.deps.insert(
+                        dep.to_string(),
+                        DepWrite { added: matches!(event.op, OpType::AddDep), ts: event.timestamp },
+                    );
+                    delta.last_change = max_ts(delta.last_change, event.timestamp);
                 }
             }
         }
-        Ok(())
+    }
+    deltas
+}
+
+fn max_ts(current: Option<DateTime<Utc>>, ts: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    Some(current.map_or(ts, |c| c.max(ts)))
+}
+
+// ---------------------------------------------------------------------------
+// Conflict resolution
+// ---------------------------------------------------------------------------
+
+/// How `auto` settles a contradiction.
+///
+/// SERIALIZATION CONTRACT: the lowercase names are written into each resolution
+/// event's `_meta.strategy` in the persisted log — do not rename without a
+/// migration. (`surface` maps to `ours` here; see [`Strategy::for_policy`].)
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Strategy {
+    Latest,
+    Ours,
+    Theirs,
+}
+
+impl Strategy {
+    /// `surface` resolves tentatively as `ours` (and is flagged by the caller).
+    fn for_policy(policy: OnConflict) -> Strategy {
+        match policy {
+            OnConflict::Surface | OnConflict::Ours => Strategy::Ours,
+            OnConflict::Latest => Strategy::Latest,
+            OnConflict::Theirs => Strategy::Theirs,
+        }
+    }
+
+    fn pick(self, ours_ts: DateTime<Utc>, theirs_ts: DateTime<Utc>) -> Side {
+        match self {
+            Strategy::Ours => Side::Ours,
+            Strategy::Theirs => Side::Theirs,
+            // Tie goes to ours, so the choice is total and deterministic.
+            Strategy::Latest if theirs_ts > ours_ts => Side::Theirs,
+            Strategy::Latest => Side::Ours,
+        }
+    }
+}
+
+/// Which branch a pick came from.
+///
+/// SERIALIZATION CONTRACT: the lowercase names below are written into every
+/// resolution event's `_meta` and into the conflict marker. They are part of the
+/// on-disk log format — do not rename a variant without migrating existing logs.
+#[derive(Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Side {
+    Ours,
+    Theirs,
+}
+
+/// A branch's effect in a whole-task delete-vs-change conflict, recorded as the
+/// candidate "value" for each side.
+///
+/// SERIALIZATION CONTRACT: written into `_meta`/the marker — keep the names.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum TaskOutcome {
+    Deleted,
+    Changed,
+}
+
+/// A branch's effect on a dependency edge in an add/remove conflict.
+///
+/// SERIALIZATION CONTRACT: written into `_meta`/the marker — keep the names.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum EdgeOutcome {
+    Added,
+    Removed,
+}
+
+impl EdgeOutcome {
+    fn of(added: bool) -> Self {
+        if added {
+            EdgeOutcome::Added
+        } else {
+            EdgeOutcome::Removed
+        }
+    }
+}
+
+/// Provenance recorded on a resolution event's `_meta`: which strategy ran and,
+/// per resolved item, the two candidate values and the side kept.
+///
+/// SERIALIZATION CONTRACT: these field names and the enum strings inside are part
+/// of the on-disk `_meta` format — keep them stable.
+#[derive(Serialize)]
+struct ResolutionMeta {
+    strategy: Strategy,
+    resolved: Vec<ResolvedItem>,
+}
+
+/// One resolved contradiction. Exactly one of `field`/`dep`/`task` is set, naming
+/// what was resolved.
+#[derive(Serialize)]
+struct ResolvedItem {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dep: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task: Option<String>,
+    ours: Value,
+    theirs: Value,
+    kept: Side,
+}
+
+/// Serialize provenance for an event's `_meta` slot.
+fn provenance(strategy: Strategy, resolved: Vec<ResolvedItem>) -> Value {
+    serde_json::to_value(ResolutionMeta { strategy, resolved })
+        .expect("resolution provenance always serializes")
+}
+
+/// Serialize a small typed outcome into the heterogeneous `ours`/`theirs` slot.
+fn as_value<T: Serialize>(outcome: T) -> Value {
+    serde_json::to_value(outcome).expect("merge outcome always serializes")
+}
+
+/// A single resolved contradiction, recorded for `ta resolve` / the marker.
+///
+/// SERIALIZATION CONTRACT: serialized verbatim into the conflict marker file
+/// (`merge-conflict.json`), which `ta resolve` reads back.
+#[derive(Serialize)]
+struct Conflict {
+    task_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    field: Option<String>,
+    reason: &'static str,
+    ours: Value,
+    theirs: Value,
+    kept: Side,
+}
+
+/// The synthetic events to append and the raw deletes to drop, plus the list of
+/// conflicts that were resolved.
+#[derive(Default)]
+struct Plan {
+    resolutions: Vec<MutationEvent>,
+    /// `(is_ours, task_id)` of Delete events to omit from the merged stream.
+    drop_deletes: HashSet<(bool, String)>,
+    conflicts: Vec<Conflict>,
+}
+
+/// Compare the two branches' deltas task-by-task and decide each contradiction.
+fn resolve(
+    ours: &HashMap<String, Delta>,
+    theirs: &HashMap<String, Delta>,
+    strategy: Strategy,
+) -> Plan {
+    let mut plan = Plan::default();
+
+    // Only a task touched by BOTH branches can contain a contradiction.
+    let mut tasks: Vec<&String> = ours.keys().filter(|t| theirs.contains_key(*t)).collect();
+    tasks.sort(); // stable output regardless of map iteration order
+
+    for task in tasks {
+        let (od, td) = (&ours[task], &theirs[task]);
+
+        // Whole-task: one branch deleted while the other kept changing it.
+        if resolve_delete(task, od, td, strategy, &mut plan) {
+            continue; // the task's existence is decided; skip field/dep resolution
+        }
+
+        resolve_fields(task, od, td, strategy, &mut plan);
+        resolve_deps(task, od, td, strategy, &mut plan);
+    }
+
+    plan
+}
+
+/// Resolve a delete-vs-change contradiction (one branch deleted a task while the
+/// other kept editing it); returns whether one was found.
+///
+/// This is decided at the WHOLE-TASK level, not per field — a deleted task has no
+/// fields to merge into, so the only question is whether it survives. The active
+/// strategy decides exactly as for a field conflict: for `latest`, the delete's
+/// timestamp races the other branch's most recent change.
+///
+/// Deliberate choice: a delete-vs-change is treated like any other conflict, so
+/// even `surface` resolves it tentatively (as `ours`) rather than always halting
+/// on it. If we later decide structural conflicts should always surface
+/// regardless of strategy, this function is the single place to branch on it.
+fn resolve_delete(
+    task: &str,
+    od: &Delta,
+    td: &Delta,
+    strategy: Strategy,
+    plan: &mut Plan,
+) -> bool {
+    // A real conflict only when exactly one side deleted and the other changed.
+    // Track which side deleted as a `Side` so the winner check reads directly.
+    let (delete_side, delete_ts, change_ts) = match (od.deleted, td.deleted) {
+        (Some(d), None) if td.last_change.is_some() => (Side::Ours, d, td.last_change.unwrap()),
+        (None, Some(d)) if od.last_change.is_some() => (Side::Theirs, d, od.last_change.unwrap()),
+        _ => return false,
     };
 
-    extract_events(ancestor)?;
-    extract_events(current)?;
-    extract_events(incoming)?;
+    // Order the timestamps as (ours, theirs) for the strategy; the delete wins
+    // iff the strategy picked the side that deleted.
+    let (ours_ts, theirs_ts) = match delete_side {
+        Side::Ours => (delete_ts, change_ts),
+        Side::Theirs => (change_ts, delete_ts),
+    };
+    let winner = strategy.pick(ours_ts, theirs_ts);
+    let delete_wins = winner == delete_side;
 
-    // Overwrite Git's %A scratch file with the unified timeline.
-    let mut target = File::create(current)?;
-    for event in unified_timeline.values() {
-        writeln!(target, "{}", serde_json::to_string(event)?)?;
+    let (ours_outcome, theirs_outcome) = match delete_side {
+        Side::Ours => (TaskOutcome::Deleted, TaskOutcome::Changed),
+        Side::Theirs => (TaskOutcome::Changed, TaskOutcome::Deleted),
+    };
+
+    if delete_wins {
+        // Force deletion last; the other side's changes replay first, then vanish.
+        let item = ResolvedItem {
+            field: None,
+            dep: None,
+            task: Some(task.to_string()),
+            ours: as_value(ours_outcome),
+            theirs: as_value(theirs_outcome),
+            kept: winner,
+        };
+        plan.resolutions.push(event(
+            OpType::Delete,
+            task,
+            Map::new(),
+            delete_ts,
+            Some(provenance(strategy, vec![item])),
+        ));
+    } else {
+        // Keep the changes: drop the losing Delete so it can't remove the task.
+        // (The change events are the user's own, so they carry their own history.)
+        plan.drop_deletes.insert((delete_side == Side::Ours, task.to_string()));
     }
-    target.flush()?;
 
+    plan.conflicts.push(Conflict {
+        task_id: task.to_string(),
+        field: None,
+        reason: "one branch deleted a task the other changed",
+        ours: as_value(ours_outcome),
+        theirs: as_value(theirs_outcome),
+        kept: winner,
+    });
+    true
+}
+
+fn resolve_fields(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &mut Plan) {
+    let mut winners = Map::new();
+    let mut latest_ts: Option<DateTime<Utc>> = None;
+    let mut items = Vec::new();
+
+    let mut fields: Vec<&String> = od.fields.keys().filter(|f| td.fields.contains_key(*f)).collect();
+    fields.sort();
+
+    for field in fields {
+        let (ow, tw) = (&od.fields[field], &td.fields[field]);
+        if ow.value == tw.value {
+            continue; // both wrote the same value — no contradiction
+        }
+        let winner = strategy.pick(ow.ts, tw.ts);
+        let (value, ts) = match winner {
+            Side::Ours => (ow.value.clone(), ow.ts),
+            Side::Theirs => (tw.value.clone(), tw.ts),
+        };
+        latest_ts = max_ts(latest_ts, ts);
+        winners.insert(field.clone(), value);
+        items.push(ResolvedItem {
+            field: Some(field.clone()),
+            dep: None,
+            task: None,
+            ours: ow.value.clone(),
+            theirs: tw.value.clone(),
+            kept: winner,
+        });
+        plan.conflicts.push(Conflict {
+            task_id: task.to_string(),
+            field: Some(field.clone()),
+            reason: "both branches set the same field to different values",
+            ours: ow.value.clone(),
+            theirs: tw.value.clone(),
+            kept: winner,
+        });
+    }
+
+    if !winners.is_empty() {
+        // One Update carrying every per-field winner for this task, annotated with
+        // the provenance of each pick.
+        plan.resolutions.push(event(
+            OpType::Update,
+            task,
+            winners,
+            latest_ts.unwrap(),
+            Some(provenance(strategy, items)),
+        ));
+    }
+}
+
+fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &mut Plan) {
+    let mut edges: Vec<&String> = od.deps.keys().filter(|d| td.deps.contains_key(*d)).collect();
+    edges.sort();
+
+    for dep in edges {
+        let (ow, tw) = (&od.deps[dep], &td.deps[dep]);
+        if ow.added == tw.added {
+            continue; // both added or both removed — no contradiction
+        }
+        let winner = strategy.pick(ow.ts, tw.ts);
+        let (added, ts) = match winner {
+            Side::Ours => (ow.added, ow.ts),
+            Side::Theirs => (tw.added, tw.ts),
+        };
+        let op = if added { OpType::AddDep } else { OpType::RemoveDep };
+        let mut payload = Map::new();
+        payload.insert("dep".to_string(), Value::String(dep.clone()));
+        let item = ResolvedItem {
+            field: None,
+            dep: Some(dep.clone()),
+            task: None,
+            ours: as_value(EdgeOutcome::of(ow.added)),
+            theirs: as_value(EdgeOutcome::of(tw.added)),
+            kept: winner,
+        };
+        plan.resolutions
+            .push(event(op, task, payload, ts, Some(provenance(strategy, vec![item]))));
+
+        plan.conflicts.push(Conflict {
+            task_id: task.to_string(),
+            field: Some(format!("dep:{dep}")),
+            reason: "one branch added a dependency the other removed",
+            ours: as_value(EdgeOutcome::of(ow.added)),
+            theirs: as_value(EdgeOutcome::of(tw.added)),
+            kept: winner,
+        });
+    }
+}
+
+fn event(
+    op: OpType,
+    task: &str,
+    payload: Map<String, Value>,
+    ts: DateTime<Utc>,
+    meta: Option<Value>,
+) -> MutationEvent {
+    MutationEvent { seq: 0, timestamp: ts, op, task_id: task.to_string(), meta, payload }
+}
+
+// ---------------------------------------------------------------------------
+// Assembly
+// ---------------------------------------------------------------------------
+
+/// Build the merged log: shared history, then both branches' concurrent events
+/// (minus any Delete the resolution dropped), then the resolution events — all
+/// above the fork renumbered onto a fresh contiguous tail.
+fn assemble(
+    shared_tail: &[&MutationEvent],
+    ours_concurrent: &[&MutationEvent],
+    theirs_concurrent: &[&MutationEvent],
+    plan: &Plan,
+    fork: u64,
+) -> Vec<MutationEvent> {
+    let mut merged: Vec<MutationEvent> = shared_tail.iter().map(|e| (*e).clone()).collect();
+
+    let kept = |events: &[&MutationEvent], is_ours: bool, out: &mut Vec<MutationEvent>| {
+        for event in events {
+            let dropped = matches!(event.op, OpType::Delete)
+                && plan.drop_deletes.contains(&(is_ours, event.task_id.clone()));
+            if !dropped {
+                out.push((*event).clone());
+            }
+        }
+    };
+    kept(ours_concurrent, true, &mut merged);
+    kept(theirs_concurrent, false, &mut merged);
+    merged.extend(plan.resolutions.iter().cloned());
+
+    // Renumber everything above the fork into a contiguous, strictly-increasing
+    // tail so the log keeps its core invariant.
+    for (seq, event) in (fork + 1..).zip(merged.iter_mut().skip(shared_tail.len())) {
+        event.seq = seq;
+    }
+    merged
+}
+
+// ---------------------------------------------------------------------------
+// I/O
+// ---------------------------------------------------------------------------
+
+fn write_conflict_marker(path: &Path, conflicts: &[Conflict]) -> Result<(), DynError> {
+    #[derive(Serialize)]
+    struct Marker<'a> {
+        conflicts: &'a [Conflict],
+    }
+    std::fs::write(path, serde_json::to_string_pretty(&Marker { conflicts })?)?;
     Ok(())
+}
+
+fn read_log(path: &str) -> Result<Vec<MutationEvent>, DynError> {
+    let mut events = Vec::new();
+    if Path::new(path).exists() {
+        let file = File::open(path)?;
+        for line in BufReader::new(file).lines() {
+            let line = line?;
+            if !line.trim().is_empty() {
+                events.push(serde_json::from_str::<MutationEvent>(&line)?);
+            }
+        }
+    }
+    // Each input is a committed log version, which is always seq-ordered; a
+    // violation means corruption, so fail the merge rather than reorder.
+    crate::model::verify_seq_order(&events)?;
+    Ok(events)
+}
+
+fn write_log(path: &str, events: &[MutationEvent]) -> Result<(), DynError> {
+    let mut file = File::create(path)?;
+    for event in events {
+        writeln!(file, "{}", serde_json::to_string(event)?)?;
+    }
+    file.flush()?;
+    Ok(())
+}
+
+fn read_baseline(path: &str) -> Result<Vec<TaskState>, DynError> {
+    let mut out = Vec::new();
+    if Path::new(path).exists() {
+        let file = File::open(path)?;
+        for line in BufReader::new(file).lines() {
+            let line = line?;
+            if !line.trim().is_empty() {
+                out.push(serde_json::from_str::<TaskState>(&line)?);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn index_baseline(tasks: Vec<TaskState>) -> HashMap<String, TaskState> {
+    tasks.into_iter().map(|t| (t.id.clone(), t)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::Engine;
+    use serde_json::json;
+
+    fn ev(seq: u64, mins: i64, op: OpType, task: &str, payload: &[(&str, Value)]) -> MutationEvent {
+        let base = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let map: Map<String, Value> =
+            payload.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+        MutationEvent {
+            seq,
+            timestamp: base + chrono::Duration::minutes(mins),
+            op,
+            task_id: task.to_string(),
+            meta: None,
+            payload: map,
+        }
+    }
+
+    /// Merge two concurrent logs that share the `anc` prefix, returning the
+    /// final materialized fields of `task`.
+    fn merge_to_fields(
+        anc: Vec<MutationEvent>,
+        ours: Vec<MutationEvent>,
+        theirs: Vec<MutationEvent>,
+        policy: OnConflict,
+        task: &str,
+    ) -> Map<String, Value> {
+        let fork = anc.iter().map(|e| e.seq).max().unwrap_or(0);
+        let shared: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq <= fork).collect();
+        let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
+        let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
+        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::for_policy(policy));
+        let merged = assemble(&shared, &oc, &tc, &plan, fork);
+        let state = Engine::materialize_state(Vec::new(), merged);
+        state.get(task).map(|t| t.custom_fields.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn non_overlapping_fields_all_survive_and_conflicts_resolve_per_field() {
+        // The four-field example: status & owner conflict; scope & priority don't.
+        let anc = vec![ev(1, 0, OpType::Create, "X", &[])];
+        let ours = vec![
+            anc[0].clone(),
+            ev(2, 0, OpType::Update, "X", &[
+                ("status", json!("done")),
+                ("owner", json!("alice")),
+                ("scope", json!("project")),
+            ]),
+        ];
+        let theirs = vec![
+            anc[0].clone(),
+            ev(2, 0, OpType::Update, "X", &[
+                ("status", json!("open")),
+                ("owner", json!("bob")),
+                ("priority", json!(3)),
+            ]),
+        ];
+
+        // `theirs` wins the two conflicting fields; the disjoint ones both stay.
+        let fields = merge_to_fields(anc, ours, theirs, OnConflict::Theirs, "X");
+        assert_eq!(fields["status"], json!("open"), "theirs wins status");
+        assert_eq!(fields["owner"], json!("bob"), "theirs wins owner");
+        assert_eq!(fields["scope"], json!("project"), "ours-only field survives");
+        assert_eq!(fields["priority"], json!(3), "theirs-only field survives");
+    }
+
+    #[test]
+    fn latest_resolves_each_field_by_its_own_timestamp() {
+        let anc = vec![ev(1, 0, OpType::Create, "X", &[])];
+        // ours: status newer (t=10), owner older (t=1).
+        let ours = vec![
+            anc[0].clone(),
+            ev(2, 10, OpType::Update, "X", &[("status", json!("ours"))]),
+            ev(3, 1, OpType::Update, "X", &[("owner", json!("ours"))]),
+        ];
+        // theirs: status older (t=5), owner newer (t=20).
+        let theirs = vec![
+            anc[0].clone(),
+            ev(2, 5, OpType::Update, "X", &[("status", json!("theirs"))]),
+            ev(3, 20, OpType::Update, "X", &[("owner", json!("theirs"))]),
+        ];
+
+        let fields = merge_to_fields(anc, ours, theirs, OnConflict::Latest, "X");
+        assert_eq!(fields["status"], json!("ours"), "ours' status is newer");
+        assert_eq!(fields["owner"], json!("theirs"), "theirs' owner is newer");
+    }
+
+    #[test]
+    fn delete_versus_change_follows_strategy() {
+        let anc = vec![ev(1, 0, OpType::Create, "X", &[("status", json!("a"))])];
+        let ours = vec![anc[0].clone(), ev(2, 0, OpType::Delete, "X", &[])];
+        let theirs = vec![
+            anc[0].clone(),
+            ev(2, 0, OpType::Update, "X", &[("status", json!("changed"))]),
+        ];
+
+        // ours deleted -> with `ours`, the task is gone.
+        let fork = 1;
+        let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
+        let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
+        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
+        let merged = assemble(
+            &ours.iter().filter(|e| e.seq <= fork).collect::<Vec<_>>(),
+            &oc,
+            &tc,
+            &plan,
+            fork,
+        );
+        let state = Engine::materialize_state(Vec::new(), merged);
+        assert!(!state.contains_key("X"), "ours deleted, so the task is gone");
+
+        // With `theirs`, the change wins and the task survives.
+        let fields = merge_to_fields(anc, ours, theirs, OnConflict::Theirs, "X");
+        assert_eq!(fields["status"], json!("changed"), "theirs' change is kept");
+    }
+
+    #[test]
+    fn resolution_event_carries_provenance_but_state_does_not() {
+        let anc = [ev(1, 0, OpType::Create, "X", &[])];
+        let ours = [anc[0].clone(), ev(2, 0, OpType::Update, "X", &[("status", json!("a"))])];
+        let theirs = [anc[0].clone(), ev(2, 0, OpType::Update, "X", &[("status", json!("b"))])];
+        let fork = 1;
+        let shared: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq <= fork).collect();
+        let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
+        let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
+        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Theirs);
+        let merged = assemble(&shared, &oc, &tc, &plan, fork);
+
+        // The resolution Update carries `_meta` explaining the pick.
+        let res = merged.iter().find(|e| e.meta.is_some()).expect("a resolution event");
+        let meta = res.meta.as_ref().unwrap();
+        assert_eq!(meta["strategy"], json!("theirs"));
+        assert_eq!(meta["resolved"][0]["field"], json!("status"));
+        assert_eq!(meta["resolved"][0]["ours"], json!("a"));
+        assert_eq!(meta["resolved"][0]["kept"], json!("theirs"));
+
+        // But replay ignores it: the task has no `_meta` field, just the winner.
+        let state = Engine::materialize_state(Vec::new(), merged);
+        assert!(!state["X"].custom_fields.contains_key("_meta"), "provenance stays out of state");
+        assert_eq!(state["X"].custom_fields["status"], json!("b"));
+    }
+
+    #[test]
+    fn disjoint_tasks_produce_no_conflicts() {
+        let anc = [ev(1, 0, OpType::Create, "base", &[])];
+        let ours = [anc[0].clone(), ev(2, 0, OpType::Create, "a", &[])];
+        let theirs = [anc[0].clone(), ev(2, 0, OpType::Create, "b", &[])];
+        let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > 1).collect();
+        let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > 1).collect();
+        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Latest);
+        assert!(plan.conflicts.is_empty());
+    }
 }

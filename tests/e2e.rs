@@ -42,6 +42,9 @@ fn run(program: &str, dir: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(dir)
         .env("PATH", path_with_bin())
+        // The suite deliberately drives sub-100 `keep_events` to exercise
+        // compaction; this opts past the production floor (see `enforce_config`).
+        .env("TASKA_ALLOW_UNSAFE_RETENTION", "1")
         .output()
         .unwrap_or_else(|e| panic!("failed to spawn `{} {}`: {}", program, args.join(" "), e))
 }
@@ -148,15 +151,17 @@ fn compact_folds_log_and_appends_resume() {
     let dir = fresh_dir("compact");
     init_repo(&dir);
     ta(&dir, &["init"]);
-    // Keep nothing so the whole log folds, exercising the full-compaction path.
+    // keep_events = 0 folds everything but the last event, exercising the
+    // maximal-compaction path while keeping the log non-empty (so the seq
+    // watermark stays derivable).
     fs::write(dir.join(".taska/config.toml"), "[compaction]\nkeep_events = 0\nkeep_days = 0\n").unwrap();
 
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
     ta(&dir, &["compact"]);
 
-    assert_eq!(rows(&dir.join(".taska/mutations.jsonl")), 0, "log empty after full compact");
-    assert_eq!(rows(&dir.join(".taska/baseline.jsonl")), 2, "two tasks folded into baseline");
+    assert_eq!(rows(&dir.join(".taska/mutations.jsonl")), 1, "one event retained");
+    assert_eq!(rows(&dir.join(".taska/baseline.jsonl")), 1, "the rest folded into baseline");
 
     // Appends overlay the baseline after compaction.
     ta(&dir, &["create", "c"]);
@@ -193,6 +198,28 @@ fn compact_retains_recent_events_for_merge() {
     for id in ["a", "b", "c", "d", "e"] {
         assert!(lists_task(&list, id), "missing {id}:\n{list}");
     }
+}
+
+#[test]
+fn low_keep_events_is_rejected_on_the_next_command() {
+    let dir = fresh_dir("validate");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+
+    // A hand-edited, unreasonably small retention value.
+    fs::write(dir.join(".taska/config.toml"), "[compaction]\nkeep_events = 50\n").unwrap();
+
+    // Without the test hatch, even a plain `ta list` must refuse and explain —
+    // the error surfaces immediately, not weeks later at compaction time.
+    let out = Command::new(ta_bin())
+        .args(["list"])
+        .current_dir(&dir)
+        .env("PATH", path_with_bin())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "list should fail on invalid config");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("keep_events") && stderr.contains("100"), "stderr: {stderr}");
 }
 
 #[test]
@@ -241,6 +268,105 @@ fn git_merge_driver_resolves_divergent_appends() {
     for id in ["base", "on-main", "on-feature"] {
         assert!(list.contains(id), "missing {id} after merge:\n{list}");
     }
+}
+
+#[test]
+fn surface_conflict_fails_merge_and_resolve_clears_it() {
+    let dir = fresh_dir("conflict");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "t", "status=open"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    // Both branches set the SAME field of the SAME task to different values.
+    git(&dir, &["branch", "feature"]);
+    ta(&dir, &["update", "t", "status=main"]);
+    git(&dir, &["commit", "-aqm", "main edit"]);
+
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["update", "t", "status=feature"]);
+    git(&dir, &["commit", "-aqm", "feature edit"]);
+
+    // Default policy is `surface`, so the driver must fail the merge.
+    git(&dir, &["checkout", "-q", "main"]);
+    let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
+    assert!(!merge.status.success(), "surface policy must fail the merge");
+    assert!(
+        dir.join(".taska/merge-conflict.json").exists(),
+        "a conflict marker should be written"
+    );
+
+    // `ta resolve` reports the conflict (per-field) and clears the marker.
+    let resolved = ta(&dir, &["resolve"]);
+    assert!(resolved.contains("conflict"), "resolve should report the conflict: {resolved}");
+    assert!(resolved.contains("status"), "resolve should name the conflicting field: {resolved}");
+    assert!(resolved.contains("kept ours"), "surface resolves tentatively as ours: {resolved}");
+    assert!(!dir.join(".taska/merge-conflict.json").exists(), "marker should be cleared");
+
+    // A second resolve is a clean no-op.
+    let again = ta(&dir, &["resolve"]);
+    assert!(again.contains("No merge conflicts"), "got: {again}");
+}
+
+#[test]
+fn theirs_policy_resolves_conflict_without_failing() {
+    let dir = fresh_dir("theirs");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // Opt into silent resolution: the branch merged IN wins conflicts.
+    fs::write(dir.join(".taska/config.toml"), "[merge]\non_conflict = \"theirs\"\n").unwrap();
+    ta(&dir, &["create", "t", "status=open"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    git(&dir, &["branch", "feature"]);
+    ta(&dir, &["update", "t", "status=main"]);
+    git(&dir, &["commit", "-aqm", "main edit"]);
+
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["update", "t", "status=feature"]);
+    git(&dir, &["commit", "-aqm", "feature edit"]);
+
+    git(&dir, &["checkout", "-q", "main"]);
+    let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
+    assert!(merge.status.success(), "theirs policy must resolve cleanly: {}", String::from_utf8_lossy(&merge.stderr));
+    assert!(!dir.join(".taska/merge-conflict.json").exists(), "auto resolution leaves no marker");
+
+    // Merging feature INTO main with `theirs` keeps feature's value.
+    let list = ta(&dir, &["list"]);
+    assert!(list.contains("\"status\":\"feature\""), "theirs (feature) should win: {list}");
+}
+
+#[test]
+fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
+    let dir = fresh_dir("perfield");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    fs::write(dir.join(".taska/config.toml"), "[merge]\non_conflict = \"theirs\"\n").unwrap();
+    ta(&dir, &["create", "X", "status=new"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    // main and feature overlap on status+owner, but each adds a disjoint field.
+    git(&dir, &["branch", "feature"]);
+    ta(&dir, &["update", "X", "status=done", "owner=alice", "scope=project"]);
+    git(&dir, &["commit", "-aqm", "main edit"]);
+
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["update", "X", "status=open", "owner=bob", "priority=3"]);
+    git(&dir, &["commit", "-aqm", "feature edit"]);
+
+    git(&dir, &["checkout", "-q", "main"]);
+    let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
+    assert!(merge.status.success(), "should resolve: {}", String::from_utf8_lossy(&merge.stderr));
+
+    let list = ta(&dir, &["list"]);
+    // Overlapping fields go to theirs (feature); disjoint fields both survive.
+    assert!(list.contains("\"status\":\"open\""), "status -> theirs: {list}");
+    assert!(list.contains("\"owner\":\"bob\""), "owner -> theirs: {list}");
+    assert!(list.contains("\"scope\":\"project\""), "ours-only scope survives: {list}");
+    assert!(list.contains("\"priority\":3"), "theirs-only priority survives: {list}");
 }
 
 #[test]

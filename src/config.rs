@@ -1,9 +1,10 @@
 //! User configuration, persisted to `.taska/config.toml`.
 //!
-//! The split mirrors how the values are consumed: `[store]` settings are an
-//! internal concern of [`crate::storage::FileStore`], while `[workflow]`
-//! settings describe task semantics used by the engine/graph layer. Every key
-//! here is honored somewhere — this file is not a list of aspirations.
+//! The split mirrors how the values are consumed: `[compaction]` tunes how much
+//! history `ta compact` leaves in the log, `[workflow]` describes task semantics
+//! used by the engine/graph layer, and `[merge]` controls how the git merge
+//! driver reconciles concurrent branches. Every key here is honored somewhere —
+//! this file is not a list of aspirations.
 
 use std::path::Path;
 
@@ -11,13 +12,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::DynError;
 
+/// Smallest `keep_events` we accept in production. Retaining fewer than this
+/// risks folding away events a concurrent branch still needs to reconcile on
+/// merge, which is unrecoverable. Tests that deliberately exercise tiny
+/// retention bypass the check via the CLI (see `enforce_config`).
+pub const MIN_KEEP_EVENTS: usize = 100;
+
 /// The `config.toml` written by `ta init`. Rendered from [`Config::default`] so
 /// the values live in exactly one place (the `Default` impls) while the file
 /// keeps its explanatory comments — TOML serialization alone can't emit those.
 /// A test asserts the rendered file round-trips back to `Config::default()`,
 /// which also catches template typos such as a misspelled key.
 pub fn default_toml() -> String {
-    let Config { compaction, workflow } = Config::default();
+    let Config {
+        compaction,
+        workflow,
+        merge,
+    } = Config::default();
+    let on_conflict = merge.on_conflict.as_str();
     format!(
         r#"# taska configuration
 #
@@ -28,12 +40,13 @@ pub fn default_toml() -> String {
 # `ta compact` folds old events into the baseline snapshot to keep the log
 # small. These settings control how much recent history stays in the log.
 #
-# Recent events must be retained: compaction discards event ids (the baseline is
-# keyed by task, not event), and the git merge driver reconciles divergent
-# branches by event id. Keep enough history to cover your longest-lived branch.
+# Recent events must be retained: the git merge driver reconciles divergent
+# branches from the events still in the log, so anything already folded into the
+# baseline can no longer be reconciled. Keep enough history to cover your
+# longest-lived branch.
 #
-# Keep at least this many of the most recent events. Also the minimum log size
-# before compaction does anything.
+# Keep at least this many of the most recent events (minimum {min_keep}); also
+# the minimum log size before compaction does anything.
 keep_events = {keep_events}
 # Also keep every event from at least this many days back (0 disables the time
 # window). An event is retained if it is recent by either rule.
@@ -45,11 +58,23 @@ keep_days = {keep_days}
 # `done_status`.
 status_field = "{status_field}"
 done_status = "{done_status}"
+
+[merge]
+# What to do when concurrent branches change the SAME field (or dependency) to
+# incompatible values. Non-overlapping changes always merge cleanly; this only
+# governs genuine contradictions, and it resolves them per-field:
+#   "surface" — stop the merge and let a human resolve it (run `ta resolve`)
+#   "latest"  — keep the most recently written value (by timestamp)
+#   "ours"    — keep the value on the branch being merged INTO
+#   "theirs"  — keep the value from the branch being merged IN
+on_conflict = "{on_conflict}"
 "#,
+        min_keep = MIN_KEEP_EVENTS,
         keep_events = compaction.keep_events,
         keep_days = compaction.keep_days,
         status_field = workflow.status_field,
         done_status = workflow.done_status,
+        on_conflict = on_conflict,
     )
 }
 
@@ -58,6 +83,7 @@ done_status = "{done_status}"
 pub struct Config {
     pub compaction: CompactionConfig,
     pub workflow: WorkflowConfig,
+    pub merge: MergeConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -96,6 +122,43 @@ impl Default for WorkflowConfig {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct MergeConfig {
+    /// What the git merge driver does when two concurrent branches make
+    /// incompatible changes to the same field or dependency.
+    pub on_conflict: OnConflict,
+}
+
+/// Policy for a genuine merge contradiction (the same field or dependency set to
+/// different values on both branches). Commuting concurrent edits always
+/// auto-merge regardless of this setting; it only governs true conflicts, and it
+/// applies per-field — each conflicting field is resolved on its own.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OnConflict {
+    /// Stop the merge and let a human resolve it (`ta resolve`).
+    #[default]
+    Surface,
+    /// Keep the most recently written value, by timestamp.
+    Latest,
+    /// Keep the value on the branch being merged into (Git's `%A`).
+    Ours,
+    /// Keep the value from the branch being merged in (Git's `%B`).
+    Theirs,
+}
+
+impl OnConflict {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OnConflict::Surface => "surface",
+            OnConflict::Latest => "latest",
+            OnConflict::Ours => "ours",
+            OnConflict::Theirs => "theirs",
+        }
+    }
+}
+
 impl Config {
     /// Load config from `path`, falling back to defaults if the file is absent.
     /// `#[serde(default)]` means a partial file still loads — only the keys
@@ -106,6 +169,22 @@ impl Config {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Reject configurations that would corrupt the store. The CLI calls this on
+    /// every store-backed command so a bad edit is reported on the very next
+    /// `ta` invocation rather than silently at the next compaction.
+    pub fn validate(&self) -> Result<(), DynError> {
+        if self.compaction.keep_events < MIN_KEEP_EVENTS {
+            return Err(format!(
+                "config error: compaction.keep_events = {} is below the minimum of {}. \
+                 Retaining fewer events risks discarding history still needed to reconcile \
+                 merges. Edit .taska/config.toml.",
+                self.compaction.keep_events, MIN_KEEP_EVENTS
+            )
+            .into());
+        }
+        Ok(())
     }
 }
 
@@ -127,5 +206,32 @@ mod tests {
         assert_eq!(parsed.workflow.done_status, "closed");
         assert_eq!(parsed.workflow.status_field, "status"); // untouched default
         assert_eq!(parsed.compaction, CompactionConfig::default()); // whole section defaulted
+        assert_eq!(parsed.merge, MergeConfig::default()); // whole section defaulted
+    }
+
+    #[test]
+    fn on_conflict_parses_all_variants() {
+        for (text, expected) in [
+            ("surface", OnConflict::Surface),
+            ("latest", OnConflict::Latest),
+            ("ours", OnConflict::Ours),
+            ("theirs", OnConflict::Theirs),
+        ] {
+            let cfg: Config =
+                toml::from_str(&format!("[merge]\non_conflict = \"{text}\"\n")).unwrap();
+            assert_eq!(cfg.merge.on_conflict, expected);
+        }
+    }
+
+    #[test]
+    fn validate_rejects_keep_events_below_minimum() {
+        let mut cfg = Config::default();
+        assert!(cfg.validate().is_ok(), "the default must be valid");
+
+        cfg.compaction.keep_events = MIN_KEEP_EVENTS - 1;
+        assert!(cfg.validate().is_err(), "below the floor must be rejected");
+
+        cfg.compaction.keep_events = MIN_KEEP_EVENTS;
+        assert!(cfg.validate().is_ok(), "exactly the floor is allowed");
     }
 }
