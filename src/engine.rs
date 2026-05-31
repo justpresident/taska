@@ -19,23 +19,22 @@ impl Engine {
         baseline: Vec<TaskState>,
         mutations: Vec<MutationEvent>,
     ) -> HashMap<String, TaskState> {
-        let mut state_map: HashMap<String, TaskState> = baseline
-            .into_iter()
-            .map(|t| (t.id.clone(), t))
-            .collect();
+        let mut state_map: HashMap<String, TaskState> =
+            baseline.into_iter().map(|t| (t.id.clone(), t)).collect();
 
         for event in mutations {
             match event.op {
                 OpType::Create => {
                     // Re-creating an existing id refreshes its fields but keeps
                     // any deps already attached.
-                    let entry = state_map.entry(event.task_id.clone()).or_insert_with(|| {
-                        TaskState {
-                            id: event.task_id.clone(),
-                            depends_on: Vec::new(),
-                            custom_fields: serde_json::Map::new(),
-                        }
-                    });
+                    let entry =
+                        state_map
+                            .entry(event.task_id.clone())
+                            .or_insert_with(|| TaskState {
+                                id: event.task_id.clone(),
+                                depends_on: Vec::new(),
+                                custom_fields: serde_json::Map::new(),
+                            });
                     for (k, v) in event.payload {
                         entry.custom_fields.insert(k, v);
                     }
@@ -131,7 +130,10 @@ mod tests {
     }
 
     fn fields(pairs: &[(&str, Value)]) -> serde_json::Map<String, Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
@@ -147,7 +149,11 @@ mod tests {
         let state = Engine::materialize_state(Vec::new(), mutations);
 
         assert_eq!(state.len(), 2, "c was deleted");
-        assert_eq!(state["a"].custom_fields["status"], json!("done"), "update overwrote create");
+        assert_eq!(
+            state["a"].custom_fields["status"],
+            json!("done"),
+            "update overwrote create"
+        );
         assert_eq!(state["b"].depends_on, vec!["a".to_string()]);
     }
 
@@ -165,7 +171,10 @@ mod tests {
         let state = Engine::materialize_state(baseline, mutations);
 
         assert_eq!(state["a"].custom_fields["status"], json!("done"));
-        assert!(state["a"].depends_on.is_empty(), "dep removed from baseline task");
+        assert!(
+            state["a"].depends_on.is_empty(),
+            "dep removed from baseline task"
+        );
     }
 
     #[test]
@@ -176,7 +185,11 @@ mod tests {
             ev(OpType::AddDep, "a", fields(&[("dep", json!("b"))])),
         ];
         let state = Engine::materialize_state(Vec::new(), mutations);
-        assert_eq!(state["a"].depends_on, vec!["b".to_string()], "no duplicate dep");
+        assert_eq!(
+            state["a"].depends_on,
+            vec!["b".to_string()],
+            "no duplicate dep"
+        );
     }
 
     fn aged(days: i64, now: chrono::DateTime<chrono::Utc>) -> MutationEvent {

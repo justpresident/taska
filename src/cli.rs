@@ -95,8 +95,16 @@ pub fn run() -> Result<(), DynError> {
                 .as_ref()
                 .map(|s| s.config().merge.on_conflict)
                 .unwrap_or_default();
-            let marker = store.as_ref().map(|s| s.base_dir.join("merge-conflict.json"));
-            merge::execute_git_merge(&ancestor, &current, &incoming, on_conflict, marker.as_deref())
+            let marker = store
+                .as_ref()
+                .map(|s| s.base_dir.join("merge-conflict.json"));
+            merge::execute_git_merge(
+                &ancestor,
+                &current,
+                &incoming,
+                on_conflict,
+                marker.as_deref(),
+            )
         }
         Commands::GitMergeBaseline {
             ancestor,
@@ -134,12 +142,14 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
     match command {
         Commands::Create { id, fields } => cmd_create(store, id, fields),
         Commands::Update { id, fields } => cmd_update(store, id, fields),
-        Commands::Block { task_id, depends_on } => {
-            cmd_dep(store, task_id, depends_on, OpType::AddDep)
-        }
-        Commands::Unblock { task_id, depends_on } => {
-            cmd_dep(store, task_id, depends_on, OpType::RemoveDep)
-        }
+        Commands::Block {
+            task_id,
+            depends_on,
+        } => cmd_dep(store, task_id, depends_on, OpType::AddDep),
+        Commands::Unblock {
+            task_id,
+            depends_on,
+        } => cmd_dep(store, task_id, depends_on, OpType::RemoveDep),
         Commands::Delete { id } => cmd_delete(store, id),
         Commands::List => cmd_list(store),
         Commands::Search { key, val } => cmd_search(store, key, val),
@@ -201,7 +211,10 @@ fn cmd_init() -> Result<(), DynError> {
     // anywhere in the repo is idempotent), else create one in the current dir.
     let base_dir = match FileStore::discover() {
         Ok(existing) => {
-            println!("taska store already present at {}", existing.base_dir.display());
+            println!(
+                "taska store already present at {}",
+                existing.base_dir.display()
+            );
             existing.base_dir
         }
         Err(_) => {
@@ -363,9 +376,9 @@ fn cmd_resolve(store: &FileStore) -> Result<(), DynError> {
                 let theirs = item.get("theirs").cloned().unwrap_or(Value::Null);
                 let kept = item.get("kept").and_then(|v| v.as_str()).unwrap_or("ours");
                 match field {
-                    Some(f) => println!(
-                        "  - `{task}`.{f}: ours={ours} / theirs={theirs} -> kept {kept}"
-                    ),
+                    Some(f) => {
+                        println!("  - `{task}`.{f}: ours={ours} / theirs={theirs} -> kept {kept}")
+                    }
                     None => println!(
                         "  - `{task}` (whole task): ours={ours} / theirs={theirs} -> kept {kept}"
                     ),
@@ -423,7 +436,11 @@ mod tests {
             }
             Ok(())
         }
-        fn compact(&self, baseline: &[TaskState], retained: &[MutationEvent]) -> Result<(), DynError> {
+        fn compact(
+            &self,
+            baseline: &[TaskState],
+            retained: &[MutationEvent],
+        ) -> Result<(), DynError> {
             *self.baseline.borrow_mut() = baseline.to_vec();
             *self.events.borrow_mut() = retained.to_vec();
             Ok(())
@@ -433,9 +450,17 @@ mod tests {
     #[test]
     fn create_then_materialize() {
         let store = InMemoryStore::default();
-        cmd_create(&store, "api".into(), vec!["status=open".into(), "priority=3".into()]).unwrap();
+        cmd_create(
+            &store,
+            "api".into(),
+            vec!["status=open".into(), "priority=3".into()],
+        )
+        .unwrap();
         let state = state_of(&store).unwrap();
-        assert_eq!(state["api"].custom_fields["status"], serde_json::json!("open"));
+        assert_eq!(
+            state["api"].custom_fields["status"],
+            serde_json::json!("open")
+        );
         // `priority=3` is coerced to a JSON number, not a string.
         assert_eq!(state["api"].custom_fields["priority"], serde_json::json!(3));
     }
@@ -447,9 +472,16 @@ mod tests {
         cmd_create(&store, "b".into(), vec![]).unwrap();
         // keep_events = 0 still retains the most recent event (the log never
         // empties, so the seq watermark stays derivable); the rest folds.
-        let cfg = CompactionConfig { keep_events: 0, keep_days: 0 };
+        let cfg = CompactionConfig {
+            keep_events: 0,
+            keep_days: 0,
+        };
         cmd_compact(&store, &cfg, Utc::now()).unwrap();
-        assert_eq!(store.load_mutations().unwrap().len(), 1, "one event retained");
+        assert_eq!(
+            store.load_mutations().unwrap().len(),
+            1,
+            "one event retained"
+        );
         assert_eq!(store.load_baseline().unwrap().len(), 1, "the rest folded");
         // Appends still work and overlay the baseline post-compaction.
         cmd_create(&store, "c".into(), vec![]).unwrap();
@@ -463,11 +495,26 @@ mod tests {
             cmd_create(&store, id.into(), vec![]).unwrap();
         }
         // Keep the 2 most recent, time window off.
-        let cfg = CompactionConfig { keep_events: 2, keep_days: 0 };
+        let cfg = CompactionConfig {
+            keep_events: 2,
+            keep_days: 0,
+        };
         cmd_compact(&store, &cfg, Utc::now()).unwrap();
-        assert_eq!(store.load_mutations().unwrap().len(), 2, "kept 2 recent events");
-        assert_eq!(store.load_baseline().unwrap().len(), 3, "folded 3 into baseline");
-        assert_eq!(state_of(&store).unwrap().len(), 5, "all tasks still visible");
+        assert_eq!(
+            store.load_mutations().unwrap().len(),
+            2,
+            "kept 2 recent events"
+        );
+        assert_eq!(
+            store.load_baseline().unwrap().len(),
+            3,
+            "folded 3 into baseline"
+        );
+        assert_eq!(
+            state_of(&store).unwrap().len(),
+            5,
+            "all tasks still visible"
+        );
     }
 
     #[test]

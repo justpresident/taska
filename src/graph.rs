@@ -64,10 +64,11 @@ pub fn ready_tasks(
         if is_done(task, status_field, done_status) {
             continue;
         }
-        let blocked = task
-            .depends_on
-            .iter()
-            .any(|dep| state.get(dep).is_some_and(|d| !is_done(d, status_field, done_status)));
+        let blocked = task.depends_on.iter().any(|dep| {
+            state
+                .get(dep)
+                .is_some_and(|d| !is_done(d, status_field, done_status))
+        });
         if !blocked {
             ready.push(id);
         }

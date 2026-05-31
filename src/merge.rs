@@ -55,7 +55,11 @@ pub fn execute_git_merge(
     // as `ours`) so it's never broken, then flags the conflicts and fails so Git
     // marks the path unmerged.
     let strategy = Strategy::for_policy(on_conflict);
-    let plan = resolve(&summarize(&ours_concurrent), &summarize(&theirs_concurrent), strategy);
+    let plan = resolve(
+        &summarize(&ours_concurrent),
+        &summarize(&theirs_concurrent),
+        strategy,
+    );
 
     let merged = assemble(
         &shared_tail,
@@ -149,7 +153,10 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
                 for (key, value) in &event.payload {
                     delta.fields.insert(
                         key.clone(),
-                        FieldWrite { value: value.clone(), ts: event.timestamp },
+                        FieldWrite {
+                            value: value.clone(),
+                            ts: event.timestamp,
+                        },
                     );
                 }
                 delta.last_change = max_ts(delta.last_change, event.timestamp);
@@ -159,7 +166,10 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
                 if let Some(dep) = event.payload.get("dep").and_then(|v| v.as_str()) {
                     delta.deps.insert(
                         dep.to_string(),
-                        DepWrite { added: matches!(event.op, OpType::AddDep), ts: event.timestamp },
+                        DepWrite {
+                            added: matches!(event.op, OpType::AddDep),
+                            ts: event.timestamp,
+                        },
                     );
                     delta.last_change = max_ts(delta.last_change, event.timestamp);
                 }
@@ -355,13 +365,7 @@ fn resolve(
 /// even `surface` resolves it tentatively (as `ours`) rather than always halting
 /// on it. If we later decide structural conflicts should always surface
 /// regardless of strategy, this function is the single place to branch on it.
-fn resolve_delete(
-    task: &str,
-    od: &Delta,
-    td: &Delta,
-    strategy: Strategy,
-    plan: &mut Plan,
-) -> bool {
+fn resolve_delete(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &mut Plan) -> bool {
     // A real conflict only when exactly one side deleted and the other changed.
     // Track which side deleted as a `Side` so the winner check reads directly.
     let (delete_side, delete_ts, change_ts) = match (od.deleted, td.deleted) {
@@ -404,7 +408,8 @@ fn resolve_delete(
     } else {
         // Keep the changes: drop the losing Delete so it can't remove the task.
         // (The change events are the user's own, so they carry their own history.)
-        plan.drop_deletes.insert((delete_side == Side::Ours, task.to_string()));
+        plan.drop_deletes
+            .insert((delete_side == Side::Ours, task.to_string()));
     }
 
     plan.conflicts.push(Conflict {
@@ -423,7 +428,11 @@ fn resolve_fields(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: 
     let mut latest_ts: Option<DateTime<Utc>> = None;
     let mut items = Vec::new();
 
-    let mut fields: Vec<&String> = od.fields.keys().filter(|f| td.fields.contains_key(*f)).collect();
+    let mut fields: Vec<&String> = od
+        .fields
+        .keys()
+        .filter(|f| td.fields.contains_key(*f))
+        .collect();
     fields.sort();
 
     for field in fields {
@@ -470,7 +479,11 @@ fn resolve_fields(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: 
 }
 
 fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &mut Plan) {
-    let mut edges: Vec<&String> = od.deps.keys().filter(|d| td.deps.contains_key(*d)).collect();
+    let mut edges: Vec<&String> = od
+        .deps
+        .keys()
+        .filter(|d| td.deps.contains_key(*d))
+        .collect();
     edges.sort();
 
     for dep in edges {
@@ -483,7 +496,11 @@ fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &m
             Side::Ours => (ow.added, ow.ts),
             Side::Theirs => (tw.added, tw.ts),
         };
-        let op = if added { OpType::AddDep } else { OpType::RemoveDep };
+        let op = if added {
+            OpType::AddDep
+        } else {
+            OpType::RemoveDep
+        };
         let mut payload = Map::new();
         payload.insert("dep".to_string(), Value::String(dep.clone()));
         let item = ResolvedItem {
@@ -494,8 +511,13 @@ fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &m
             theirs: as_value(EdgeOutcome::of(tw.added)),
             kept: winner,
         };
-        plan.resolutions
-            .push(event(op, task, payload, ts, Some(provenance(strategy, vec![item]))));
+        plan.resolutions.push(event(
+            op,
+            task,
+            payload,
+            ts,
+            Some(provenance(strategy, vec![item])),
+        ));
 
         plan.conflicts.push(Conflict {
             task_id: task.to_string(),
@@ -515,7 +537,14 @@ fn event(
     ts: DateTime<Utc>,
     meta: Option<Value>,
 ) -> MutationEvent {
-    MutationEvent { seq: 0, timestamp: ts, op, task_id: task.to_string(), meta, payload }
+    MutationEvent {
+        seq: 0,
+        timestamp: ts,
+        op,
+        task_id: task.to_string(),
+        meta,
+        payload,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -537,7 +566,9 @@ fn assemble(
     let kept = |events: &[&MutationEvent], is_ours: bool, out: &mut Vec<MutationEvent>| {
         for event in events {
             let dropped = matches!(event.op, OpType::Delete)
-                && plan.drop_deletes.contains(&(is_ours, event.task_id.clone()));
+                && plan
+                    .drop_deletes
+                    .contains(&(is_ours, event.task_id.clone()));
             if !dropped {
                 out.push((*event).clone());
             }
@@ -622,8 +653,10 @@ mod tests {
         let base = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        let map: Map<String, Value> =
-            payload.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+        let map: Map<String, Value> = payload
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
         MutationEvent {
             seq,
             timestamp: base + chrono::Duration::minutes(mins),
@@ -647,10 +680,17 @@ mod tests {
         let shared: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq <= fork).collect();
         let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
         let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
-        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::for_policy(policy));
+        let plan = resolve(
+            &summarize(&oc),
+            &summarize(&tc),
+            Strategy::for_policy(policy),
+        );
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
         let state = Engine::materialize_state(Vec::new(), merged);
-        state.get(task).map(|t| t.custom_fields.clone()).unwrap_or_default()
+        state
+            .get(task)
+            .map(|t| t.custom_fields.clone())
+            .unwrap_or_default()
     }
 
     #[test]
@@ -659,26 +699,42 @@ mod tests {
         let anc = vec![ev(1, 0, OpType::Create, "X", &[])];
         let ours = vec![
             anc[0].clone(),
-            ev(2, 0, OpType::Update, "X", &[
-                ("status", json!("done")),
-                ("owner", json!("alice")),
-                ("scope", json!("project")),
-            ]),
+            ev(
+                2,
+                0,
+                OpType::Update,
+                "X",
+                &[
+                    ("status", json!("done")),
+                    ("owner", json!("alice")),
+                    ("scope", json!("project")),
+                ],
+            ),
         ];
         let theirs = vec![
             anc[0].clone(),
-            ev(2, 0, OpType::Update, "X", &[
-                ("status", json!("open")),
-                ("owner", json!("bob")),
-                ("priority", json!(3)),
-            ]),
+            ev(
+                2,
+                0,
+                OpType::Update,
+                "X",
+                &[
+                    ("status", json!("open")),
+                    ("owner", json!("bob")),
+                    ("priority", json!(3)),
+                ],
+            ),
         ];
 
         // `theirs` wins the two conflicting fields; the disjoint ones both stay.
         let fields = merge_to_fields(anc, ours, theirs, OnConflict::Theirs, "X");
         assert_eq!(fields["status"], json!("open"), "theirs wins status");
         assert_eq!(fields["owner"], json!("bob"), "theirs wins owner");
-        assert_eq!(fields["scope"], json!("project"), "ours-only field survives");
+        assert_eq!(
+            fields["scope"],
+            json!("project"),
+            "ours-only field survives"
+        );
         assert_eq!(fields["priority"], json!(3), "theirs-only field survives");
     }
 
@@ -725,7 +781,10 @@ mod tests {
             fork,
         );
         let state = Engine::materialize_state(Vec::new(), merged);
-        assert!(!state.contains_key("X"), "ours deleted, so the task is gone");
+        assert!(
+            !state.contains_key("X"),
+            "ours deleted, so the task is gone"
+        );
 
         // With `theirs`, the change wins and the task survives.
         let fields = merge_to_fields(anc, ours, theirs, OnConflict::Theirs, "X");
@@ -735,8 +794,14 @@ mod tests {
     #[test]
     fn resolution_event_carries_provenance_but_state_does_not() {
         let anc = [ev(1, 0, OpType::Create, "X", &[])];
-        let ours = [anc[0].clone(), ev(2, 0, OpType::Update, "X", &[("status", json!("a"))])];
-        let theirs = [anc[0].clone(), ev(2, 0, OpType::Update, "X", &[("status", json!("b"))])];
+        let ours = [
+            anc[0].clone(),
+            ev(2, 0, OpType::Update, "X", &[("status", json!("a"))]),
+        ];
+        let theirs = [
+            anc[0].clone(),
+            ev(2, 0, OpType::Update, "X", &[("status", json!("b"))]),
+        ];
         let fork = 1;
         let shared: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq <= fork).collect();
         let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
@@ -745,7 +810,10 @@ mod tests {
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
 
         // The resolution Update carries `_meta` explaining the pick.
-        let res = merged.iter().find(|e| e.meta.is_some()).expect("a resolution event");
+        let res = merged
+            .iter()
+            .find(|e| e.meta.is_some())
+            .expect("a resolution event");
         let meta = res.meta.as_ref().unwrap();
         assert_eq!(meta["strategy"], json!("theirs"));
         assert_eq!(meta["resolved"][0]["field"], json!("status"));
@@ -754,7 +822,10 @@ mod tests {
 
         // But replay ignores it: the task has no `_meta` field, just the winner.
         let state = Engine::materialize_state(Vec::new(), merged);
-        assert!(!state["X"].custom_fields.contains_key("_meta"), "provenance stays out of state");
+        assert!(
+            !state["X"].custom_fields.contains_key("_meta"),
+            "provenance stays out of state"
+        );
         assert_eq!(state["X"].custom_fields["status"], json!("b"));
     }
 

@@ -100,14 +100,23 @@ fn init_creates_config_and_registers_merge_driver() {
     assert!(out.contains("Initialized taska store"), "got: {out}");
 
     let cfg = fs::read_to_string(dir.join(".taska/config.toml")).unwrap();
-    assert!(cfg.contains("[compaction]") && cfg.contains("[workflow]"), "config: {cfg}");
+    assert!(
+        cfg.contains("[compaction]") && cfg.contains("[workflow]"),
+        "config: {cfg}"
+    );
     assert!(cfg.contains("keep_events = 1000"), "config: {cfg}");
     assert!(cfg.contains("status_field = \"status\""), "config: {cfg}");
 
     let attrs = fs::read_to_string(dir.join(".gitattributes")).unwrap();
-    assert!(attrs.contains("mutations.jsonl merge=taska-merge-driver"), "attrs: {attrs}");
+    assert!(
+        attrs.contains("mutations.jsonl merge=taska-merge-driver"),
+        "attrs: {attrs}"
+    );
 
-    let driver = git(&dir, &["config", "--get", "merge.taska-merge-driver.driver"]);
+    let driver = git(
+        &dir,
+        &["config", "--get", "merge.taska-merge-driver.driver"],
+    );
     assert!(driver.contains("ta git-merge"), "driver: {driver}");
 }
 
@@ -158,14 +167,26 @@ fn compact_folds_log_and_appends_resume() {
     // keep_events = 0 folds everything but the last event, exercising the
     // maximal-compaction path while keeping the log non-empty (so the seq
     // watermark stays derivable).
-    fs::write(dir.join(".taska/config.toml"), "[compaction]\nkeep_events = 0\nkeep_days = 0\n").unwrap();
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[compaction]\nkeep_events = 0\nkeep_days = 0\n",
+    )
+    .unwrap();
 
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
     ta(&dir, &["compact"]);
 
-    assert_eq!(rows(&dir.join(".taska/mutations.jsonl")), 1, "one event retained");
-    assert_eq!(rows(&dir.join(".taska/baseline.jsonl")), 1, "the rest folded into baseline");
+    assert_eq!(
+        rows(&dir.join(".taska/mutations.jsonl")),
+        1,
+        "one event retained"
+    );
+    assert_eq!(
+        rows(&dir.join(".taska/baseline.jsonl")),
+        1,
+        "the rest folded into baseline"
+    );
 
     // Appends overlay the baseline after compaction.
     ta(&dir, &["create", "c"]);
@@ -180,7 +201,11 @@ fn compact_retains_recent_events_for_merge() {
     let dir = fresh_dir("retain");
     init_repo(&dir);
     ta(&dir, &["init"]);
-    fs::write(dir.join(".taska/config.toml"), "[compaction]\nkeep_events = 2\nkeep_days = 0\n").unwrap();
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[compaction]\nkeep_events = 2\nkeep_days = 0\n",
+    )
+    .unwrap();
 
     for id in ["a", "b", "c", "d", "e"] {
         ta(&dir, &["create", id]);
@@ -189,13 +214,27 @@ fn compact_retains_recent_events_for_merge() {
     assert!(out.contains("kept 2 recent event(s)"), "got: {out}");
 
     // 3 oldest folded into baseline, 2 newest retained in the log.
-    assert_eq!(rows(&dir.join(".taska/mutations.jsonl")), 2, "kept 2 recent events");
-    assert_eq!(rows(&dir.join(".taska/baseline.jsonl")), 3, "folded 3 into baseline");
+    assert_eq!(
+        rows(&dir.join(".taska/mutations.jsonl")),
+        2,
+        "kept 2 recent events"
+    );
+    assert_eq!(
+        rows(&dir.join(".taska/baseline.jsonl")),
+        3,
+        "folded 3 into baseline"
+    );
 
     // The retained events are the two most recent creations.
     let mutations = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
-    assert!(mutations.contains(r#""task_id":"d""#), "expected d retained: {mutations}");
-    assert!(mutations.contains(r#""task_id":"e""#), "expected e retained: {mutations}");
+    assert!(
+        mutations.contains(r#""task_id":"d""#),
+        "expected d retained: {mutations}"
+    );
+    assert!(
+        mutations.contains(r#""task_id":"e""#),
+        "expected e retained: {mutations}"
+    );
 
     // All five tasks remain visible (baseline + retained log).
     let list = ta(&dir, &["list"]);
@@ -211,7 +250,11 @@ fn low_keep_events_is_rejected_on_the_next_command() {
     ta(&dir, &["init"]);
 
     // A hand-edited, unreasonably small retention value.
-    fs::write(dir.join(".taska/config.toml"), "[compaction]\nkeep_events = 50\n").unwrap();
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[compaction]\nkeep_events = 50\n",
+    )
+    .unwrap();
 
     // Without the test hatch, even a plain `ta list` must refuse and explain —
     // the error surfaces immediately, not weeks later at compaction time.
@@ -223,7 +266,10 @@ fn low_keep_events_is_rejected_on_the_next_command() {
         .unwrap();
     assert!(!out.status.success(), "list should fail on invalid config");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("keep_events") && stderr.contains("100"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("keep_events") && stderr.contains("100"),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -237,8 +283,16 @@ fn compact_is_noop_below_threshold() {
     let out = ta(&dir, &["compact"]);
     assert!(out.contains("Nothing to compact"), "got: {out}");
 
-    assert_eq!(rows(&dir.join(".taska/mutations.jsonl")), 2, "log untouched");
-    assert_eq!(rows(&dir.join(".taska/baseline.jsonl")), 0, "baseline still empty");
+    assert_eq!(
+        rows(&dir.join(".taska/mutations.jsonl")),
+        2,
+        "log untouched"
+    );
+    assert_eq!(
+        rows(&dir.join(".taska/baseline.jsonl")),
+        0,
+        "baseline still empty"
+    );
 }
 
 #[test]
@@ -295,7 +349,10 @@ fn surface_conflict_fails_merge_and_resolve_clears_it() {
     // Default policy is `surface`, so the driver must fail the merge.
     git(&dir, &["checkout", "-q", "main"]);
     let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
-    assert!(!merge.status.success(), "surface policy must fail the merge");
+    assert!(
+        !merge.status.success(),
+        "surface policy must fail the merge"
+    );
     assert!(
         dir.join(".taska/merge-conflict.json").exists(),
         "a conflict marker should be written"
@@ -303,10 +360,22 @@ fn surface_conflict_fails_merge_and_resolve_clears_it() {
 
     // `ta resolve` reports the conflict (per-field) and clears the marker.
     let resolved = ta(&dir, &["resolve"]);
-    assert!(resolved.contains("conflict"), "resolve should report the conflict: {resolved}");
-    assert!(resolved.contains("status"), "resolve should name the conflicting field: {resolved}");
-    assert!(resolved.contains("kept ours"), "surface resolves tentatively as ours: {resolved}");
-    assert!(!dir.join(".taska/merge-conflict.json").exists(), "marker should be cleared");
+    assert!(
+        resolved.contains("conflict"),
+        "resolve should report the conflict: {resolved}"
+    );
+    assert!(
+        resolved.contains("status"),
+        "resolve should name the conflicting field: {resolved}"
+    );
+    assert!(
+        resolved.contains("kept ours"),
+        "surface resolves tentatively as ours: {resolved}"
+    );
+    assert!(
+        !dir.join(".taska/merge-conflict.json").exists(),
+        "marker should be cleared"
+    );
 
     // A second resolve is a clean no-op.
     let again = ta(&dir, &["resolve"]);
@@ -319,7 +388,11 @@ fn theirs_policy_resolves_conflict_without_failing() {
     init_repo(&dir);
     ta(&dir, &["init"]);
     // Opt into silent resolution: the branch merged IN wins conflicts.
-    fs::write(dir.join(".taska/config.toml"), "[merge]\non_conflict = \"theirs\"\n").unwrap();
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[merge]\non_conflict = \"theirs\"\n",
+    )
+    .unwrap();
     ta(&dir, &["create", "t", "status=open"]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
@@ -334,12 +407,22 @@ fn theirs_policy_resolves_conflict_without_failing() {
 
     git(&dir, &["checkout", "-q", "main"]);
     let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
-    assert!(merge.status.success(), "theirs policy must resolve cleanly: {}", String::from_utf8_lossy(&merge.stderr));
-    assert!(!dir.join(".taska/merge-conflict.json").exists(), "auto resolution leaves no marker");
+    assert!(
+        merge.status.success(),
+        "theirs policy must resolve cleanly: {}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    assert!(
+        !dir.join(".taska/merge-conflict.json").exists(),
+        "auto resolution leaves no marker"
+    );
 
     // Merging feature INTO main with `theirs` keeps feature's value.
     let list = ta(&dir, &["list"]);
-    assert!(list.contains("\"status\":\"feature\""), "theirs (feature) should win: {list}");
+    assert!(
+        list.contains("\"status\":\"feature\""),
+        "theirs (feature) should win: {list}"
+    );
 }
 
 #[test]
@@ -347,30 +430,62 @@ fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
     let dir = fresh_dir("perfield");
     init_repo(&dir);
     ta(&dir, &["init"]);
-    fs::write(dir.join(".taska/config.toml"), "[merge]\non_conflict = \"theirs\"\n").unwrap();
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[merge]\non_conflict = \"theirs\"\n",
+    )
+    .unwrap();
     ta(&dir, &["create", "X", "status=new"]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
     // main and feature overlap on status+owner, but each adds a disjoint field.
     git(&dir, &["branch", "feature"]);
-    ta(&dir, &["update", "X", "status=closed", "owner=alice", "scope=project"]);
+    ta(
+        &dir,
+        &[
+            "update",
+            "X",
+            "status=closed",
+            "owner=alice",
+            "scope=project",
+        ],
+    );
     git(&dir, &["commit", "-aqm", "main edit"]);
 
     git(&dir, &["checkout", "-q", "feature"]);
-    ta(&dir, &["update", "X", "status=open", "owner=bob", "priority=3"]);
+    ta(
+        &dir,
+        &["update", "X", "status=open", "owner=bob", "priority=3"],
+    );
     git(&dir, &["commit", "-aqm", "feature edit"]);
 
     git(&dir, &["checkout", "-q", "main"]);
     let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
-    assert!(merge.status.success(), "should resolve: {}", String::from_utf8_lossy(&merge.stderr));
+    assert!(
+        merge.status.success(),
+        "should resolve: {}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
 
     let list = ta(&dir, &["list"]);
     // Overlapping fields go to theirs (feature); disjoint fields both survive.
-    assert!(list.contains("\"status\":\"open\""), "status -> theirs: {list}");
-    assert!(list.contains("\"owner\":\"bob\""), "owner -> theirs: {list}");
-    assert!(list.contains("\"scope\":\"project\""), "ours-only scope survives: {list}");
-    assert!(list.contains("\"priority\":3"), "theirs-only priority survives: {list}");
+    assert!(
+        list.contains("\"status\":\"open\""),
+        "status -> theirs: {list}"
+    );
+    assert!(
+        list.contains("\"owner\":\"bob\""),
+        "owner -> theirs: {list}"
+    );
+    assert!(
+        list.contains("\"scope\":\"project\""),
+        "ours-only scope survives: {list}"
+    );
+    assert!(
+        list.contains("\"priority\":3"),
+        "theirs-only priority survives: {list}"
+    );
 }
 
 #[test]
@@ -402,13 +517,20 @@ fn reinit_is_idempotent_and_preserves_edited_config() {
     init_repo(&dir);
     ta(&dir, &["init"]);
 
-    fs::write(dir.join(".taska/config.toml"), "[workflow]\ndone_status = \"closed\"\n").unwrap();
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[workflow]\ndone_status = \"closed\"\n",
+    )
+    .unwrap();
 
     let out = ta(&dir, &["init"]);
     assert!(out.contains("already present"), "should reuse store: {out}");
 
     let cfg = fs::read_to_string(dir.join(".taska/config.toml")).unwrap();
-    assert!(cfg.contains("closed"), "edited config must survive re-init: {cfg}");
+    assert!(
+        cfg.contains("closed"),
+        "edited config must survive re-init: {cfg}"
+    );
 }
 
 #[test]
@@ -422,5 +544,8 @@ fn init_from_subdirectory_reuses_existing_store() {
 
     let out = ta(&nested, &["init"]);
     assert!(out.contains("already present"), "should reuse: {out}");
-    assert!(!nested.join(".taska").exists(), "must not create a nested .taska");
+    assert!(
+        !nested.join(".taska").exists(),
+        "must not create a nested .taska"
+    );
 }
