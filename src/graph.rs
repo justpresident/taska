@@ -4,11 +4,7 @@ use std::collections::HashMap;
 
 use petgraph::graphmap::DiGraphMap;
 
-use crate::storage::TaskState;
-
-/// Field/value convention used to mark a task as finished.
-const STATUS_FIELD: &str = "status";
-const DONE_VALUE: &str = "done";
+use crate::model::TaskState;
 
 /// Validate the dependency DAG and return a topological ordering
 /// (dependencies before dependents). Errors on any cycle.
@@ -41,16 +37,23 @@ pub fn validate_and_sort_dependencies(
     Ok(sorted)
 }
 
-fn is_done(task: &TaskState) -> bool {
+fn is_done(task: &TaskState, status_field: &str, done_status: &str) -> bool {
     task.custom_fields
-        .get(STATUS_FIELD)
+        .get(status_field)
         .and_then(|v| v.as_str())
-        == Some(DONE_VALUE)
+        == Some(done_status)
 }
 
 /// Tasks that are not yet done and whose every existing dependency is done.
 /// Returned in topological order so `ta ready` lists work in a sane sequence.
-pub fn ready_tasks(state: &HashMap<String, TaskState>) -> Result<Vec<String>, String> {
+///
+/// `status_field`/`done_status` come from `[workflow]` config, so projects can
+/// rename the convention (e.g. `state`/`closed`).
+pub fn ready_tasks(
+    state: &HashMap<String, TaskState>,
+    status_field: &str,
+    done_status: &str,
+) -> Result<Vec<String>, String> {
     let order = validate_and_sort_dependencies(state)?;
     let mut ready = Vec::new();
     for id in order {
@@ -58,13 +61,13 @@ pub fn ready_tasks(state: &HashMap<String, TaskState>) -> Result<Vec<String>, St
             Some(t) => t,
             None => continue,
         };
-        if is_done(task) {
+        if is_done(task, status_field, done_status) {
             continue;
         }
         let blocked = task
             .depends_on
             .iter()
-            .any(|dep| state.get(dep).map_or(false, |d| !is_done(d)));
+            .any(|dep| state.get(dep).is_some_and(|d| !is_done(d, status_field, done_status)));
         if !blocked {
             ready.push(id);
         }

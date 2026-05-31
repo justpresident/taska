@@ -1,90 +1,99 @@
-//! Storage layer: event schemas, file I/O, and OS-level file locking.
+//! Persistence layer.
 //!
-//! All mutations flow through an exclusive, fd-locked transaction so parallel
-//! processes / threads never interleave partial lines into the event log.
+//! [`EventStore`] is the abstraction the rest of the program depends on; it
+//! says *what* a store can do, not *how*. [`FileStore`] is the concrete,
+//! fd-locked JSONL-on-disk implementation. Depending on the trait keeps the
+//! command and engine layers ignorant of the storage mechanism and lets tests
+//! substitute an in-memory fake.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
 use fd_lock::RwLock;
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 
-pub type DynError = Box<dyn std::error::Error>;
+use crate::config::Config;
+use crate::error::DynError;
+use crate::model::{MutationEvent, TaskState};
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub enum OpType {
-    Create,
-    Update,
-    Delete,
-    AddDep,
-    RemoveDep,
+/// The persistence operations the application relies on.
+pub trait EventStore {
+    /// Read the compacted baseline snapshot.
+    fn load_baseline(&self) -> Result<Vec<TaskState>, DynError>;
+    /// Read every event from the active mutation log.
+    fn load_mutations(&self) -> Result<Vec<MutationEvent>, DynError>;
+    /// Append events to the end of the log without rewriting existing lines.
+    fn append_events(&self, new_events: &[MutationEvent]) -> Result<(), DynError>;
+    /// Replace the baseline with `baseline` and rewrite the log to contain
+    /// exactly `retained` (the recent events kept for merge reconciliation).
+    fn compact(&self, baseline: &[TaskState], retained: &[MutationEvent]) -> Result<(), DynError>;
 }
 
-/// A single append-only record in the mutation log.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct MutationEvent {
-    pub id: String,               // Unique UUIDv4 identifier
-    pub timestamp: DateTime<Utc>, // ISO 8601 timeline location
-    pub op: OpType,
-    pub task_id: String,
-
-    // Catch-all for schema-agnostic field management.
-    #[serde(flatten)]
-    pub payload: Map<String, Value>,
-}
-
-impl MutationEvent {
-    pub fn new(op: OpType, task_id: impl Into<String>, payload: Map<String, Value>) -> Self {
-        MutationEvent {
-            id: uuid::Uuid::new_v4().to_string(),
-            timestamp: Utc::now(),
-            op,
-            task_id: task_id.into(),
-            payload,
-        }
-    }
-}
-
-/// The materialized final state of a single task (lives only in memory, or as a
-/// compacted baseline record).
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TaskState {
-    pub id: String,
-    pub depends_on: Vec<String>,
-    pub custom_fields: Map<String, Value>,
-}
-
-pub struct Storage {
+/// JSONL-on-disk event store rooted at a repo's `.taska` directory.
+pub struct FileStore {
     pub base_dir: PathBuf,
+    config: Config,
 }
 
-impl Storage {
-    /// Construct a Storage handle rooted at `<dir>/.taska`.
-    pub fn new(repo_root: impl AsRef<Path>) -> Self {
-        Storage {
-            base_dir: repo_root.as_ref().join(".taska"),
-        }
+impl FileStore {
+    /// Open the store at `base_dir`, loading its `config.toml` (defaults if the
+    /// file is absent).
+    fn at(base_dir: PathBuf) -> Result<Self, DynError> {
+        let config = Config::load(&base_dir.join("config.toml"))?;
+        Ok(FileStore { base_dir, config })
     }
 
-    /// Discover the `.taska` directory by walking up from the current dir.
-    /// Falls back to `./.taska` if none is found (e.g. before `ta init`).
+    /// Locate an existing `.taska` directory by walking up from the current dir.
     pub fn discover() -> Result<Self, DynError> {
         let mut dir = std::env::current_dir()?;
         loop {
             if dir.join(".taska").is_dir() {
-                return Ok(Storage {
-                    base_dir: dir.join(".taska"),
-                });
+                return FileStore::at(dir.join(".taska"));
             }
             if !dir.pop() {
-                return Err(
-                    "No .taska directory found. Run `ta init` first.".to_string().into()
-                );
+                return Err("No .taska directory found. Run `ta init` first."
+                    .to_string()
+                    .into());
             }
         }
+    }
+
+    /// Idempotently provision the store at `base_dir`: create the directory,
+    /// write the default `config.toml` if absent, then create the *configured*
+    /// log files if absent. Because it loads the existing config first, re-running
+    /// it after editing `[store]` paths creates the renamed files. Existing data
+    /// is never touched.
+    pub fn provision(base_dir: PathBuf) -> Result<Self, DynError> {
+        fs::create_dir_all(&base_dir)?;
+
+        // Write the documented default config only if absent, so re-running
+        // `ta init` never clobbers a user's edits.
+        let config_path = base_dir.join("config.toml");
+        if !config_path.exists() {
+            fs::write(&config_path, crate::config::default_toml())?;
+        }
+
+        let store = FileStore::at(base_dir)?;
+        // Touch the (configured) log files so subsequent reads never fail.
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(store.mutations_path())?;
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(store.baseline_path())?;
+        Ok(store)
+    }
+
+    /// The repository root containing the `.taska` directory.
+    pub fn repo_root(&self) -> Option<&Path> {
+        self.base_dir.parent()
+    }
+
+    /// The loaded configuration.
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     fn mutations_path(&self) -> PathBuf {
@@ -94,30 +103,10 @@ impl Storage {
     fn baseline_path(&self) -> PathBuf {
         self.base_dir.join("baseline.jsonl")
     }
+}
 
-    /// Run `ta init`: create the directory, empty log files, and wire up Git.
-    pub fn init(repo_root: impl AsRef<Path>) -> Result<Self, DynError> {
-        let storage = Storage::new(&repo_root);
-        fs::create_dir_all(&storage.base_dir)?;
-        // Touch the log files so subsequent reads never fail.
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(storage.mutations_path())?;
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(storage.baseline_path())?;
-        Ok(storage)
-    }
-
-    /// Read every event from the active mutation log.
-    pub fn load_mutations(&self) -> Result<Vec<MutationEvent>, DynError> {
-        read_events(&self.mutations_path())
-    }
-
-    /// Read the compacted baseline snapshot.
-    pub fn load_baseline(&self) -> Result<Vec<TaskState>, DynError> {
+impl EventStore for FileStore {
+    fn load_baseline(&self) -> Result<Vec<TaskState>, DynError> {
         let path = self.baseline_path();
         if !path.exists() {
             return Ok(Vec::new());
@@ -133,11 +122,14 @@ impl Storage {
         Ok(out)
     }
 
-    /// Acquire the exclusive write lock, hand the caller the current event
-    /// new events to the end of the log. This is the only write path for
-    /// normal operations and never rewrites or reorders existing lines, which
-    /// is what keeps the log Git-merge-friendly (branches only ever append).
-    pub fn append_events(&self, new_events: &[MutationEvent]) -> Result<(), DynError> {
+    fn load_mutations(&self) -> Result<Vec<MutationEvent>, DynError> {
+        read_events(&self.mutations_path())
+    }
+
+    /// Append-only write path for normal operations. Never rewrites or reorders
+    /// existing lines, which is what keeps the log Git-merge-friendly (branches
+    /// only ever append).
+    fn append_events(&self, new_events: &[MutationEvent]) -> Result<(), DynError> {
         if new_events.is_empty() {
             return Ok(());
         }
@@ -148,8 +140,8 @@ impl Storage {
             .create(true)
             .open(self.mutations_path())?;
 
-        // Acquire OS advisory write lock so concurrent writers can't interleave
-        // partial lines into the log.
+        // OS advisory write lock so concurrent writers can't interleave partial
+        // lines into the log.
         let mut lock = RwLock::new(file);
         let mut locked_file = lock.write()?;
 
@@ -160,31 +152,33 @@ impl Storage {
         Ok(())
     }
 
-    /// Replace the baseline with `states` and clear the active mutation log.
-    ///
-    /// Unlike normal writes this *does* truncate the log — that is the whole
+    /// Unlike normal writes this *does* rewrite the log — that is the whole
     /// point of compaction. The mutation log is held under the exclusive lock
     /// across the baseline swap so a concurrent `append_events` can't slip an
-    /// event in between writing the baseline and truncating the log.
-    pub fn write_baseline(&self, states: &[TaskState]) -> Result<(), DynError> {
+    /// event in between writing the baseline and rewriting the log.
+    fn compact(&self, baseline: &[TaskState], retained: &[MutationEvent]) -> Result<(), DynError> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false) // we truncate explicitly under the lock, below
             .open(self.mutations_path())?;
         let mut lock = RwLock::new(file);
         let mut locked_file = lock.write()?;
 
         // Persist the new baseline first...
-        let mut baseline = File::create(self.baseline_path())?;
-        for state in states {
-            writeln!(baseline, "{}", serde_json::to_string(state)?)?;
+        let mut baseline_file = File::create(self.baseline_path())?;
+        for state in baseline {
+            writeln!(baseline_file, "{}", serde_json::to_string(state)?)?;
         }
-        baseline.flush()?;
+        baseline_file.flush()?;
 
-        // ...then drop the now-folded mutations under the held lock.
+        // ...then rewrite the log with just the retained events under the lock.
         locked_file.set_len(0)?;
         locked_file.seek(SeekFrom::Start(0))?;
+        for event in retained {
+            writeln!(locked_file, "{}", serde_json::to_string(event)?)?;
+        }
         locked_file.flush()?;
         Ok(())
     }

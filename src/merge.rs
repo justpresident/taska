@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 
-use crate::storage::{DynError, MutationEvent};
+use crate::error::DynError;
+use crate::model::MutationEvent;
 
 /// Merge `ancestor` + `current` + `incoming` event files into `current` (Git's
 /// `%A`). Returns Ok(()) on a clean structural resolution.
