@@ -13,6 +13,10 @@ categories = ["command-line-utilities", "development-tools"]
 # Keep the published tarball to the crate itself; internal/draft docs stay in the repo.
 exclude = ["/docs"]
 
+[lib]
+name = "taska"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ta"
 path = "src/main.rs"
