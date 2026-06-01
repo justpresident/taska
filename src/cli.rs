@@ -59,7 +59,7 @@ enum Commands {
     /// Review and clear a surfaced merge conflict
     Resolve,
     /// Git event-log merge driver entrypoint (invoked by Git, not humans)
-    #[command(name = "git-merge")]
+    #[command(name = "git-merge", hide = true)]
     GitMerge {
         ancestor: String,
         current: String,
@@ -69,7 +69,7 @@ enum Commands {
         path: String,
     },
     /// Git baseline merge driver entrypoint (invoked by Git, not humans)
-    #[command(name = "git-merge-baseline")]
+    #[command(name = "git-merge-baseline", hide = true)]
     GitMergeBaseline {
         ancestor: String,
         current: String,
