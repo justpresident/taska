@@ -35,8 +35,13 @@ enum Commands {
         /// Custom fields as `key=value` pairs (values parsed as JSON when possible)
         fields: Vec<String>,
     },
-    /// Update fields on an existing task: `ta update <id> [field=value ...]`
-    Update { id: String, fields: Vec<String> },
+    /// Update fields on an existing task: `ta update <id> <field=value ...>`
+    Update {
+        id: String,
+        /// Custom fields as `key=value` pairs; at least one is required
+        #[arg(required = true)]
+        fields: Vec<String>,
+    },
     /// Bind a block constraint: `ta block <task_id> <depends_on>`
     Block { task_id: String, depends_on: String },
     /// Remove a block constraint: `ta unblock <task_id> <depends_on>`
@@ -522,5 +527,26 @@ mod tests {
         let store = InMemoryStore::default();
         let err = cmd_create(&store, "x".into(), vec!["no_equals_sign".into()]);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn update_without_fields_is_rejected_by_parser() {
+        // `ta update <id>` with no field=value args must fail to parse rather
+        // than appending a no-op empty Update event.
+        let parsed = Cli::try_parse_from(["ta", "update", "api"]);
+        assert!(parsed.is_err(), "update with no fields should be a parse error");
+    }
+
+    #[test]
+    fn update_with_a_field_parses() {
+        let parsed = Cli::try_parse_from(["ta", "update", "api", "status=open"]);
+        assert!(parsed.is_ok(), "update with a field should parse");
+    }
+
+    #[test]
+    fn create_without_fields_still_parses() {
+        // `ta create <id>` with no fields remains valid.
+        let parsed = Cli::try_parse_from(["ta", "create", "api"]);
+        assert!(parsed.is_ok(), "create with no fields should still parse");
     }
 }

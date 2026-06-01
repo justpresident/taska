@@ -151,6 +151,27 @@ fn crud_search_and_ready_workflow() {
     assert!(!lists_task(&ta(&dir, &["list"]), "db"), "db should be gone");
 }
 
+#[test]
+fn update_with_no_fields_fails_and_appends_nothing() {
+    let dir = fresh_dir("empty-update");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "api", "status=open"]);
+
+    let log = dir.join(".taska").join("mutations.jsonl");
+    let before = rows(&log);
+
+    // `ta update api` with no field=value args must fail (non-zero exit) and
+    // must NOT append a no-op empty Update event.
+    let out = run(ta_bin(), &dir, &["update", "api"]);
+    assert!(
+        !out.status.success(),
+        "`ta update api` with no fields should exit non-zero, got:\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(rows(&log), before, "no event should have been appended");
+}
+
 fn rows(path: &Path) -> usize {
     fs::read_to_string(path)
         .unwrap()
