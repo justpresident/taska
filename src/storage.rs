@@ -40,7 +40,7 @@ impl FileStore {
     /// file is absent).
     fn at(base_dir: PathBuf) -> Result<Self, DynError> {
         let config = Config::load(&base_dir.join("config.toml"))?;
-        Ok(FileStore { base_dir, config })
+        Ok(Self { base_dir, config })
     }
 
     /// Locate an existing `.taska` directory by walking up from the current dir.
@@ -48,7 +48,7 @@ impl FileStore {
         let mut dir = std::env::current_dir()?;
         loop {
             if dir.join(".taska").is_dir() {
-                return FileStore::at(dir.join(".taska"));
+                return Self::at(dir.join(".taska"));
             }
             if !dir.pop() {
                 return Err("No .taska directory found. Run `ta init` first."
@@ -79,7 +79,7 @@ impl FileStore {
             fs::write(&gitignore, "merge-conflict.json\n")?;
         }
 
-        let store = FileStore::at(base_dir)?;
+        let store = Self::at(base_dir)?;
         // Touch the (configured) log files so subsequent reads never fail.
         OpenOptions::new()
             .create(true)
@@ -98,7 +98,7 @@ impl FileStore {
     }
 
     /// The loaded configuration.
-    pub fn config(&self) -> &Config {
+    pub const fn config(&self) -> &Config {
         &self.config
     }
 

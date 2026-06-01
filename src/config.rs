@@ -12,17 +12,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::DynError;
 
-/// Smallest `keep_events` we accept in production. Retaining fewer than this
-/// risks folding away events a concurrent branch still needs to reconcile on
-/// merge, which is unrecoverable. Tests that deliberately exercise tiny
-/// retention bypass the check via the CLI (see `enforce_config`).
+/// Smallest `keep_events` we accept in production.
+///
+/// Retaining fewer than this risks folding away events a concurrent branch still
+/// needs to reconcile on merge, which is unrecoverable. Tests that deliberately
+/// exercise tiny retention bypass the check via the CLI (see `enforce_config`).
 pub const MIN_KEEP_EVENTS: usize = 100;
 
-/// The `config.toml` written by `ta init`. Rendered from [`Config::default`] so
-/// the values live in exactly one place (the `Default` impls) while the file
-/// keeps its explanatory comments — TOML serialization alone can't emit those.
-/// A test asserts the rendered file round-trips back to `Config::default()`,
-/// which also catches template typos such as a misspelled key.
+/// The `config.toml` written by `ta init`.
+///
+/// Rendered from [`Config::default`] so the values live in exactly one place
+/// (the `Default` impls) while the file keeps its explanatory comments — TOML
+/// serialization alone can't emit those. A test asserts the rendered file
+/// round-trips back to `Config::default()`, which also catches template typos
+/// such as a misspelled key.
 pub fn default_toml() -> String {
     let Config {
         compaction,
@@ -99,7 +102,7 @@ pub struct CompactionConfig {
 
 impl Default for CompactionConfig {
     fn default() -> Self {
-        CompactionConfig {
+        Self {
             keep_events: 1000,
             keep_days: 30,
         }
@@ -115,7 +118,7 @@ pub struct WorkflowConfig {
 
 impl Default for WorkflowConfig {
     fn default() -> Self {
-        WorkflowConfig {
+        Self {
             status_field: "status".to_string(),
             done_status: "closed".to_string(),
         }
@@ -130,10 +133,12 @@ pub struct MergeConfig {
     pub on_conflict: OnConflict,
 }
 
-/// Policy for a genuine merge contradiction (the same field or dependency set to
-/// different values on both branches). Commuting concurrent edits always
-/// auto-merge regardless of this setting; it only governs true conflicts, and it
-/// applies per-field — each conflicting field is resolved on its own.
+/// Policy for a genuine merge contradiction.
+///
+/// A contradiction is the same field or dependency set to different values on
+/// both branches. Commuting concurrent edits always auto-merge regardless of
+/// this setting; it only governs true conflicts, and it applies per-field —
+/// each conflicting field is resolved on its own.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum OnConflict {
@@ -149,12 +154,12 @@ pub enum OnConflict {
 }
 
 impl OnConflict {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            OnConflict::Surface => "surface",
-            OnConflict::Latest => "latest",
-            OnConflict::Ours => "ours",
-            OnConflict::Theirs => "theirs",
+            Self::Surface => "surface",
+            Self::Latest => "latest",
+            Self::Ours => "ours",
+            Self::Theirs => "theirs",
         }
     }
 }
@@ -163,10 +168,10 @@ impl Config {
     /// Load config from `path`, falling back to defaults if the file is absent.
     /// `#[serde(default)]` means a partial file still loads — only the keys
     /// present override their defaults.
-    pub fn load(path: &Path) -> Result<Config, DynError> {
+    pub fn load(path: &Path) -> Result<Self, DynError> {
         match std::fs::read_to_string(path) {
             Ok(contents) => Ok(toml::from_str(&contents)?),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e.into()),
         }
     }
@@ -189,6 +194,7 @@ impl Config {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
 

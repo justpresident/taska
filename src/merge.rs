@@ -29,8 +29,9 @@ use crate::config::OnConflict;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType, TaskState};
 
-/// `ta git-merge %O %A %B` — reconcile diverged mutation logs into `current`
-/// (Git's `%A` = "ours"; `incoming` is `%B` = "theirs"). `marker_path`, when
+/// `ta git-merge %O %A %B` — reconcile diverged mutation logs into `current`.
+///
+/// (Git's `%A` = "ours"; `incoming` is `%B` = "theirs".) `marker_path`, when
 /// known, is where a surfaced conflict is recorded for `ta resolve`.
 pub fn execute_git_merge(
     ancestor: &str,
@@ -85,11 +86,12 @@ pub fn execute_git_merge(
     Ok(())
 }
 
-/// `ta git-merge-baseline %O %A %B` — keep our baseline. `current` (`%A`) already
-/// holds our version, so we leave it untouched and only sanity-check for a sign
-/// that someone compacted past their fork (which `keep_events` is meant to
-/// prevent): a task unchanged from the ancestor on our side but different on
-/// theirs.
+/// `ta git-merge-baseline %O %A %B` — keep our baseline.
+///
+/// `current` (`%A`) already holds our version, so we leave it untouched and only
+/// sanity-check for a sign that someone compacted past their fork (which
+/// `keep_events` is meant to prevent): a task unchanged from the ancestor on our
+/// side but different on theirs.
 pub fn execute_git_merge_baseline(
     ancestor: &str,
     current: &str,
@@ -103,9 +105,8 @@ pub fn execute_git_merge_baseline(
         if let (Some(our_task), Some(their_task)) = (ours.get(id), theirs.get(id)) {
             if our_task == base_task && their_task != base_task {
                 eprintln!(
-                    "taska: warning: baseline task `{}` diverged across branches; a compaction \
-                     may have folded events past its fork (consider raising keep_events).",
-                    id
+                    "taska: warning: baseline task `{id}` diverged across branches; a compaction \
+                     may have folded events past its fork (consider raising keep_events)."
                 );
             }
         }
@@ -159,7 +160,7 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
                         },
                     );
                 }
-                delta.last_change = max_ts(delta.last_change, event.timestamp);
+                delta.last_change = Some(max_ts(delta.last_change, event.timestamp));
             }
             OpType::Delete => delta.deleted = Some(event.timestamp),
             OpType::AddDep | OpType::RemoveDep => {
@@ -171,7 +172,7 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
                             ts: event.timestamp,
                         },
                     );
-                    delta.last_change = max_ts(delta.last_change, event.timestamp);
+                    delta.last_change = Some(max_ts(delta.last_change, event.timestamp));
                 }
             }
         }
@@ -179,8 +180,8 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
     deltas
 }
 
-fn max_ts(current: Option<DateTime<Utc>>, ts: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    Some(current.map_or(ts, |c| c.max(ts)))
+fn max_ts(current: Option<DateTime<Utc>>, ts: DateTime<Utc>) -> DateTime<Utc> {
+    current.map_or(ts, |c| c.max(ts))
 }
 
 // ---------------------------------------------------------------------------
@@ -202,21 +203,20 @@ enum Strategy {
 
 impl Strategy {
     /// `surface` resolves tentatively as `ours` (and is flagged by the caller).
-    fn for_policy(policy: OnConflict) -> Strategy {
+    const fn for_policy(policy: OnConflict) -> Self {
         match policy {
-            OnConflict::Surface | OnConflict::Ours => Strategy::Ours,
-            OnConflict::Latest => Strategy::Latest,
-            OnConflict::Theirs => Strategy::Theirs,
+            OnConflict::Surface | OnConflict::Ours => Self::Ours,
+            OnConflict::Latest => Self::Latest,
+            OnConflict::Theirs => Self::Theirs,
         }
     }
 
     fn pick(self, ours_ts: DateTime<Utc>, theirs_ts: DateTime<Utc>) -> Side {
         match self {
-            Strategy::Ours => Side::Ours,
-            Strategy::Theirs => Side::Theirs,
+            Self::Theirs => Side::Theirs,
             // Tie goes to ours, so the choice is total and deterministic.
-            Strategy::Latest if theirs_ts > ours_ts => Side::Theirs,
-            Strategy::Latest => Side::Ours,
+            Self::Latest if theirs_ts > ours_ts => Side::Theirs,
+            Self::Ours | Self::Latest => Side::Ours,
         }
     }
 }
@@ -255,11 +255,11 @@ enum EdgeOutcome {
 }
 
 impl EdgeOutcome {
-    fn of(added: bool) -> Self {
+    const fn of(added: bool) -> Self {
         if added {
-            EdgeOutcome::Added
+            Self::Added
         } else {
-            EdgeOutcome::Removed
+            Self::Removed
         }
     }
 }
@@ -369,8 +369,14 @@ fn resolve_delete(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: 
     // A real conflict only when exactly one side deleted and the other changed.
     // Track which side deleted as a `Side` so the winner check reads directly.
     let (delete_side, delete_ts, change_ts) = match (od.deleted, td.deleted) {
-        (Some(d), None) if td.last_change.is_some() => (Side::Ours, d, td.last_change.unwrap()),
-        (None, Some(d)) if od.last_change.is_some() => (Side::Theirs, d, od.last_change.unwrap()),
+        (Some(d), None) => match td.last_change {
+            Some(change_ts) => (Side::Ours, d, change_ts),
+            None => return false,
+        },
+        (None, Some(d)) => match od.last_change {
+            Some(change_ts) => (Side::Theirs, d, change_ts),
+            None => return false,
+        },
         _ => return false,
     };
 
@@ -445,7 +451,7 @@ fn resolve_fields(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: 
             Side::Ours => (ow.value.clone(), ow.ts),
             Side::Theirs => (tw.value.clone(), tw.ts),
         };
-        latest_ts = max_ts(latest_ts, ts);
+        latest_ts = Some(max_ts(latest_ts, ts));
         winners.insert(field.clone(), value);
         items.push(ResolvedItem {
             field: Some(field.clone()),
@@ -465,14 +471,17 @@ fn resolve_fields(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: 
         });
     }
 
-    if !winners.is_empty() {
+    // `latest_ts` is `Some` iff at least one field was contested, which is also
+    // exactly when `winners` is non-empty — so matching on it both gates the push
+    // and yields the timestamp without an unwrap.
+    if let Some(ts) = latest_ts {
         // One Update carrying every per-field winner for this task, annotated with
         // the provenance of each pick.
         plan.resolutions.push(event(
             OpType::Update,
             task,
             winners,
-            latest_ts.unwrap(),
+            ts,
             Some(provenance(strategy, items)),
         ));
     }
@@ -644,6 +653,7 @@ fn index_baseline(tasks: Vec<TaskState>) -> HashMap<String, TaskState> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
     use crate::engine::Engine;
@@ -670,9 +680,9 @@ mod tests {
     /// Merge two concurrent logs that share the `anc` prefix, returning the
     /// final materialized fields of `task`.
     fn merge_to_fields(
-        anc: Vec<MutationEvent>,
-        ours: Vec<MutationEvent>,
-        theirs: Vec<MutationEvent>,
+        anc: &[MutationEvent],
+        ours: &[MutationEvent],
+        theirs: &[MutationEvent],
         policy: OnConflict,
         task: &str,
     ) -> Map<String, Value> {
@@ -727,7 +737,7 @@ mod tests {
         ];
 
         // `theirs` wins the two conflicting fields; the disjoint ones both stay.
-        let fields = merge_to_fields(anc, ours, theirs, OnConflict::Theirs, "X");
+        let fields = merge_to_fields(&anc, &ours, &theirs, OnConflict::Theirs, "X");
         assert_eq!(fields["status"], json!("open"), "theirs wins status");
         assert_eq!(fields["owner"], json!("bob"), "theirs wins owner");
         assert_eq!(
@@ -754,7 +764,7 @@ mod tests {
             ev(3, 20, OpType::Update, "X", &[("owner", json!("theirs"))]),
         ];
 
-        let fields = merge_to_fields(anc, ours, theirs, OnConflict::Latest, "X");
+        let fields = merge_to_fields(&anc, &ours, &theirs, OnConflict::Latest, "X");
         assert_eq!(fields["status"], json!("ours"), "ours' status is newer");
         assert_eq!(fields["owner"], json!("theirs"), "theirs' owner is newer");
     }
@@ -787,7 +797,7 @@ mod tests {
         );
 
         // With `theirs`, the change wins and the task survives.
-        let fields = merge_to_fields(anc, ours, theirs, OnConflict::Theirs, "X");
+        let fields = merge_to_fields(&anc, &ours, &theirs, OnConflict::Theirs, "X");
         assert_eq!(fields["status"], json!("changed"), "theirs' change is kept");
     }
 

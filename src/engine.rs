@@ -97,7 +97,10 @@ impl Engine {
         let by_time = if keep_days == 0 {
             n // time window disabled: it never forces retention
         } else {
-            let cutoff = now - Duration::days(keep_days as i64);
+            // Clamp absurdly large windows to `i64::MAX` days rather than wrapping;
+            // either way the cutoff is far in the past and nothing is folded by time.
+            let days = i64::try_from(keep_days).unwrap_or(i64::MAX);
+            let cutoff = now - Duration::days(days);
             mutations
                 .iter()
                 .position(|e| e.timestamp >= cutoff)

@@ -145,19 +145,19 @@ fn enforce_config(cfg: &Config) -> Result<(), DynError> {
 /// store. Handlers depend only on the `EventStore` abstraction.
 fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), DynError> {
     match command {
-        Commands::Create { id, fields } => cmd_create(store, id, fields),
-        Commands::Update { id, fields } => cmd_update(store, id, fields),
+        Commands::Create { id, fields } => cmd_create(store, &id, &fields),
+        Commands::Update { id, fields } => cmd_update(store, &id, &fields),
         Commands::Block {
             task_id,
             depends_on,
-        } => cmd_dep(store, task_id, depends_on, OpType::AddDep),
+        } => cmd_dep(store, &task_id, &depends_on, OpType::AddDep),
         Commands::Unblock {
             task_id,
             depends_on,
-        } => cmd_dep(store, task_id, depends_on, OpType::RemoveDep),
-        Commands::Delete { id } => cmd_delete(store, id),
+        } => cmd_dep(store, &task_id, &depends_on, OpType::RemoveDep),
+        Commands::Delete { id } => cmd_delete(store, &id),
         Commands::List => cmd_list(store),
-        Commands::Search { key, val } => cmd_search(store, key, val),
+        Commands::Search { key, val } => cmd_search(store, &key, &val),
         Commands::Ready => {
             let workflow = store.config().workflow.clone();
             cmd_ready(store, &workflow)
@@ -196,9 +196,9 @@ fn parse_fields(fields: &[String]) -> Result<Map<String, Value>, DynError> {
     for raw in fields {
         let (key, val) = raw
             .split_once('=')
-            .ok_or_else(|| format!("invalid field `{}` (expected key=value)", raw))?;
+            .ok_or_else(|| format!("invalid field `{raw}` (expected key=value)"))?;
         if RESERVED_FIELD_KEYS.contains(&key) {
-            return Err(format!("field name `{}` is reserved and can't be used", key).into());
+            return Err(format!("field name `{key}` is reserved and can't be used").into());
         }
         let value =
             serde_json::from_str::<Value>(val).unwrap_or_else(|_| Value::String(val.to_string()));
@@ -214,19 +214,16 @@ fn parse_fields(fields: &[String]) -> Result<Map<String, Value>, DynError> {
 fn cmd_init() -> Result<(), DynError> {
     // Resolve the store directory: reuse an existing one (so re-running from
     // anywhere in the repo is idempotent), else create one in the current dir.
-    let base_dir = match FileStore::discover() {
-        Ok(existing) => {
-            println!(
-                "taska store already present at {}",
-                existing.base_dir.display()
-            );
-            existing.base_dir
-        }
-        Err(_) => {
-            let dir = std::env::current_dir()?.join(".taska");
-            println!("Initialized taska store at {}", dir.display());
-            dir
-        }
+    let base_dir = if let Ok(existing) = FileStore::discover() {
+        println!(
+            "taska store already present at {}",
+            existing.base_dir.display()
+        );
+        existing.base_dir
+    } else {
+        let dir = std::env::current_dir()?.join(".taska");
+        println!("Initialized taska store at {}", dir.display());
+        dir
     };
 
     // Provision honors the (possibly user-edited) config, creating any newly
@@ -240,41 +237,41 @@ fn cmd_init() -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_create(store: &impl EventStore, id: String, fields: Vec<String>) -> Result<(), DynError> {
-    let payload = parse_fields(&fields)?;
-    store.append_events(&[MutationEvent::new(OpType::Create, &id, payload)])?;
-    println!("Created task `{}`", id);
+fn cmd_create(store: &impl EventStore, id: &str, fields: &[String]) -> Result<(), DynError> {
+    let payload = parse_fields(fields)?;
+    store.append_events(&[MutationEvent::new(OpType::Create, id, payload)])?;
+    println!("Created task `{id}`");
     Ok(())
 }
 
-fn cmd_update(store: &impl EventStore, id: String, fields: Vec<String>) -> Result<(), DynError> {
-    let payload = parse_fields(&fields)?;
-    store.append_events(&[MutationEvent::new(OpType::Update, &id, payload)])?;
-    println!("Updated task `{}`", id);
+fn cmd_update(store: &impl EventStore, id: &str, fields: &[String]) -> Result<(), DynError> {
+    let payload = parse_fields(fields)?;
+    store.append_events(&[MutationEvent::new(OpType::Update, id, payload)])?;
+    println!("Updated task `{id}`");
     Ok(())
 }
 
 fn cmd_dep(
     store: &impl EventStore,
-    task_id: String,
-    depends_on: String,
+    task_id: &str,
+    depends_on: &str,
     op: OpType,
 ) -> Result<(), DynError> {
     let mut payload = Map::new();
-    payload.insert("dep".to_string(), Value::String(depends_on.clone()));
+    payload.insert("dep".to_string(), Value::String(depends_on.to_string()));
     let is_add = matches!(op, OpType::AddDep);
-    store.append_events(&[MutationEvent::new(op, &task_id, payload)])?;
+    store.append_events(&[MutationEvent::new(op, task_id, payload)])?;
     if is_add {
-        println!("`{}` now depends on `{}`", task_id, depends_on);
+        println!("`{task_id}` now depends on `{depends_on}`");
     } else {
-        println!("`{}` no longer depends on `{}`", task_id, depends_on);
+        println!("`{task_id}` no longer depends on `{depends_on}`");
     }
     Ok(())
 }
 
-fn cmd_delete(store: &impl EventStore, id: String) -> Result<(), DynError> {
-    store.append_events(&[MutationEvent::new(OpType::Delete, &id, Map::new())])?;
-    println!("Deleted task `{}`", id);
+fn cmd_delete(store: &impl EventStore, id: &str) -> Result<(), DynError> {
+    store.append_events(&[MutationEvent::new(OpType::Delete, id, Map::new())])?;
+    println!("Deleted task `{id}`");
     Ok(())
 }
 
@@ -292,11 +289,12 @@ fn cmd_list(store: &impl EventStore) -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_search(store: &impl EventStore, key: String, val: String) -> Result<(), DynError> {
+fn cmd_search(store: &impl EventStore, key: &str, val: &str) -> Result<(), DynError> {
     let state = state_of(store)?;
     // Match the query against the same JSON coercion used on write.
-    let needle = serde_json::from_str::<Value>(&val).unwrap_or_else(|_| Value::String(val.clone()));
-    let mut hits = Engine::filter_tasks(&state, &key, &needle);
+    let needle =
+        serde_json::from_str::<Value>(val).unwrap_or_else(|_| Value::String(val.to_string()));
+    let mut hits = Engine::filter_tasks(&state, key, &needle);
     hits.sort_by(|a, b| a.id.cmp(&b.id));
     if hits.is_empty() {
         println!("(no matches)");
@@ -382,7 +380,7 @@ fn cmd_resolve(store: &FileStore) -> Result<(), DynError> {
                 let kept = item.get("kept").and_then(|v| v.as_str()).unwrap_or("ours");
                 match field {
                     Some(f) => {
-                        println!("  - `{task}`.{f}: ours={ours} / theirs={theirs} -> kept {kept}")
+                        println!("  - `{task}`.{f}: ours={ours} / theirs={theirs} -> kept {kept}");
                     }
                     None => println!(
                         "  - `{task}` (whole task): ours={ours} / theirs={theirs} -> kept {kept}"
@@ -412,6 +410,7 @@ fn print_task(task: &TaskState) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     //! These tests are the dividend the `EventStore` trait pays out: command
     //! handlers run against an in-memory fake with no disk, locks, or git.
@@ -457,8 +456,8 @@ mod tests {
         let store = InMemoryStore::default();
         cmd_create(
             &store,
-            "api".into(),
-            vec!["status=open".into(), "priority=3".into()],
+            "api",
+            &["status=open".into(), "priority=3".into()],
         )
         .unwrap();
         let state = state_of(&store).unwrap();
@@ -473,8 +472,8 @@ mod tests {
     #[test]
     fn compact_folds_log_into_baseline() {
         let store = InMemoryStore::default();
-        cmd_create(&store, "a".into(), vec![]).unwrap();
-        cmd_create(&store, "b".into(), vec![]).unwrap();
+        cmd_create(&store, "a", &[]).unwrap();
+        cmd_create(&store, "b", &[]).unwrap();
         // keep_events = 0 still retains the most recent event (the log never
         // empties, so the seq watermark stays derivable); the rest folds.
         let cfg = CompactionConfig {
@@ -489,7 +488,7 @@ mod tests {
         );
         assert_eq!(store.load_baseline().unwrap().len(), 1, "the rest folded");
         // Appends still work and overlay the baseline post-compaction.
-        cmd_create(&store, "c".into(), vec![]).unwrap();
+        cmd_create(&store, "c", &[]).unwrap();
         assert_eq!(state_of(&store).unwrap().len(), 3);
     }
 
@@ -497,7 +496,7 @@ mod tests {
     fn compact_retains_recent_events() {
         let store = InMemoryStore::default();
         for id in ["a", "b", "c", "d", "e"] {
-            cmd_create(&store, id.into(), vec![]).unwrap();
+            cmd_create(&store, id, &[]).unwrap();
         }
         // Keep the 2 most recent, time window off.
         let cfg = CompactionConfig {
@@ -525,7 +524,7 @@ mod tests {
     #[test]
     fn invalid_field_is_rejected() {
         let store = InMemoryStore::default();
-        let err = cmd_create(&store, "x".into(), vec!["no_equals_sign".into()]);
+        let err = cmd_create(&store, "x", &["no_equals_sign".into()]);
         assert!(err.is_err());
     }
 

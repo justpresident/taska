@@ -27,7 +27,7 @@ pub enum OpType {
 /// `timestamp` is informational only (for display such as "created 3 days ago").
 /// It is deliberately *not* used to order or merge events, because wall clocks
 /// interleave arbitrarily across concurrent branches.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct MutationEvent {
     pub seq: u64,
     pub timestamp: DateTime<Utc>,
@@ -51,7 +51,7 @@ impl MutationEvent {
     /// Build an unsequenced draft. The store assigns `seq` when it appends, so
     /// the returned value's `seq` is `0` until then.
     pub fn new(op: OpType, task_id: impl Into<String>, payload: Map<String, Value>) -> Self {
-        MutationEvent {
+        Self {
             seq: 0,
             timestamp: Utc::now(),
             op,
@@ -62,12 +62,13 @@ impl MutationEvent {
     }
 }
 
-/// Verify a log slice is strictly increasing by `seq`. Every write path — append,
-/// compaction, and merge restack — produces strictly-ordered output, so a
-/// violation is never a normal state: it means the log was hand-edited, merged by
-/// the wrong tool, or corrupted. We surface it loudly instead of silently
-/// repairing it, so the user can investigate rather than trust a quietly
-/// reordered history.
+/// Verify a log slice is strictly increasing by `seq`.
+///
+/// Every write path — append, compaction, and merge restack — produces
+/// strictly-ordered output, so a violation is never a normal state: it means the
+/// log was hand-edited, merged by the wrong tool, or corrupted. We surface it
+/// loudly instead of silently repairing it, so the user can investigate rather
+/// than trust a quietly reordered history.
 pub fn verify_seq_order(events: &[MutationEvent]) -> Result<(), String> {
     for pair in events.windows(2) {
         if pair[1].seq <= pair[0].seq {
@@ -83,7 +84,7 @@ pub fn verify_seq_order(events: &[MutationEvent]) -> Result<(), String> {
 
 /// The materialized final state of a single task (lives only in memory, or as a
 /// compacted baseline record).
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct TaskState {
     pub id: String,
     pub depends_on: Vec<String>,

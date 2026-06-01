@@ -1,6 +1,7 @@
 //! Dependency graph: cycle detection, topological ordering, and readiness.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 use petgraph::graphmap::DiGraphMap;
 
@@ -8,8 +9,8 @@ use crate::model::TaskState;
 
 /// Validate the dependency DAG and return a topological ordering
 /// (dependencies before dependents). Errors on any cycle.
-pub fn validate_and_sort_dependencies(
-    state: &HashMap<String, TaskState>,
+pub fn validate_and_sort_dependencies<S: BuildHasher>(
+    state: &HashMap<String, TaskState, S>,
 ) -> Result<Vec<String>, String> {
     let mut graph: DiGraphMap<&str, ()> = DiGraphMap::new();
 
@@ -31,7 +32,7 @@ pub fn validate_and_sort_dependencies(
     let sorted = petgraph::algo::toposort(&graph, None)
         .map_err(|_| "Topological cycle processing failure".to_string())?
         .into_iter()
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
 
     Ok(sorted)
@@ -49,17 +50,16 @@ fn is_done(task: &TaskState, status_field: &str, done_status: &str) -> bool {
 ///
 /// `status_field`/`done_status` come from `[workflow]` config, so projects can
 /// rename the convention (e.g. `state`/`closed`).
-pub fn ready_tasks(
-    state: &HashMap<String, TaskState>,
+pub fn ready_tasks<S: BuildHasher>(
+    state: &HashMap<String, TaskState, S>,
     status_field: &str,
     done_status: &str,
 ) -> Result<Vec<String>, String> {
     let order = validate_and_sort_dependencies(state)?;
     let mut ready = Vec::new();
     for id in order {
-        let task = match state.get(&id) {
-            Some(t) => t,
-            None => continue,
+        let Some(task) = state.get(&id) else {
+            continue;
         };
         if is_done(task, status_field, done_status) {
             continue;

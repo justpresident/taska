@@ -53,7 +53,7 @@ pub fn setup(repo_root: &Path) -> Result<(), DynError> {
 
 /// Append a `<path> merge=<driver>` attribute line if it isn't already present.
 fn ensure_gitattribute(repo_root: &Path, file: &str, driver: &str) -> Result<(), DynError> {
-    let line = format!("{} merge={}", file, driver);
+    let line = format!("{file} merge={driver}");
     let attrs_path = repo_root.join(".gitattributes");
     let existing = std::fs::read_to_string(&attrs_path).unwrap_or_default();
     if existing.lines().any(|l| l.trim() == line) {
@@ -66,7 +66,7 @@ fn ensure_gitattribute(repo_root: &Path, file: &str, driver: &str) -> Result<(),
     if !existing.is_empty() && !existing.ends_with('\n') {
         writeln!(f)?;
     }
-    writeln!(f, "{}", line)?;
+    writeln!(f, "{line}")?;
     Ok(())
 }
 
@@ -79,7 +79,7 @@ fn register_driver(repo_root: &Path, name: &str, description: &str, driver_cmd: 
             .args(args)
             .status()
     };
-    let name_set = git(&["config", &format!("merge.{}.name", name), description]);
-    let driver_set = git(&["config", &format!("merge.{}.driver", name), driver_cmd]);
+    let name_set = git(&["config", &format!("merge.{name}.name"), description]);
+    let driver_set = git(&["config", &format!("merge.{name}.driver"), driver_cmd]);
     matches!((name_set, driver_set), (Ok(a), Ok(b)) if a.success() && b.success())
 }
