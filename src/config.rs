@@ -31,8 +31,15 @@ pub fn default_toml() -> String {
         compaction,
         workflow,
         merge,
+        display,
     } = Config::default();
     let on_conflict = merge.on_conflict.as_str();
+    let columns = display
+        .columns
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         r#"# taska configuration
 #
@@ -71,6 +78,15 @@ done_status = "{done_status}"
 #   "ours"    — keep the value on the branch being merged INTO
 #   "theirs"  — keep the value from the branch being merged IN
 on_conflict = "{on_conflict}"
+
+[display]
+# Columns shown by list/search/ready in human format — and the field set and
+# order used by `--format json`. "id" and "deps" are built-ins; any other name
+# is a task field (blank when a task lacks it). Override per command with
+# `--columns a,b,c` or `--all`.
+columns = [{columns}]
+# Truncate long human cell values to this many characters (0 = no limit).
+max_width = {max_width}
 "#,
         min_keep = MIN_KEEP_EVENTS,
         keep_events = compaction.keep_events,
@@ -78,6 +94,8 @@ on_conflict = "{on_conflict}"
         status_field = workflow.status_field,
         done_status = workflow.done_status,
         on_conflict = on_conflict,
+        columns = columns,
+        max_width = display.max_width,
     )
 }
 
@@ -87,6 +105,7 @@ pub struct Config {
     pub compaction: CompactionConfig,
     pub workflow: WorkflowConfig,
     pub merge: MergeConfig,
+    pub display: DisplayConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -160,6 +179,29 @@ impl OnConflict {
             Self::Latest => "latest",
             Self::Ours => "ours",
             Self::Theirs => "theirs",
+        }
+    }
+}
+
+/// How `list`/`search`/`ready` present tasks.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct DisplayConfig {
+    /// Columns shown in human format and the field order used by `--format json`,
+    /// in order. `id` and `deps` are built-ins; any other name is a task field.
+    pub columns: Vec<String>,
+    /// Truncate human cell values to this many characters (0 = no limit).
+    pub max_width: usize,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            columns: ["id", "title", "status", "deps"]
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            max_width: 40,
         }
     }
 }

@@ -6,10 +6,10 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::{Map, Value};
 
-use crate::config::{CompactionConfig, Config, WorkflowConfig};
+use crate::config::{CompactionConfig, Config, DisplayConfig, WorkflowConfig};
 use crate::engine::Engine;
 use crate::error::DynError;
 use crate::git;
@@ -23,6 +23,28 @@ use crate::storage::{EventStore, FileStore};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+/// Output format for the listing commands. `--format` changes only *how* tasks
+/// are rendered, never *which* fields show — that is `--columns`/`--all`/config.
+#[derive(ValueEnum, Clone, Copy, PartialEq, Eq)]
+enum OutputFormat {
+    Human,
+    Json,
+}
+
+/// Display flags shared by `list`, `search`, and `ready`.
+#[derive(Args, Clone)]
+struct DisplayArgs {
+    /// Render as an aligned table (human) or a JSON array (json)
+    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+    format: OutputFormat,
+    /// Show every field, not just the configured columns
+    #[arg(long)]
+    all: bool,
+    /// Comma-separated columns to show, overriding config (e.g. --columns id,status)
+    #[arg(long, value_delimiter = ',')]
+    columns: Option<Vec<String>>,
 }
 
 #[derive(Subcommand)]
@@ -49,11 +71,22 @@ enum Commands {
     /// Delete a task: `ta delete <id>`
     Delete { id: String },
     /// List all tasks
-    List,
+    List {
+        #[command(flatten)]
+        display: DisplayArgs,
+    },
     /// Search tasks by field value: `ta search <key> <val>`
-    Search { key: String, val: String },
+    Search {
+        key: String,
+        val: String,
+        #[command(flatten)]
+        display: DisplayArgs,
+    },
     /// Show tasks ready to work on (deps satisfied, not done)
-    Ready,
+    Ready {
+        #[command(flatten)]
+        display: DisplayArgs,
+    },
     /// Fold the mutation log into the baseline snapshot
     Compact,
     /// Review and clear a surfaced merge conflict
@@ -156,11 +189,13 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             depends_on,
         } => cmd_dep(store, &task_id, &depends_on, OpType::RemoveDep),
         Commands::Delete { id } => cmd_delete(store, &id),
-        Commands::List => cmd_list(store),
-        Commands::Search { key, val } => cmd_search(store, &key, &val),
-        Commands::Ready => {
+        Commands::List { display } => cmd_list(store, &display, &store.config().display),
+        Commands::Search { key, val, display } => {
+            cmd_search(store, &key, &val, &display, &store.config().display)
+        }
+        Commands::Ready { display } => {
             let workflow = store.config().workflow.clone();
-            cmd_ready(store, &workflow)
+            cmd_ready(store, &workflow, &display, &store.config().display)
         }
         Commands::Compact => {
             let cfg = store.config().compaction.clone();
@@ -275,47 +310,45 @@ fn cmd_delete(store: &impl EventStore, id: &str) -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_list(store: &impl EventStore) -> Result<(), DynError> {
+fn cmd_list(
+    store: &impl EventStore,
+    display: &DisplayArgs,
+    cfg: &DisplayConfig,
+) -> Result<(), DynError> {
     let state = state_of(store)?;
-    if state.is_empty() {
-        println!("(no tasks)");
-        return Ok(());
-    }
-    let mut ids: Vec<&String> = state.keys().collect();
-    ids.sort();
-    for id in ids {
-        print_task(&state[id]);
-    }
+    let mut tasks: Vec<&TaskState> = state.values().collect();
+    tasks.sort_by(|a, b| a.id.cmp(&b.id));
+    println!("{}", render(&tasks, display, cfg, "(no tasks)"));
     Ok(())
 }
 
-fn cmd_search(store: &impl EventStore, key: &str, val: &str) -> Result<(), DynError> {
+fn cmd_search(
+    store: &impl EventStore,
+    key: &str,
+    val: &str,
+    display: &DisplayArgs,
+    cfg: &DisplayConfig,
+) -> Result<(), DynError> {
     let state = state_of(store)?;
     // Match the query against the same JSON coercion used on write.
     let needle =
         serde_json::from_str::<Value>(val).unwrap_or_else(|_| Value::String(val.to_string()));
     let mut hits = Engine::filter_tasks(&state, key, &needle);
     hits.sort_by(|a, b| a.id.cmp(&b.id));
-    if hits.is_empty() {
-        println!("(no matches)");
-        return Ok(());
-    }
-    for task in hits {
-        print_task(task);
-    }
+    println!("{}", render(&hits, display, cfg, "(no matches)"));
     Ok(())
 }
 
-fn cmd_ready(store: &impl EventStore, workflow: &WorkflowConfig) -> Result<(), DynError> {
+fn cmd_ready(
+    store: &impl EventStore,
+    workflow: &WorkflowConfig,
+    display: &DisplayArgs,
+    cfg: &DisplayConfig,
+) -> Result<(), DynError> {
     let state = state_of(store)?;
     let ready = graph::ready_tasks(&state, &workflow.status_field, &workflow.done_status)?;
-    if ready.is_empty() {
-        println!("(nothing ready)");
-    } else {
-        for id in ready {
-            print_task(&state[&id]);
-        }
-    }
+    let tasks: Vec<&TaskState> = ready.iter().filter_map(|id| state.get(id)).collect();
+    println!("{}", render(&tasks, display, cfg, "(nothing ready)"));
     Ok(())
 }
 
@@ -400,13 +433,121 @@ fn cmd_resolve(store: &FileStore) -> Result<(), DynError> {
     Ok(())
 }
 
-fn print_task(task: &TaskState) {
-    let fields = serde_json::to_string(&task.custom_fields).unwrap_or_default();
-    if task.depends_on.is_empty() {
-        println!("{}  {}", task.id, fields);
-    } else {
-        println!("{}  {}  deps={:?}", task.id, fields, task.depends_on);
+/// Render tasks per the display args. The selected columns (`--columns`/`--all`/
+/// config) decide *which* fields appear; `--format` decides only how they print,
+/// and both formats share the same field order.
+fn render(tasks: &[&TaskState], display: &DisplayArgs, cfg: &DisplayConfig, empty: &str) -> String {
+    let columns = resolve_columns(display, cfg, tasks);
+    match display.format {
+        OutputFormat::Json => render_json(tasks, &columns),
+        OutputFormat::Human if tasks.is_empty() => empty.to_string(),
+        OutputFormat::Human => render_human(tasks, &columns, cfg.max_width),
     }
+}
+
+/// Decide the columns: `--all` (id + every field seen, sorted, + deps), else an
+/// explicit `--columns`, else the configured default.
+fn resolve_columns(display: &DisplayArgs, cfg: &DisplayConfig, tasks: &[&TaskState]) -> Vec<String> {
+    if display.all {
+        let fields: std::collections::BTreeSet<&String> =
+            tasks.iter().flat_map(|t| t.custom_fields.keys()).collect();
+        let mut cols = vec!["id".to_string()];
+        cols.extend(fields.into_iter().cloned());
+        cols.push("deps".to_string());
+        cols
+    } else if let Some(cols) = &display.columns {
+        cols.clone()
+    } else {
+        cfg.columns.clone()
+    }
+}
+
+fn render_human(tasks: &[&TaskState], columns: &[String], max_width: usize) -> String {
+    let headers: Vec<String> = columns.iter().map(|c| c.to_uppercase()).collect();
+    let rows: Vec<Vec<String>> = tasks
+        .iter()
+        .map(|t| {
+            columns
+                .iter()
+                .map(|c| truncate(&human_cell(t, c), max_width))
+                .collect()
+        })
+        .collect();
+    let widths: Vec<usize> = (0..columns.len())
+        .map(|i| {
+            let header = headers[i].chars().count();
+            let body = rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0);
+            header.max(body)
+        })
+        .collect();
+    let mut lines = vec![format_row(&headers, &widths)];
+    lines.extend(rows.iter().map(|r| format_row(r, &widths)));
+    lines.join("\n")
+}
+
+fn format_row(cells: &[String], widths: &[usize]) -> String {
+    cells
+        .iter()
+        .zip(widths)
+        .map(|(c, w)| format!("{c:<w$}"))
+        .collect::<Vec<_>>()
+        .join("  ")
+        .trim_end()
+        .to_string()
+}
+
+fn render_json(tasks: &[&TaskState], columns: &[String]) -> String {
+    if tasks.is_empty() {
+        return "[]".to_string();
+    }
+    let objects: Vec<String> = tasks
+        .iter()
+        .map(|t| {
+            let pairs: Vec<String> = columns
+                .iter()
+                .map(|c| {
+                    let key = serde_json::to_string(c).unwrap_or_default();
+                    format!("{key}:{}", json_cell(t, c))
+                })
+                .collect();
+            format!("  {{{}}}", pairs.join(","))
+        })
+        .collect();
+    format!("[\n{}\n]", objects.join(",\n"))
+}
+
+/// A field's value for the human table: bare string, or compact JSON otherwise.
+fn human_cell(task: &TaskState, col: &str) -> String {
+    match col {
+        "id" => task.id.clone(),
+        "deps" => task.depends_on.join(", "),
+        _ => match task.custom_fields.get(col) {
+            Some(Value::String(s)) => s.clone(),
+            Some(v) => serde_json::to_string(v).unwrap_or_default(),
+            None => String::new(),
+        },
+    }
+}
+
+/// A field's value as a JSON literal; a task missing the field yields `null`.
+fn json_cell(task: &TaskState, col: &str) -> String {
+    match col {
+        "id" => serde_json::to_string(&task.id).unwrap_or_default(),
+        "deps" => serde_json::to_string(&task.depends_on).unwrap_or_default(),
+        _ => task.custom_fields.get(col).map_or_else(
+            || "null".to_string(),
+            |v| serde_json::to_string(v).unwrap_or_default(),
+        ),
+    }
+}
+
+fn truncate(s: &str, max_width: usize) -> String {
+    if max_width == 0 || s.chars().count() <= max_width {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max_width.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 #[cfg(test)]
@@ -547,5 +688,81 @@ mod tests {
         // `ta create <id>` with no fields remains valid.
         let parsed = Cli::try_parse_from(["ta", "create", "api"]);
         assert!(parsed.is_ok(), "create with no fields should still parse");
+    }
+
+    fn task(id: &str, deps: &[&str], fields: &[(&str, Value)]) -> TaskState {
+        TaskState {
+            id: id.to_string(),
+            depends_on: deps.iter().map(|d| (*d).to_string()).collect(),
+            custom_fields: fields
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect(),
+        }
+    }
+
+    fn display(format: OutputFormat, all: bool, columns: Option<&[&str]>) -> DisplayArgs {
+        DisplayArgs {
+            format,
+            all,
+            columns: columns.map(|c| c.iter().map(|s| (*s).to_string()).collect()),
+        }
+    }
+
+    #[test]
+    fn human_has_header_and_unquoted_values() {
+        let t = task("api", &["db"], &[("status", serde_json::json!("open"))]);
+        let d = display(OutputFormat::Human, false, Some(&["id", "status", "deps"]));
+        let out = render(&[&t], &d, &DisplayConfig::default(), "(none)");
+        assert!(out.contains("ID") && out.contains("STATUS"), "header: {out}");
+        assert!(out.lines().any(|l| l.starts_with("api")), "row: {out}");
+        // value is bare `open`, not JSON-quoted, and deps are comma-joined.
+        assert!(out.contains("open") && !out.contains("\"open\""), "unquoted: {out}");
+        assert!(out.contains("db"), "deps: {out}");
+    }
+
+    #[test]
+    fn json_is_array_in_column_order() {
+        let item = task(
+            "api",
+            &[],
+            &[
+                ("status", serde_json::json!("open")),
+                ("priority", serde_json::json!(3)),
+            ],
+        );
+        let args = display(OutputFormat::Json, false, Some(&["id", "priority", "status"]));
+        let out = render(&[&item], &args, &DisplayConfig::default(), "(none)");
+        assert!(out.trim_start().starts_with('['), "array: {out}");
+        let id_at = out.find("\"id\"").unwrap();
+        let pri_at = out.find("\"priority\"").unwrap();
+        let status_at = out.find("\"status\"").unwrap();
+        assert!(
+            id_at < pri_at && pri_at < status_at,
+            "keys follow column order: {out}"
+        );
+        assert!(out.contains("\"priority\":3"), "number stays a number: {out}");
+    }
+
+    #[test]
+    fn all_unions_fields_and_empty_json_is_brackets() {
+        let a = task("a", &[], &[("x", serde_json::json!(1))]);
+        let b = task("b", &[], &[("y", serde_json::json!(2))]);
+        let d = display(OutputFormat::Json, true, None);
+        let out = render(&[&a, &b], &d, &DisplayConfig::default(), "(none)");
+        // --all unions fields: both x and y appear as keys.
+        assert!(out.contains("\"x\"") && out.contains("\"y\""), "union: {out}");
+        // a missing field is null, not absent.
+        assert!(out.contains("\"y\":null"), "missing field is null: {out}");
+
+        let empty = render(&[], &d, &DisplayConfig::default(), "(none)");
+        assert_eq!(empty, "[]", "empty json is []");
+    }
+
+    #[test]
+    fn truncate_caps_long_values() {
+        assert_eq!(truncate("hello", 0), "hello");
+        assert_eq!(truncate("hello", 10), "hello");
+        assert_eq!(truncate("hello world", 5), "hell…");
     }
 }

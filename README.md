@@ -10,11 +10,12 @@ A local-first, **git-native** task & dependency tracker for human and agent work
 The binary is `ta`; the crate is `taska`.
 
 ```console
-$ ta create migrate-db status=open      # "migrate-db" is a task id you pick
-$ ta create deploy-api status=open
-$ ta block deploy-api migrate-db        # deploy-api now depends on migrate-db
-$ ta ready                              # actionable now — blocked tasks are hidden
-migrate-db  {"status":"open"}
+$ ta create migrate-db title="Run DB migration" status=open   # ids and fields are yours
+$ ta create deploy-api title="Deploy the API" status=open
+$ ta block deploy-api migrate-db        # deploy-api depends on migrate-db
+$ ta ready                              # only what's actionable, as a configurable table
+ID          TITLE             STATUS  DEPS
+migrate-db  Run DB migration  open
 ```
 
 ## Why a log, not a snapshot
@@ -50,29 +51,36 @@ In the session below, only the lowercase verbs (`create`, `block`, `ready`, …)
 ```console
 $ git init && ta init
 
-# Create two tasks. The ids ("migrate-db") and fields ("status=open") are all yours.
-$ ta create migrate-db status=open
-$ ta create deploy-api status=open priority=3
+# Create two tasks. The ids (migrate-db) and fields (title=…, status=…) are all yours.
+$ ta create migrate-db title="Run DB migration" status=open
+$ ta create deploy-api title="Deploy the API" status=open
 
 # deploy-api shouldn't start until migrate-db is finished:
 $ ta block deploy-api migrate-db
 
+# Default output is an aligned table of configurable columns:
 $ ta list
-deploy-api  {"priority":3,"status":"open"}  deps=["migrate-db"]
-migrate-db  {"status":"open"}
+ID          TITLE             STATUS  DEPS
+deploy-api  Deploy the API    open    migrate-db
+migrate-db  Run DB migration  open
 
-# `ready` lists only not-done tasks whose dependencies are all done:
+# `ready` shows only not-done tasks whose dependencies are all done:
 $ ta ready
-migrate-db  {"status":"open"}
+ID          TITLE             STATUS  DEPS
+migrate-db  Run DB migration  open
 
 # Close the migration, and deploy-api unblocks:
 $ ta update migrate-db status=closed
 $ ta ready
-deploy-api  {"priority":3,"status":"open"}  deps=["migrate-db"]
+ID          TITLE           STATUS  DEPS
+deploy-api  Deploy the API  open    migrate-db
 
-# Query by any field you've used:
-$ ta search status open
-deploy-api  {"priority":3,"status":"open"}  deps=["migrate-db"]
+# For agents (or jq), --format json emits the same fields as a JSON array:
+$ ta list --format json
+[
+  {"id":"deploy-api","title":"Deploy the API","status":"open","deps":["migrate-db"]},
+  {"id":"migrate-db","title":"Run DB migration","status":"closed","deps":[]}
+]
 ```
 
 Commit `.taska/` and `.gitattributes` along with your code — they travel with the repo.
@@ -130,6 +138,14 @@ done_status = "closed"
 
 [merge]
 on_conflict = "surface"
+
+[display]
+# Columns for list/search/ready (and the field order used by --format json).
+# "id" and "deps" are built-ins; any other name is a task field. Override per
+# command with --columns id,status or --all.
+columns = ["id", "title", "status", "deps"]
+# Truncate long human cell values to this many characters (0 = no limit).
+max_width = 40
 ```
 
 ## Commands
@@ -149,6 +165,8 @@ on_conflict = "surface"
 | `ta resolve` | Review and clear a surfaced merge conflict |
 
 Field values are parsed as JSON when possible (`priority=3` is a number, `status=open` a string). The keys `seq`, `timestamp`, `op`, `task_id`, and `_meta` are reserved.
+
+`list`, `search`, and `ready` share display flags: `--format human|json` (json is a parseable array, ideal for agents and `jq`), `--all` to show every field, and `--columns id,status,…` to pick the columns for one run. The defaults and `max_width` live in `[display]`.
 
 ## Storage layout
 

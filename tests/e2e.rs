@@ -77,11 +77,11 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// Whether `id` appears as a listed task. `print_task` emits `"{id}  {fields}"`,
-/// so we match on the line prefix rather than a bare substring — otherwise a
-/// dependency reference like `deps=["db"]` would be mistaken for a `db` task.
+/// Whether `id` appears as a listed task. The human table puts the id in the
+/// first column, so we check each line's first whitespace-delimited token —
+/// robust to alignment padding and to a later `deps` column naming the id.
 fn lists_task(output: &str, id: &str) -> bool {
-    output.lines().any(|l| l.starts_with(&format!("{id}  ")))
+    output.lines().any(|l| l.split_whitespace().next() == Some(id))
 }
 
 /// Initialize a git repo with a deterministic default branch and an identity.
@@ -130,10 +130,12 @@ fn crud_search_and_ready_workflow() {
     ta(&dir, &["create", "api", "status=open", "priority=3"]);
     ta(&dir, &["block", "api", "db"]);
 
-    // priority=3 is coerced to a JSON number, not a string.
-    let list = ta(&dir, &["list"]);
-    assert!(list.contains(r#""priority":3"#), "list: {list}");
-    assert!(list.contains(r#"deps=["db"]"#), "list: {list}");
+    // The human table lists ids; `--all --format json` exposes every field —
+    // priority coerced to a JSON number, and deps as a JSON array.
+    assert!(lists_task(&ta(&dir, &["list"]), "api"), "api should be listed");
+    let json = ta(&dir, &["list", "--all", "--format", "json"]);
+    assert!(json.contains(r#""priority":3"#), "json: {json}");
+    assert!(json.contains(r#""deps":["db"]"#), "json: {json}");
 
     let search = ta(&dir, &["search", "status", "open"]);
     assert!(lists_task(&search, "api"), "search: {search}");
@@ -170,6 +172,37 @@ fn update_with_no_fields_fails_and_appends_nothing() {
         String::from_utf8_lossy(&out.stdout)
     );
     assert_eq!(rows(&log), before, "no event should have been appended");
+}
+
+#[test]
+fn output_format_columns_and_json() {
+    let dir = fresh_dir("output");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a", "title=Alpha", "status=open", "priority=3"]);
+
+    // Human: uppercase header + the title column value.
+    let human = ta(&dir, &["list"]);
+    assert!(human.contains("ID") && human.contains("STATUS"), "header: {human}");
+    assert!(human.contains("Alpha"), "title column: {human}");
+
+    // Default json: the default columns (id,title,status,deps) as an array,
+    // but NOT priority (not a default column).
+    let json = ta(&dir, &["list", "--format", "json"]);
+    assert!(json.trim_start().starts_with('['), "json array: {json}");
+    assert!(json.contains(r#""status":"open""#), "status shown: {json}");
+    assert!(!json.contains("priority"), "priority not a default column: {json}");
+
+    // --all exposes every field; --columns selects an explicit set.
+    assert!(
+        ta(&dir, &["list", "--all", "--format", "json"]).contains(r#""priority":3"#),
+        "--all shows priority"
+    );
+    let cols = ta(&dir, &["list", "--columns", "id,priority", "--format", "json"]);
+    assert!(
+        cols.contains(r#""priority":3"#) && !cols.contains("status"),
+        "columns select + restrict: {cols}"
+    );
 }
 
 fn rows(path: &Path) -> usize {
@@ -439,7 +472,7 @@ fn theirs_policy_resolves_conflict_without_failing() {
     );
 
     // Merging feature INTO main with `theirs` keeps feature's value.
-    let list = ta(&dir, &["list"]);
+    let list = ta(&dir, &["list", "--format", "json"]);
     assert!(
         list.contains("\"status\":\"feature\""),
         "theirs (feature) should win: {list}"
@@ -489,7 +522,7 @@ fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
         String::from_utf8_lossy(&merge.stderr)
     );
 
-    let list = ta(&dir, &["list"]);
+    let list = ta(&dir, &["list", "--all", "--format", "json"]);
     // Overlapping fields go to theirs (feature); disjoint fields both survive.
     assert!(
         list.contains("\"status\":\"open\""),
