@@ -447,7 +447,11 @@ fn render(tasks: &[&TaskState], display: &DisplayArgs, cfg: &DisplayConfig, empt
 
 /// Decide the columns: `--all` (id + every field seen, sorted, + deps), else an
 /// explicit `--columns`, else the configured default.
-fn resolve_columns(display: &DisplayArgs, cfg: &DisplayConfig, tasks: &[&TaskState]) -> Vec<String> {
+fn resolve_columns(
+    display: &DisplayArgs,
+    cfg: &DisplayConfig,
+    tasks: &[&TaskState],
+) -> Vec<String> {
     if display.all {
         let fields: std::collections::BTreeSet<&String> =
             tasks.iter().flat_map(|t| t.custom_fields.keys()).collect();
@@ -595,12 +599,7 @@ mod tests {
     #[test]
     fn create_then_materialize() {
         let store = InMemoryStore::default();
-        cmd_create(
-            &store,
-            "api",
-            &["status=open".into(), "priority=3".into()],
-        )
-        .unwrap();
+        cmd_create(&store, "api", &["status=open".into(), "priority=3".into()]).unwrap();
         let state = state_of(&store).unwrap();
         assert_eq!(
             state["api"].custom_fields["status"],
@@ -674,7 +673,10 @@ mod tests {
         // `ta update <id>` with no field=value args must fail to parse rather
         // than appending a no-op empty Update event.
         let parsed = Cli::try_parse_from(["ta", "update", "api"]);
-        assert!(parsed.is_err(), "update with no fields should be a parse error");
+        assert!(
+            parsed.is_err(),
+            "update with no fields should be a parse error"
+        );
     }
 
     #[test]
@@ -714,10 +716,16 @@ mod tests {
         let t = task("api", &["db"], &[("status", serde_json::json!("open"))]);
         let d = display(OutputFormat::Human, false, Some(&["id", "status", "deps"]));
         let out = render(&[&t], &d, &DisplayConfig::default(), "(none)");
-        assert!(out.contains("ID") && out.contains("STATUS"), "header: {out}");
+        assert!(
+            out.contains("ID") && out.contains("STATUS"),
+            "header: {out}"
+        );
         assert!(out.lines().any(|l| l.starts_with("api")), "row: {out}");
         // value is bare `open`, not JSON-quoted, and deps are comma-joined.
-        assert!(out.contains("open") && !out.contains("\"open\""), "unquoted: {out}");
+        assert!(
+            out.contains("open") && !out.contains("\"open\""),
+            "unquoted: {out}"
+        );
         assert!(out.contains("db"), "deps: {out}");
     }
 
@@ -731,7 +739,11 @@ mod tests {
                 ("priority", serde_json::json!(3)),
             ],
         );
-        let args = display(OutputFormat::Json, false, Some(&["id", "priority", "status"]));
+        let args = display(
+            OutputFormat::Json,
+            false,
+            Some(&["id", "priority", "status"]),
+        );
         let out = render(&[&item], &args, &DisplayConfig::default(), "(none)");
         assert!(out.trim_start().starts_with('['), "array: {out}");
         let id_at = out.find("\"id\"").unwrap();
@@ -741,7 +753,10 @@ mod tests {
             id_at < pri_at && pri_at < status_at,
             "keys follow column order: {out}"
         );
-        assert!(out.contains("\"priority\":3"), "number stays a number: {out}");
+        assert!(
+            out.contains("\"priority\":3"),
+            "number stays a number: {out}"
+        );
     }
 
     #[test]
@@ -751,7 +766,10 @@ mod tests {
         let d = display(OutputFormat::Json, true, None);
         let out = render(&[&a, &b], &d, &DisplayConfig::default(), "(none)");
         // --all unions fields: both x and y appear as keys.
-        assert!(out.contains("\"x\"") && out.contains("\"y\""), "union: {out}");
+        assert!(
+            out.contains("\"x\"") && out.contains("\"y\""),
+            "union: {out}"
+        );
         // a missing field is null, not absent.
         assert!(out.contains("\"y\":null"), "missing field is null: {out}");
 
