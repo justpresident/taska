@@ -10,21 +10,23 @@ A local-first, **git-native** task & dependency tracker for human and agent work
 The binary is `ta`; the crate is `taska`.
 
 ```console
-$ ta create api status=open
-$ ta create db status=closed
-$ ta block api db          # api depends on db
-$ ta ready                 # db is done, so api is actionable
-api  {"status":"open"}  deps=["db"]
+$ ta create migrate-db status=open      # "migrate-db" is a task id you pick
+$ ta create deploy-api status=open
+$ ta block deploy-api migrate-db        # deploy-api now depends on migrate-db
+$ ta ready                              # actionable now — blocked tasks are hidden
+migrate-db  {"status":"open"}
 ```
 
-## Why
+## Why a log, not a snapshot
 
-Most task trackers that integrate with git bolt a database onto the side and then spend thousands of lines keeping the two in sync — which AI agents and humans alike manage to desynchronize, with tasks silently dropped or "resurrected" after deletion. taska takes the opposite approach:
+Most task trackers store the **current state** of each task — a row in a database, a line in a YAML file — and *overwrite* it on every change. taska stores the opposite: an **append-only log of every change** (`create`, `update`, `delete`, …) in `.taska/mutations.jsonl`. The state you see is *replayed* from that log on demand; it is never written down.
 
-- **One source of truth.** A single append-only log (`.taska/mutations.jsonl`), versioned by git like everything else. No second store to drift out of sync.
-- **Merges are automatic and correct.** A git merge driver reconciles divergent branches by replaying events, resolving genuine conflicts **per-field** with a strategy you choose. A deleted task stays deleted.
+That single choice is the whole point, because it is what makes git work *for* you instead of against you:
+
+- **Branches actually merge.** Two people (or two agents) on separate branches each *append* their events, so merging is just unioning two lists — which taska's git merge driver does cleanly and **per-field**. Two overwritten *snapshots*, by contrast, can only collide. The log is the reason concurrent edits reconcile instead of clobbering each other: no database to keep in sync, no manual sync step, no tasks silently dropped or "resurrected" after deletion.
+- **Full history, for free.** Every change is in the log, so you can see exactly how a task reached its current state — and a delete is just another event, so it stays deleted.
+- **Schema-agnostic.** A task is an id plus arbitrary `key=value` fields; taska defines no fixed schema, so you grow your own conventions.
 - **Non-intrusive.** No git hooks, no edits to your `AGENTS.md`/`CLAUDE.md`, no forced remote. It works entirely offline — prototype locally, review an agent's branch before merging, push when *you* decide.
-- **Schema-agnostic.** Tasks are just an id plus arbitrary `key=value` fields. The tool imposes no fixed schema; you grow your own conventions.
 
 ## Install
 
@@ -41,28 +43,36 @@ $ cargo install --path taska
 
 ## Quick start
 
-Run `ta init` once per clone (inside a git repository). It creates the `.taska/` store and registers the merge driver in your **local** git config:
+Run `ta init` once per clone (inside a git repository) to create the `.taska/` store and register the merge driver in your **local** git config.
+
+In the session below, only the lowercase verbs (`create`, `block`, `ready`, …) are literal taska syntax. Everything else is yours — task ids like `migrate-db` and fields like `status=open priority=3` are arbitrary, and taska defines none of them:
 
 ```console
 $ git init && ta init
-$ ta create db status=closed
-$ ta create api status=open priority=3
-$ ta block api db                 # api depends on db
+
+# Create two tasks. The ids ("migrate-db") and fields ("status=open") are all yours.
+$ ta create migrate-db status=open
+$ ta create deploy-api status=open priority=3
+
+# deploy-api shouldn't start until migrate-db is finished:
+$ ta block deploy-api migrate-db
 
 $ ta list
-api  {"priority":3,"status":"open"}  deps=["db"]
-db   {"status":"closed"}
+deploy-api  {"priority":3,"status":"open"}  deps=["migrate-db"]
+migrate-db  {"status":"open"}
 
-$ ta ready                        # not-done tasks whose deps are all done
-api  {"priority":3,"status":"open"}  deps=["db"]
-
-$ ta update api status=closed
+# `ready` lists only not-done tasks whose dependencies are all done:
 $ ta ready
-(nothing ready)
+migrate-db  {"status":"open"}
 
-$ ta search status closed
-api  {"priority":3,"status":"closed"}
-db   {"status":"closed"}
+# Close the migration, and deploy-api unblocks:
+$ ta update migrate-db status=closed
+$ ta ready
+deploy-api  {"priority":3,"status":"open"}  deps=["migrate-db"]
+
+# Query by any field you've used:
+$ ta search status open
+deploy-api  {"priority":3,"status":"open"}  deps=["migrate-db"]
 ```
 
 Commit `.taska/` and `.gitattributes` along with your code — they travel with the repo.
