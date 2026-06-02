@@ -52,3 +52,4 @@
 {"seq":52,"timestamp":"2026-06-02T20:44:13.889296957Z","op":"AddDep","task_id":"protocol-doc","dep":"benchmarks"}
 {"seq":53,"timestamp":"2026-06-02T20:44:13.895226043Z","op":"Update","task_id":"show-command","status":"closed"}
 {"seq":54,"timestamp":"2026-06-02T20:44:13.901869157Z","op":"Update","task_id":"remove-unsafe-retention-env","status":"closed"}
+{"seq":55,"timestamp":"2026-06-02T21:45:19.955653329Z","op":"Update","task_id":"full-no-truncate","status":"closed"}

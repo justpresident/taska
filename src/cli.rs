@@ -379,8 +379,10 @@ fn cmd_search(
 /// Show a single task by id, defaulting to ALL of its fields (unlike `list`,
 /// which uses the configured columns). With no `--columns`, the columns are
 /// `id` + that task's own custom-field keys (sorted) + `deps`; an explicit
-/// `--columns` still restricts. `--full` is therefore a no-op here. Renders via
-/// the same human/json path as `list` (json is a one-element array, as in list).
+/// `--columns` still restricts. `--full` doesn't change *which* columns appear
+/// here (the default is already the complete set), but it still disables
+/// truncation as it does everywhere. Renders via the same human/json path as
+/// `list` (json is a one-element array, as in list).
 fn cmd_show(
     store: &impl EventStore,
     id: &str,
@@ -398,7 +400,7 @@ fn cmd_show(
         .map_or_else(|| full_columns(&tasks), Clone::clone);
     let output = match display.format {
         OutputFormat::Json => render_json(&tasks, &columns),
-        OutputFormat::Human => render_human(&tasks, &columns, cfg.max_width),
+        OutputFormat::Human => render_human(&tasks, &columns, effective_max_width(display, cfg)),
     };
     println!("{output}");
     Ok(())
@@ -777,7 +779,19 @@ fn render(tasks: &[&TaskState], display: &DisplayArgs, cfg: &DisplayConfig, empt
     match display.format {
         OutputFormat::Json => render_json(tasks, &columns),
         OutputFormat::Human if tasks.is_empty() => empty.to_string(),
-        OutputFormat::Human => render_human(tasks, &columns, cfg.max_width),
+        OutputFormat::Human => render_human(tasks, &columns, effective_max_width(display, cfg)),
+    }
+}
+
+/// The truncation width to apply: `--full` prints values untruncated (0 is the
+/// "no limit" sentinel `truncate` already honors), so it reads the *complete*
+/// view it asked for. Without `--full`, the configured `max_width` still governs
+/// the default and `--columns` views.
+const fn effective_max_width(display: &DisplayArgs, cfg: &DisplayConfig) -> usize {
+    if display.full {
+        0
+    } else {
+        cfg.max_width
     }
 }
 
@@ -1152,6 +1166,45 @@ mod tests {
         assert_eq!(truncate("hello", 0), "hello");
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 5), "hell…");
+    }
+
+    #[test]
+    fn full_disables_truncation_but_default_and_columns_still_truncate() {
+        let long = "a value that is definitely longer than the configured max width";
+        let t = task("api", &[], &[("notes", serde_json::json!(long))]);
+        let cfg = DisplayConfig {
+            columns: vec!["id".into(), "notes".into()],
+            max_width: 20,
+        };
+
+        // --full: the full value survives, no ellipsis.
+        let full = render(
+            &[&t],
+            &display(OutputFormat::Human, true, None),
+            &cfg,
+            "(none)",
+        );
+        assert!(full.contains(long), "--full prints untruncated: {full}");
+        assert!(!full.contains('…'), "--full adds no ellipsis: {full}");
+
+        // Default (config columns) still truncates per max_width.
+        let default = render(
+            &[&t],
+            &display(OutputFormat::Human, false, None),
+            &cfg,
+            "(none)",
+        );
+        assert!(!default.contains(long), "default truncates: {default}");
+        assert!(default.contains('…'), "default shows ellipsis: {default}");
+
+        // An explicit --columns view also still truncates.
+        let cols = render(
+            &[&t],
+            &display(OutputFormat::Human, false, Some(&["id", "notes"])),
+            &cfg,
+            "(none)",
+        );
+        assert!(cols.contains('…'), "--columns still truncates: {cols}");
     }
 
     fn state(tasks: &[TaskState]) -> HashMap<String, TaskState> {

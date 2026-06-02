@@ -261,6 +261,26 @@ fn show_displays_full_task_and_rejects_unknown_id() {
     );
 }
 
+#[test]
+fn full_flag_disables_truncation_in_human_output() {
+    let dir = fresh_dir("full-no-truncate");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // A title well past the default max_width (40), so it would otherwise be cut.
+    let long = "This title is considerably longer than forty characters so it gets truncated";
+    ta(&dir, &["create", "a", &format!("title={long}")]);
+
+    // Default human view truncates with an ellipsis and drops the tail.
+    let default = ta(&dir, &["list"]);
+    assert!(default.contains('…'), "default truncates: {default}");
+    assert!(!default.contains(long), "default drops the tail: {default}");
+
+    // --full prints the whole value, no ellipsis.
+    let full = ta(&dir, &["list", "--full"]);
+    assert!(full.contains(long), "--full prints untruncated: {full}");
+    assert!(!full.contains('…'), "--full adds no ellipsis: {full}");
+}
+
 fn rows(path: &Path) -> usize {
     fs::read_to_string(path)
         .unwrap()
