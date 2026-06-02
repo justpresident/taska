@@ -523,8 +523,8 @@ fn orphaned_events_warn_on_read_and_resolve_drops_them() {
         "list should warn about the orphan: {stderr}"
     );
 
-    // `ta resolve` drops the orphan and rewrites the log without it.
-    let resolved = ta(&dir, &["resolve"]);
+    // `ta resolve --force` drops the orphan and rewrites the log without it.
+    let resolved = ta(&dir, &["resolve", "--force"]);
     assert!(
         resolved.contains("orphaned event"),
         "resolve should report dropping the orphan: {resolved}"
@@ -545,6 +545,38 @@ fn orphaned_events_warn_on_read_and_resolve_drops_them() {
     );
     let again = ta(&dir, &["resolve"]);
     assert!(again.contains("Nothing to resolve"), "got: {again}");
+}
+
+#[test]
+fn null_value_unsets_a_field() {
+    let dir = fresh_dir("null-unset");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "x", "owner=bob", "status=open"]);
+    // Setting a field to null removes it (the field-unset convention).
+    ta(&dir, &["update", "x", "owner=null"]);
+    let json = ta(&dir, &["show", "x", "--format", "json"]);
+    assert!(json.contains("\"status\":\"open\""), "status kept: {json}");
+    assert!(!json.contains("owner"), "owner unset by null: {json}");
+}
+
+#[test]
+fn resolve_orphans_requires_confirmation() {
+    let dir = fresh_dir("resolve-confirm");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a"]);
+    ta(&dir, &["delete", "a"]);
+    ta(&dir, &["update", "a", "status=x"]); // orphan: update to a deleted task
+    let log = dir.join(".taska/mutations.jsonl");
+    let before = rows(&log);
+    // No --force and no stdin (EOF) declines: the orphan is listed but kept.
+    let out = ta(&dir, &["resolve"]);
+    assert!(out.contains("would be dropped"), "verbose listing: {out}");
+    assert_eq!(rows(&log), before, "without --force the log is unchanged");
+    // --force drops it.
+    ta(&dir, &["resolve", "--force"]);
+    assert!(rows(&log) < before, "--force drops the orphan");
 }
 
 #[test]

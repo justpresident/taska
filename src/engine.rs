@@ -56,13 +56,24 @@ impl Engine {
                                 custom_fields: serde_json::Map::new(),
                             });
                     for (k, v) in event.payload {
-                        entry.custom_fields.insert(k, v);
+                        // A null value unsets the field (the field-unset convention),
+                        // so it never reaches state, output, search, or the baseline.
+                        if v.is_null() {
+                            entry.custom_fields.remove(&k);
+                        } else {
+                            entry.custom_fields.insert(k, v);
+                        }
                     }
                 }
                 OpType::Update => {
                     if let Some(task) = state_map.get_mut(&event.task_id) {
                         for (k, v) in event.payload {
-                            task.custom_fields.insert(k, v);
+                            // A null value unsets the field (see Create above).
+                            if v.is_null() {
+                                task.custom_fields.remove(&k);
+                            } else {
+                                task.custom_fields.insert(k, v);
+                            }
                         }
                     } else {
                         orphans.push(event.seq);

@@ -95,8 +95,12 @@ enum Commands {
     },
     /// Fold the mutation log into the baseline snapshot
     Compact,
-    /// Review and clear a surfaced merge conflict
-    Resolve,
+    /// Review and clear surfaced merge conflicts and orphaned events
+    Resolve {
+        /// Apply changes without the confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
     /// Git event-log merge driver entrypoint (invoked by Git, not humans)
     #[command(name = "git-merge", hide = true)]
     GitMerge {
@@ -159,7 +163,7 @@ pub fn run() -> Result<(), DynError> {
 
         // Reviewing a surfaced conflict must work even if the config is currently
         // invalid, so it resolves the store without the validation gate.
-        Commands::Resolve => cmd_resolve(&FileStore::discover()?),
+        Commands::Resolve { force } => cmd_resolve(&FileStore::discover()?, force),
 
         // Everything else resolves the store once and validates its config
         // before dispatching, so a bad config edit surfaces on the next command.
@@ -207,7 +211,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
         }
         // Resolved before dispatch in `run`.
         Commands::Init
-        | Commands::Resolve
+        | Commands::Resolve { .. }
         | Commands::GitMerge { .. }
         | Commands::GitMergeBaseline { .. } => {
             unreachable!("non-store commands are handled before dispatch")
@@ -440,9 +444,9 @@ fn cmd_compact(
 /// (a dropped `Create` left their target missing). Dropping a no-op event is
 /// state-neutral, so it needs no confirmation. With neither a marker nor an
 /// orphan, there is nothing to do.
-fn cmd_resolve(store: &FileStore) -> Result<(), DynError> {
+fn cmd_resolve(store: &FileStore, force: bool) -> Result<(), DynError> {
     let cleared_marker = resolve_merge_marker(store)?;
-    let dropped_orphans = resolve_orphans(store)?;
+    let dropped_orphans = resolve_orphans(store, force)?;
     if !cleared_marker && dropped_orphans == 0 {
         println!("Nothing to resolve (no merge conflicts and no orphaned events).");
     }
@@ -496,7 +500,7 @@ fn resolve_merge_marker(store: &FileStore) -> Result<bool, DynError> {
 /// Prune orphaned events — those that apply to nothing during replay — from the
 /// log, rewriting it without them. Returns how many were dropped. Because an
 /// orphan is by definition a no-op, removing it can't change materialized state.
-fn resolve_orphans(store: &FileStore) -> Result<usize, DynError> {
+fn resolve_orphans(store: &FileStore, force: bool) -> Result<usize, DynError> {
     let baseline = store.load_baseline()?;
     let mutations = store.load_mutations()?;
     let (_, orphans) = Engine::materialize_report(baseline, mutations.clone());
@@ -505,16 +509,40 @@ fn resolve_orphans(store: &FileStore) -> Result<usize, DynError> {
     }
 
     let drop: std::collections::HashSet<u64> = orphans.iter().copied().collect();
+    // Verbose: name every event that would be dropped before touching the log.
+    println!(
+        "{} orphaned event(s) apply to no existing task and would be dropped:",
+        orphans.len()
+    );
+    for event in mutations.iter().filter(|e| drop.contains(&e.seq)) {
+        println!("  - seq {}: {:?} `{}`", event.seq, event.op, event.task_id);
+    }
+    if !confirm("Drop these orphaned events from the log?", force)? {
+        println!("Aborted; the log is unchanged.");
+        return Ok(0);
+    }
+
     let kept: Vec<MutationEvent> = mutations
         .into_iter()
         .filter(|e| !drop.contains(&e.seq))
         .collect();
     store.replace_mutations(&kept)?;
-    println!(
-        "Dropped {} orphaned event(s) from the log (no matching task).",
-        orphans.len()
-    );
+    println!("Dropped {} orphaned event(s) from the log.", orphans.len());
     Ok(orphans.len())
+}
+
+/// Ask the user to confirm a destructive action. `force` (from `--force`) skips
+/// the prompt. The prompt goes to stderr so stdout stays clean for piping; reads
+/// a `y/N` line from stdin and defaults to no.
+fn confirm(prompt: &str, force: bool) -> Result<bool, DynError> {
+    if force {
+        return Ok(true);
+    }
+    eprint!("{prompt} [y/N] ");
+    std::io::Write::flush(&mut std::io::stderr())?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
 }
 
 /// Render tasks per the display args. The selected columns (`--columns`/`--full`/
