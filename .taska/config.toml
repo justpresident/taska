@@ -35,3 +35,12 @@ done_status = "closed"
 #   "ours"    — keep the value on the branch being merged INTO
 #   "theirs"  — keep the value from the branch being merged IN
 on_conflict = "surface"
+
+[display]
+# Columns shown by list/search/ready in human format — and the field set and
+# order used by `--format json`. "id" and "deps" are built-ins; any other name
+# is a task field (blank when a task lacks it). Override per command with
+# `--columns a,b,c` or `--full`.
+columns = ["id", "title", "status", "deps"]
+# Truncate long human cell values to this many characters (0 = no limit).
+max_width = 40
