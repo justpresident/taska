@@ -171,12 +171,9 @@ pub fn run() -> Result<(), DynError> {
     }
 }
 
-/// Validate config on every store-backed command. Tests that deliberately drive
-/// tiny retention values set `TASKA_ALLOW_UNSAFE_RETENTION` to bypass the floor.
+/// Validate config on every store-backed command, so a bad config edit surfaces
+/// on the very next `ta` invocation rather than silently at the next compaction.
 fn enforce_config(cfg: &Config) -> Result<(), DynError> {
-    if std::env::var_os("TASKA_ALLOW_UNSAFE_RETENTION").is_some() {
-        return Ok(());
-    }
     cfg.validate()
 }
 

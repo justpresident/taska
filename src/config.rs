@@ -15,8 +15,8 @@ use crate::error::DynError;
 /// Smallest `keep_events` we accept in production.
 ///
 /// Retaining fewer than this risks folding away events a concurrent branch still
-/// needs to reconcile on merge, which is unrecoverable. Tests that deliberately
-/// exercise tiny retention bypass the check via the CLI (see `enforce_config`).
+/// needs to reconcile on merge, which is unrecoverable, so `enforce_config`
+/// rejects any smaller value on every store-backed command.
 pub const MIN_KEEP_EVENTS: usize = 100;
 
 /// The `config.toml` written by `ta init`.

@@ -46,9 +46,6 @@ fn run(program: &str, dir: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(dir)
         .env("PATH", path_with_bin())
-        // The suite deliberately drives sub-100 `keep_events` to exercise
-        // compaction; this opts past the production floor (see `enforce_config`).
-        .env("TASKA_ALLOW_UNSAFE_RETENTION", "1")
         .output()
         .unwrap_or_else(|e| panic!("failed to spawn `{} {}`: {}", program, args.join(" "), e))
 }
@@ -277,34 +274,37 @@ fn compact_folds_log_and_appends_resume() {
     let dir = fresh_dir("compact");
     init_repo(&dir);
     ta(&dir, &["init"]);
-    // keep_events = 0 folds everything but the last event, exercising the
-    // maximal-compaction path while keeping the log non-empty (so the seq
-    // watermark stays derivable).
+    // A valid retention floor (>= MIN_KEEP_EVENTS = 100). We then generate MORE
+    // events than that so compaction actually folds the old prefix and retains
+    // exactly the recent suffix — the fold-and-resume path.
     fs::write(
         dir.join(".taska/config.toml"),
-        "[compaction]\nkeep_events = 0\nkeep_days = 0\n",
+        "[compaction]\nkeep_events = 100\nkeep_days = 0\n",
     )
     .unwrap();
 
-    ta(&dir, &["create", "a"]);
-    ta(&dir, &["create", "b"]);
+    // 150 creates > keep_events (100), so 50 fold into the baseline and 100 stay.
+    for i in 0..150 {
+        ta(&dir, &["create", &format!("t{i}")]);
+    }
     ta(&dir, &["compact"]);
 
     assert_eq!(
         rows(&dir.join(".taska/mutations.jsonl")),
-        1,
-        "one event retained"
+        100,
+        "keep_events most-recent events retained in the log"
     );
     assert_eq!(
         rows(&dir.join(".taska/baseline.jsonl")),
-        1,
-        "the rest folded into baseline"
+        50,
+        "the folded remainder (150 - keep_events) is in the baseline"
     );
 
-    // Appends overlay the baseline after compaction.
-    ta(&dir, &["create", "c"]);
+    // Appends overlay the baseline after compaction, and the older folded tasks
+    // are still visible — fold-and-resume keeps everything reachable.
+    ta(&dir, &["create", "resumed"]);
     let list = ta(&dir, &["list"]);
-    for id in ["a", "b", "c"] {
+    for id in ["t0", "t75", "t149", "resumed"] {
         assert!(lists_task(&list, id), "missing {id} in list:\n{list}");
     }
 }
@@ -314,44 +314,47 @@ fn compact_retains_recent_events_for_merge() {
     let dir = fresh_dir("retain");
     init_repo(&dir);
     ta(&dir, &["init"]);
+    // Valid retention (>= MIN_KEEP_EVENTS). With more events than keep_events, the
+    // recent suffix is retained in the log so divergent branches can still merge.
     fs::write(
         dir.join(".taska/config.toml"),
-        "[compaction]\nkeep_events = 2\nkeep_days = 0\n",
+        "[compaction]\nkeep_events = 120\nkeep_days = 0\n",
     )
     .unwrap();
 
-    for id in ["a", "b", "c", "d", "e"] {
-        ta(&dir, &["create", id]);
+    // 150 creates > keep_events (120): 30 fold into baseline, 120 newest retained.
+    for i in 0..150 {
+        ta(&dir, &["create", &format!("t{i}")]);
     }
     let out = ta(&dir, &["compact"]);
-    assert!(out.contains("kept 2 recent event(s)"), "got: {out}");
+    assert!(out.contains("kept 120 recent event(s)"), "got: {out}");
 
-    // 3 oldest folded into baseline, 2 newest retained in the log.
     assert_eq!(
         rows(&dir.join(".taska/mutations.jsonl")),
-        2,
-        "kept 2 recent events"
+        120,
+        "kept keep_events recent events for merge reconciliation"
     );
     assert_eq!(
         rows(&dir.join(".taska/baseline.jsonl")),
-        3,
-        "folded 3 into baseline"
+        30,
+        "folded the oldest 30 into baseline"
     );
 
-    // The retained events are the two most recent creations.
+    // The retained log holds the most recent creations (not the oldest, which
+    // were folded away). The newest task is in the log; the oldest is not.
     let mutations = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        mutations.contains(r#""task_id":"d""#),
-        "expected d retained: {mutations}"
+        mutations.contains(r#""task_id":"t149""#),
+        "expected the newest event retained: {mutations}"
     );
     assert!(
-        mutations.contains(r#""task_id":"e""#),
-        "expected e retained: {mutations}"
+        !mutations.contains(r#""task_id":"t0""#),
+        "the oldest event should have been folded out of the log: {mutations}"
     );
 
-    // All five tasks remain visible (baseline + retained log).
+    // All tasks remain visible (baseline + retained log), old and new alike.
     let list = ta(&dir, &["list"]);
-    for id in ["a", "b", "c", "d", "e"] {
+    for id in ["t0", "t29", "t30", "t149"] {
         assert!(lists_task(&list, id), "missing {id}:\n{list}");
     }
 }
