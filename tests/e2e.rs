@@ -495,7 +495,56 @@ fn surface_conflict_fails_merge_and_resolve_clears_it() {
 
     // A second resolve is a clean no-op.
     let again = ta(&dir, &["resolve"]);
-    assert!(again.contains("No merge conflicts"), "got: {again}");
+    assert!(again.contains("Nothing to resolve"), "got: {again}");
+}
+
+#[test]
+fn orphaned_events_warn_on_read_and_resolve_drops_them() {
+    let dir = fresh_dir("orphan");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+
+    // Create then delete `a`, then update the (now gone) `a`. Handlers don't check
+    // existence, so the update appends an Update event whose target no longer
+    // exists at replay time — an orphan that applies to nothing.
+    ta(&dir, &["create", "a", "status=open"]);
+    ta(&dir, &["delete", "a"]);
+    ta(&dir, &["update", "a", "status=x"]);
+
+    let log = dir.join(".taska").join("mutations.jsonl");
+    let before = rows(&log);
+
+    // A read command warns about the orphan on STDERR (without failing).
+    let out = run(ta_bin(), &dir, &["list"]);
+    assert!(out.status.success(), "list should still succeed despite orphans");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("orphaned event") && stderr.contains("ta resolve"),
+        "list should warn about the orphan: {stderr}"
+    );
+
+    // `ta resolve` drops the orphan and rewrites the log without it.
+    let resolved = ta(&dir, &["resolve"]);
+    assert!(
+        resolved.contains("orphaned event"),
+        "resolve should report dropping the orphan: {resolved}"
+    );
+    assert_eq!(
+        rows(&log),
+        before - 1,
+        "exactly the one orphan event was removed from the log"
+    );
+
+    // The warning is gone on the next read, and a second resolve is a clean no-op.
+    let after = run(ta_bin(), &dir, &["list"]);
+    assert!(after.status.success(), "list should still succeed");
+    assert!(
+        !String::from_utf8_lossy(&after.stderr).contains("orphaned event"),
+        "no orphan warning after resolve: {}",
+        String::from_utf8_lossy(&after.stderr)
+    );
+    let again = ta(&dir, &["resolve"]);
+    assert!(again.contains("Nothing to resolve"), "got: {again}");
 }
 
 #[test]

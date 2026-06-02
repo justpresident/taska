@@ -15,12 +15,32 @@ pub struct Engine;
 
 impl Engine {
     /// Fold `mutations` over `baseline` to produce the current task map.
+    ///
+    /// Thin wrapper over [`Engine::materialize_report`] that discards the orphan
+    /// report, for callers that only need the state.
     pub fn materialize_state(
         baseline: Vec<TaskState>,
         mutations: Vec<MutationEvent>,
     ) -> HashMap<String, TaskState> {
+        Self::materialize_report(baseline, mutations).0
+    }
+
+    /// Like [`Engine::materialize_state`], but also reports *orphaned* events:
+    /// those whose target task did not exist when the event was applied, so the
+    /// event folded into nothing. These are `Update`/`AddDep`/`RemoveDep`/`Delete`
+    /// events on a `task_id` absent from the state map at apply time (`Create` is
+    /// never an orphan). The returned `Vec<u64>` holds their `seq`s in replay order.
+    ///
+    /// Replay stays non-fatal: orphans are merely counted, never errored. They can
+    /// arise from the merge driver's removal-union, reverts, or manual edits that
+    /// drop a task's `Create` while leaving later events that target it.
+    pub fn materialize_report(
+        baseline: Vec<TaskState>,
+        mutations: Vec<MutationEvent>,
+    ) -> (HashMap<String, TaskState>, Vec<u64>) {
         let mut state_map: HashMap<String, TaskState> =
             baseline.into_iter().map(|t| (t.id.clone(), t)).collect();
+        let mut orphans: Vec<u64> = Vec::new();
 
         for event in mutations {
             match event.op {
@@ -44,6 +64,8 @@ impl Engine {
                         for (k, v) in event.payload {
                             task.custom_fields.insert(k, v);
                         }
+                    } else {
+                        orphans.push(event.seq);
                     }
                 }
                 OpType::AddDep => {
@@ -54,6 +76,8 @@ impl Engine {
                                 task.depends_on.push(dep_id);
                             }
                         }
+                    } else {
+                        orphans.push(event.seq);
                     }
                 }
                 OpType::RemoveDep => {
@@ -61,14 +85,18 @@ impl Engine {
                         if let Some(dep_id) = event.payload.get("dep").and_then(|v| v.as_str()) {
                             task.depends_on.retain(|d| d != dep_id);
                         }
+                    } else {
+                        orphans.push(event.seq);
                     }
                 }
                 OpType::Delete => {
-                    state_map.remove(&event.task_id);
+                    if state_map.remove(&event.task_id).is_none() {
+                        orphans.push(event.seq);
+                    }
                 }
             }
         }
-        state_map
+        (state_map, orphans)
     }
 
     /// Split point for the seq-ordered mutation log: events at indices
@@ -178,6 +206,40 @@ mod tests {
             state["a"].depends_on.is_empty(),
             "dep removed from baseline task"
         );
+    }
+
+    #[test]
+    fn reports_orphaned_events_and_spares_normal_ones() {
+        let mutations = vec![
+            // Normal create/update on `a`: never an orphan.
+            ev(OpType::Create, "a", fields(&[("status", json!("open"))])),
+            ev(OpType::Update, "a", fields(&[("status", json!("done"))])),
+            // Update to a task that was never created: orphan.
+            ev(OpType::Update, "ghost", fields(&[("x", json!(1))])),
+            // `b` is created then deleted...
+            ev(OpType::Create, "b", serde_json::Map::new()),
+            ev(OpType::Delete, "b", serde_json::Map::new()),
+            // ...so events after its deletion apply to nothing: orphans.
+            ev(OpType::AddDep, "b", fields(&[("dep", json!("a"))])),
+            ev(OpType::Delete, "b", serde_json::Map::new()),
+        ];
+        // Assign seqs so the report identifies events by their authoritative order.
+        let mutations: Vec<MutationEvent> = (1u64..)
+            .zip(mutations)
+            .map(|(seq, mut e)| {
+                e.seq = seq;
+                e
+            })
+            .collect();
+
+        let (state, orphans) = Engine::materialize_report(Vec::new(), mutations);
+
+        assert_eq!(state.len(), 1, "only `a` survives");
+        assert_eq!(state["a"].custom_fields["status"], json!("done"));
+        // Orphans: the ghost Update (seq 3), the AddDep (seq 6) and Delete (seq 7)
+        // after `b` was deleted, in replay order. The normal create/update and
+        // the first delete of an existing task are not reported.
+        assert_eq!(orphans, vec![3, 6, 7]);
     }
 
     #[test]

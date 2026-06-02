@@ -27,6 +27,9 @@ pub trait EventStore {
     /// Replace the baseline with `baseline` and rewrite the log to contain
     /// exactly `retained` (the recent events kept for merge reconciliation).
     fn compact(&self, baseline: &[TaskState], retained: &[MutationEvent]) -> Result<(), DynError>;
+    /// Rewrite the mutation log to contain exactly `events`, leaving the baseline
+    /// untouched. Used to drop no-op (orphaned) events during `ta resolve`.
+    fn replace_mutations(&self, events: &[MutationEvent]) -> Result<(), DynError>;
 }
 
 /// JSONL-on-disk event store rooted at a repo's `.taska` directory.
@@ -192,6 +195,30 @@ impl EventStore for FileStore {
         locked_file.set_len(0)?;
         locked_file.seek(SeekFrom::Start(0))?;
         for event in retained {
+            writeln!(locked_file, "{}", serde_json::to_string(event)?)?;
+        }
+        locked_file.flush()?;
+        Ok(())
+    }
+
+    /// Rewrite the log in place with exactly `events`, leaving the baseline alone.
+    /// Mirrors `compact`'s log-rewrite under the same exclusive fd-lock so a
+    /// concurrent `append_events` can't slip an event in mid-rewrite. Unlike
+    /// `compact` it never touches the baseline — dropping no-op orphans is
+    /// state-neutral, so there is nothing to fold.
+    fn replace_mutations(&self, events: &[MutationEvent]) -> Result<(), DynError> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false) // we truncate explicitly under the lock, below
+            .open(self.mutations_path())?;
+        let mut lock = RwLock::new(file);
+        let mut locked_file = lock.write()?;
+
+        locked_file.set_len(0)?;
+        locked_file.seek(SeekFrom::Start(0))?;
+        for event in events {
             writeln!(locked_file, "{}", serde_json::to_string(event)?)?;
         }
         locked_file.flush()?;

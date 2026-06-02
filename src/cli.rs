@@ -216,11 +216,23 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
 }
 
 /// Load and materialize the current task map from any store.
+///
+/// Replay also reports *orphaned* events — `Update`/`AddDep`/`RemoveDep`/`Delete`
+/// events whose target task no longer exists, which apply to nothing. They are a
+/// silent symptom of a dropped `Create` (from the merge driver's removal-union, a
+/// revert, or a manual edit), so every read command warns about them on STDERR
+/// and points at `ta resolve`. The warning never blocks the read.
 fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskState>, DynError> {
-    Ok(Engine::materialize_state(
-        store.load_baseline()?,
-        store.load_mutations()?,
-    ))
+    let (state, orphans) =
+        Engine::materialize_report(store.load_baseline()?, store.load_mutations()?);
+    if !orphans.is_empty() {
+        eprintln!(
+            "taska: warning: {} orphaned event(s) in the log (no matching task) — \
+             run `ta resolve` to clean them up.",
+            orphans.len()
+        );
+    }
+    Ok(state)
 }
 
 /// Event keys that are struct fields, not schema-agnostic task fields. Letting a
@@ -419,14 +431,30 @@ fn cmd_compact(
     Ok(())
 }
 
-/// Report and clear a surfaced merge conflict. The deterministic merge is
-/// already written to the log by the driver, so for now this acknowledges the
-/// conflicts and removes the marker; per-field resolution is future work.
+/// Clean up after a merge or a divergent history: report and clear a surfaced
+/// merge conflict, and drop any orphaned events the log has accumulated.
+///
+/// The deterministic merge is already written to the log by the driver, so the
+/// conflict step only acknowledges the conflicts and removes the marker; per-field
+/// resolution is future work. The orphan step prunes events that apply to nothing
+/// (a dropped `Create` left their target missing). Dropping a no-op event is
+/// state-neutral, so it needs no confirmation. With neither a marker nor an
+/// orphan, there is nothing to do.
 fn cmd_resolve(store: &FileStore) -> Result<(), DynError> {
+    let cleared_marker = resolve_merge_marker(store)?;
+    let dropped_orphans = resolve_orphans(store)?;
+    if !cleared_marker && dropped_orphans == 0 {
+        println!("Nothing to resolve (no merge conflicts and no orphaned events).");
+    }
+    Ok(())
+}
+
+/// Report and clear a surfaced merge-conflict marker, if present. Returns whether
+/// a marker was found and cleared.
+fn resolve_merge_marker(store: &FileStore) -> Result<bool, DynError> {
     let marker = store.base_dir.join("merge-conflict.json");
     if !marker.exists() {
-        println!("No merge conflicts to resolve.");
-        return Ok(());
+        return Ok(false);
     }
 
     let doc: Value = serde_json::from_str(&std::fs::read_to_string(&marker)?)?;
@@ -462,7 +490,31 @@ fn cmd_resolve(store: &FileStore) -> Result<(), DynError> {
     }
 
     std::fs::remove_file(&marker)?;
-    Ok(())
+    Ok(true)
+}
+
+/// Prune orphaned events — those that apply to nothing during replay — from the
+/// log, rewriting it without them. Returns how many were dropped. Because an
+/// orphan is by definition a no-op, removing it can't change materialized state.
+fn resolve_orphans(store: &FileStore) -> Result<usize, DynError> {
+    let baseline = store.load_baseline()?;
+    let mutations = store.load_mutations()?;
+    let (_, orphans) = Engine::materialize_report(baseline, mutations.clone());
+    if orphans.is_empty() {
+        return Ok(0);
+    }
+
+    let drop: std::collections::HashSet<u64> = orphans.iter().copied().collect();
+    let kept: Vec<MutationEvent> = mutations
+        .into_iter()
+        .filter(|e| !drop.contains(&e.seq))
+        .collect();
+    store.replace_mutations(&kept)?;
+    println!(
+        "Dropped {} orphaned event(s) from the log (no matching task).",
+        orphans.len()
+    );
+    Ok(orphans.len())
 }
 
 /// Render tasks per the display args. The selected columns (`--columns`/`--full`/
@@ -630,6 +682,10 @@ mod tests {
         ) -> Result<(), DynError> {
             *self.baseline.borrow_mut() = baseline.to_vec();
             *self.events.borrow_mut() = retained.to_vec();
+            Ok(())
+        }
+        fn replace_mutations(&self, events: &[MutationEvent]) -> Result<(), DynError> {
+            *self.events.borrow_mut() = events.to_vec();
             Ok(())
         }
     }
