@@ -93,6 +93,18 @@ enum Commands {
         #[command(flatten)]
         display: DisplayArgs,
     },
+    /// Undo the last event(s): `ta undo [--count N] [--remove] [--force]`
+    Undo {
+        /// How many of the most recent events to undo (default 1)
+        #[arg(long, default_value_t = 1)]
+        count: usize,
+        /// Apply without the confirmation prompt
+        #[arg(long)]
+        force: bool,
+        /// Truncate committed events instead of appending compensating ones
+        #[arg(long)]
+        remove: bool,
+    },
     /// Fold the mutation log into the baseline snapshot
     Compact,
     /// Review and clear surfaced merge conflicts and orphaned events
@@ -205,6 +217,11 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             let workflow = store.config().workflow.clone();
             cmd_ready(store, &workflow, &display, &store.config().display)
         }
+        Commands::Undo {
+            count,
+            force,
+            remove,
+        } => cmd_undo(store, count, force, remove),
         Commands::Compact => {
             let cfg = store.config().compaction.clone();
             cmd_compact(store, &cfg, Utc::now())
@@ -433,6 +450,213 @@ fn cmd_compact(
         to_keep.len()
     );
     Ok(())
+}
+
+/// Undo the last `count` event(s) in the log.
+///
+/// Two paths, chosen by whether any undone event is already git-committed:
+/// - All undone events are still local (uncommitted), or `--remove` is set:
+///   truncate the log's tail. This is safe for local events because they were
+///   never shared; `--remove` extends it to committed events at the cost of
+///   rewriting shared history (it prints a loud warning).
+/// - Some undone events are already committed (the default for that case): keep
+///   committed history intact and instead *append* compensating events that
+///   transform the current state back to the target (pre-undo prefix) state.
+///   Staying append-only avoids cross-branch seq collisions on merge.
+///
+/// Only events still in the log can be undone; anything folded into the baseline
+/// by compaction is out of reach.
+fn cmd_undo(store: &FileStore, count: usize, force: bool, remove: bool) -> Result<(), DynError> {
+    let baseline = store.load_baseline()?;
+    let mutations = store.load_mutations()?;
+    let n = mutations.len();
+    if count == 0 || n == 0 {
+        println!("Nothing to undo.");
+        return Ok(());
+    }
+
+    let count = count.min(n);
+    let keep = n - count;
+    let undone = &mutations[keep..];
+
+    let current = Engine::materialize_state(baseline.clone(), mutations.clone());
+    let target = Engine::materialize_state(baseline.clone(), mutations[..keep].to_vec());
+
+    // The tasks any undone event touched, sorted for stable output.
+    let mut affected: Vec<String> = undone.iter().map(|e| e.task_id.clone()).collect();
+    affected.sort();
+    affected.dedup();
+
+    // PREVIEW: name each undone event, then show each affected task's before/after.
+    println!("Undoing {count} event(s):");
+    for event in undone {
+        println!("  seq {}: {:?} `{}`", event.seq, event.op, event.task_id);
+    }
+    for id in &affected {
+        println!(
+            "  - {id}: {} -> {}",
+            describe(current.get(id)),
+            describe(target.get(id))
+        );
+    }
+
+    // How many of the log's events are already committed to git. If the file was
+    // never committed (or there is no HEAD yet), nothing is committed.
+    let committed_count = committed_mutation_count(store);
+    let any_committed = keep < committed_count;
+
+    if !confirm("Apply this undo?", force)? {
+        println!("Aborted; nothing changed.");
+        return Ok(());
+    }
+
+    if remove || !any_committed {
+        // Truncate the tail. Safe for local events; for committed ones `--remove`
+        // rewrites shared history, so warn loudly.
+        store.replace_mutations(&mutations[..keep])?;
+        if remove && any_committed {
+            eprintln!(
+                "DANGER: --remove deleted committed event(s), rewriting shared history. \
+                 Other branches will see a removal on merge; only do this if you are sure \
+                 the removed events were never pushed or pulled elsewhere."
+            );
+        }
+    } else {
+        // Default committed path: keep committed history, append compensating
+        // events. Build them from the committed prefix's state toward the target.
+        let truncate_to = committed_count;
+        let post = Engine::materialize_state(baseline, mutations[..truncate_to].to_vec());
+        let comps = compensate(&post, &target, &affected);
+
+        // Continue the seq sequence past the highest committed seq we keep.
+        let next = mutations[..truncate_to]
+            .iter()
+            .map(|e| e.seq)
+            .max()
+            .map_or(1, |m| m + 1);
+        let mut new_log = mutations[..truncate_to].to_vec();
+        for (seq, mut comp) in (next..).zip(comps) {
+            comp.seq = seq;
+            new_log.push(comp);
+        }
+        store.replace_mutations(&new_log)?;
+    }
+
+    println!("Undone.");
+    Ok(())
+}
+
+/// Count non-empty lines in the git-committed `mutations.jsonl` (`HEAD:` blob).
+/// Returns 0 when the file is not committed yet or there is no `HEAD`, which the
+/// caller treats as "nothing committed", so every event is safe to truncate.
+fn committed_mutation_count(store: &FileStore) -> usize {
+    let Some(repo_root) = store.repo_root() else {
+        return 0;
+    };
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["show", "HEAD:.taska/mutations.jsonl"])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count(),
+        _ => 0,
+    }
+}
+
+/// Render a task's salient state for the before/after preview: `(absent)` for a
+/// missing task, else the JSON of its custom fields plus `deps={:?}` when it has
+/// any. Mirrors the field-centric framing of the other task views.
+fn describe(task: Option<&TaskState>) -> String {
+    task.map_or_else(
+        || "(absent)".to_string(),
+        |t| {
+            let fields =
+                serde_json::to_string(&t.custom_fields).unwrap_or_else(|_| "{}".to_string());
+            if t.depends_on.is_empty() {
+                fields
+            } else {
+                format!("{fields} deps={:?}", t.depends_on)
+            }
+        },
+    )
+}
+
+/// Produce DRAFT events (seq 0; the caller assigns real seqs) that transform the
+/// `from` state into the `to` state for the `affected` tasks, using the existing
+/// op vocabulary plus the null-unset convention:
+///
+/// - in `from` but not `to` -> `Delete`.
+/// - in `to` but not `from` -> `Create` carrying its fields, then one `AddDep`
+///   per dependency.
+/// - in both -> a single `Update` that sets each field whose value differs and
+///   unsets (sets to null) each field present in `from` but gone in `to`; skipped
+///   when that payload is empty. Then `AddDep`/`RemoveDep` to reconcile deps.
+/// - in neither -> nothing.
+fn compensate(
+    from: &HashMap<String, TaskState>,
+    to: &HashMap<String, TaskState>,
+    affected: &[String],
+) -> Vec<MutationEvent> {
+    let mut events = Vec::new();
+    for id in affected {
+        match (from.get(id), to.get(id)) {
+            (Some(_), None) => {
+                events.push(MutationEvent::new(OpType::Delete, id.clone(), Map::new()));
+            }
+            (None, Some(t)) => {
+                events.push(MutationEvent::new(
+                    OpType::Create,
+                    id.clone(),
+                    t.custom_fields.clone(),
+                ));
+                for dep in &t.depends_on {
+                    events.push(dep_event(OpType::AddDep, id, dep));
+                }
+            }
+            (Some(f), Some(t)) => {
+                let mut payload = Map::new();
+                // Set every field that differs (present-and-changed or newly added).
+                for (k, v) in &t.custom_fields {
+                    if f.custom_fields.get(k) != Some(v) {
+                        payload.insert(k.clone(), v.clone());
+                    }
+                }
+                // Unset (null) every field that existed in `from` but not in `to`.
+                for k in f.custom_fields.keys() {
+                    if !t.custom_fields.contains_key(k) {
+                        payload.insert(k.clone(), Value::Null);
+                    }
+                }
+                if !payload.is_empty() {
+                    events.push(MutationEvent::new(OpType::Update, id.clone(), payload));
+                }
+                for dep in &t.depends_on {
+                    if !f.depends_on.contains(dep) {
+                        events.push(dep_event(OpType::AddDep, id, dep));
+                    }
+                }
+                for dep in &f.depends_on {
+                    if !t.depends_on.contains(dep) {
+                        events.push(dep_event(OpType::RemoveDep, id, dep));
+                    }
+                }
+            }
+            (None, None) => {}
+        }
+    }
+    events
+}
+
+/// A dependency draft event with the `{ "dep": <id> }` payload shape that
+/// `cmd_dep` and the engine's `AddDep`/`RemoveDep` replay expect.
+fn dep_event(op: OpType, task_id: &str, dep: &str) -> MutationEvent {
+    let mut payload = Map::new();
+    payload.insert("dep".to_string(), Value::String(dep.to_string()));
+    MutationEvent::new(op, task_id, payload)
 }
 
 /// Clean up after a merge or a divergent history: report and clear a surfaced
@@ -928,5 +1152,98 @@ mod tests {
         assert_eq!(truncate("hello", 0), "hello");
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello world", 5), "hell…");
+    }
+
+    fn state(tasks: &[TaskState]) -> HashMap<String, TaskState> {
+        tasks.iter().map(|t| (t.id.clone(), t.clone())).collect()
+    }
+
+    #[test]
+    fn compensate_unsets_a_removed_field_with_null() {
+        // `from` has the field, `to` does not: the compensating Update must set
+        // the field to JSON null so the engine's unset convention drops it.
+        let from = state(&[task("a", &[], &[("owner", serde_json::json!("bob"))])]);
+        let to = state(&[task("a", &[], &[])]);
+        let events = compensate(&from, &to, &["a".to_string()]);
+        assert_eq!(events.len(), 1, "one Update: {events:?}");
+        assert_eq!(events[0].op, OpType::Update);
+        assert_eq!(
+            events[0].payload.get("owner"),
+            Some(&Value::Null),
+            "removed field unset via null: {:?}",
+            events[0].payload
+        );
+    }
+
+    #[test]
+    fn compensate_handles_create_delete_and_field_change() {
+        // a: present in `from`, absent in `to` -> Delete.
+        // b: absent in `from`, present in `to` with a dep -> Create + AddDep.
+        // c: changed field value -> Update with just the changed key.
+        let from = state(&[
+            task("a", &[], &[("x", serde_json::json!(1))]),
+            task("c", &[], &[("status", serde_json::json!("open"))]),
+        ]);
+        let to = state(&[
+            task("b", &["dep1"], &[("y", serde_json::json!(2))]),
+            task("c", &[], &[("status", serde_json::json!("closed"))]),
+        ]);
+        let affected = ["a".to_string(), "b".to_string(), "c".to_string()];
+        let events = compensate(&from, &to, &affected);
+
+        // a -> Delete
+        let a: Vec<_> = events.iter().filter(|e| e.task_id == "a").collect();
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].op, OpType::Delete);
+
+        // b -> Create (carrying y) then AddDep dep1
+        let b: Vec<_> = events.iter().filter(|e| e.task_id == "b").collect();
+        assert_eq!(b.len(), 2, "create + adddep: {b:?}");
+        assert_eq!(b[0].op, OpType::Create);
+        assert_eq!(b[0].payload.get("y"), Some(&serde_json::json!(2)));
+        assert_eq!(b[1].op, OpType::AddDep);
+        assert_eq!(b[1].payload.get("dep"), Some(&serde_json::json!("dep1")));
+
+        // c -> Update setting only the changed status
+        let c: Vec<_> = events.iter().filter(|e| e.task_id == "c").collect();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].op, OpType::Update);
+        assert_eq!(c[0].payload.get("status"), Some(&serde_json::json!("closed")));
+    }
+
+    #[test]
+    fn compensate_reconciles_dependencies() {
+        // from depends on x; to depends on y -> RemoveDep x, AddDep y, no Update.
+        let from = state(&[task("a", &["x"], &[])]);
+        let to = state(&[task("a", &["y"], &[])]);
+        let events = compensate(&from, &to, &["a".to_string()]);
+        assert!(
+            !events.iter().any(|e| e.op == OpType::Update),
+            "no field changes -> no Update: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.op == OpType::AddDep && e.payload.get("dep") == Some(&serde_json::json!("y"))),
+            "adds y: {events:?}"
+        );
+        assert!(
+            events.iter().any(
+                |e| e.op == OpType::RemoveDep && e.payload.get("dep") == Some(&serde_json::json!("x"))
+            ),
+            "removes x: {events:?}"
+        );
+    }
+
+    #[test]
+    fn describe_renders_absent_fields_and_deps() {
+        assert_eq!(describe(None), "(absent)");
+        let t = task("a", &["d1"], &[("status", serde_json::json!("open"))]);
+        let out = describe(Some(&t));
+        assert!(out.contains(r#""status":"open""#), "fields: {out}");
+        assert!(out.contains("deps="), "deps shown: {out}");
+
+        let no_deps = task("b", &[], &[]);
+        assert_eq!(describe(Some(&no_deps)), "{}", "empty fields, no deps");
     }
 }
