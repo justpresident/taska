@@ -48,9 +48,30 @@ pub fn execute_git_merge(
     // side is that branch's concurrent work since the fork.
     let fork = anc.iter().map(|e| e.seq).max().unwrap_or(0);
 
-    let shared_tail: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq <= fork).collect();
+    // Removals are symmetric. An ancestor event a branch no longer carries —
+    // above that branch's compaction watermark, so it wasn't merely folded into
+    // the baseline — was reverted or hand-removed on that branch. The merge
+    // honors BOTH sides' removals (a union), so a revert converges to the same
+    // result regardless of merge direction. Ours' shared tail already lacks ours'
+    // removals; here we also drop the events theirs removed.
+    let removed_by_theirs = removed_seqs(&anc, &theirs);
+    let shared_tail: Vec<&MutationEvent> = ours
+        .iter()
+        .filter(|e| e.seq <= fork && !removed_by_theirs.contains(&e.seq))
+        .collect();
     let ours_concurrent: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
     let theirs_concurrent: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
+
+    // A shared seq with *different* content on different sides is not a clean
+    // revert — it's reuse of a freed seq (undo of a shared event) or a hand-edit,
+    // and the merge can't trust it. Warn loudly; git surfaces driver stderr.
+    let mismatches = content_mismatches(fork, &anc, &ours, &theirs);
+    if mismatches > 0 {
+        eprintln!(
+            "taska: warning: {mismatches} event(s) reuse a shared seq with different content \
+             (undo/seq-reuse or a hand-edit) — the merge may be unreliable; inspect the log."
+        );
+    }
 
     // `surface` still writes a valid, deterministic file (resolving tentatively
     // as `ours`) so it's never broken, then flags the conflicts and fails so Git
@@ -84,6 +105,51 @@ pub fn execute_git_merge(
     }
 
     Ok(())
+}
+
+/// Ancestor seqs a branch deliberately dropped: above the branch's compaction
+/// watermark (so not merely folded into its baseline) yet absent from its log —
+/// i.e. reverted or hand-removed. Unioning both sides' removals makes a revert
+/// converge regardless of merge direction.
+fn removed_seqs(anc: &[MutationEvent], branch: &[MutationEvent]) -> HashSet<u64> {
+    let watermark = branch
+        .iter()
+        .map(|e| e.seq)
+        .min()
+        .map_or(0, |m| m.saturating_sub(1));
+    let present: HashSet<u64> = branch.iter().map(|e| e.seq).collect();
+    anc.iter()
+        .filter(|e| e.seq > watermark && !present.contains(&e.seq))
+        .map(|e| e.seq)
+        .collect()
+}
+
+/// Count shared-region (`seq <= fork`) seqs that carry *different* content on
+/// different sides — the dangerous "same seq, different event" case (undo
+/// seq-reuse or a hand-edit), as opposed to a clean revert.
+fn content_mismatches(
+    fork: u64,
+    anc: &[MutationEvent],
+    ours: &[MutationEvent],
+    theirs: &[MutationEvent],
+) -> usize {
+    let mut seen: HashMap<u64, String> = HashMap::new();
+    let mut bad: HashSet<u64> = HashSet::new();
+    for log in [anc, ours, theirs] {
+        for event in log.iter().filter(|e| e.seq <= fork) {
+            let content = serde_json::to_string(event).unwrap_or_default();
+            match seen.get(&event.seq).cloned() {
+                Some(prev) if prev != content => {
+                    bad.insert(event.seq);
+                }
+                None => {
+                    seen.insert(event.seq, content);
+                }
+                _ => {}
+            }
+        }
+    }
+    bad.len()
 }
 
 /// `ta git-merge-baseline %O %A %B` — keep our baseline.
@@ -701,6 +767,67 @@ mod tests {
             .get(task)
             .map(|t| t.custom_fields.clone())
             .unwrap_or_default()
+    }
+
+    /// Merge two diverged logs the way the driver does — including the symmetric
+    /// removal union — and return the sorted ids of surviving tasks.
+    fn merged_task_ids(
+        anc: &[MutationEvent],
+        ours: &[MutationEvent],
+        theirs: &[MutationEvent],
+    ) -> Vec<String> {
+        let fork = anc.iter().map(|e| e.seq).max().unwrap_or(0);
+        let removed = removed_seqs(anc, theirs);
+        let shared: Vec<&MutationEvent> = ours
+            .iter()
+            .filter(|e| e.seq <= fork && !removed.contains(&e.seq))
+            .collect();
+        let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
+        let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
+        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
+        let merged = assemble(&shared, &oc, &tc, &plan, fork);
+        let mut ids: Vec<String> = Engine::materialize_state(Vec::new(), merged)
+            .into_keys()
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn revert_converges_regardless_of_merge_direction() {
+        // Ancestor has a, b, c (seq 1,2,3). One branch reverts b's create
+        // (removes seq 2 -> a gap); the other keeps all three and adds d (seq 4).
+        let anc = vec![
+            ev(1, 0, OpType::Create, "a", &[]),
+            ev(2, 0, OpType::Create, "b", &[]),
+            ev(3, 0, OpType::Create, "c", &[]),
+        ];
+        let reverted = vec![anc[0].clone(), anc[2].clone()]; // b removed
+        let kept = vec![
+            anc[0].clone(),
+            anc[1].clone(),
+            anc[2].clone(),
+            ev(4, 0, OpType::Create, "d", &[]),
+        ];
+
+        let one = merged_task_ids(&anc, &reverted, &kept);
+        let two = merged_task_ids(&anc, &kept, &reverted);
+        assert_eq!(one, two, "revert must converge regardless of direction");
+        assert_eq!(
+            one,
+            vec!["a".to_string(), "c".to_string(), "d".to_string()],
+            "b stays reverted, a/c/d present"
+        );
+    }
+
+    #[test]
+    fn content_mismatch_detects_seq_reuse() {
+        let anc = vec![ev(1, 0, OpType::Create, "a", &[])];
+        // Same seq 1 but a different event (a reused freed seq).
+        let reused = vec![ev(1, 0, OpType::Create, "different", &[])];
+        assert_eq!(content_mismatches(1, &anc, &reused, &anc), 1);
+        // Identical content across all sides is fine.
+        assert_eq!(content_mismatches(1, &anc, &anc, &anc), 0);
     }
 
     #[test]
