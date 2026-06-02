@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# 02-dependencies.sh — dependency edges, 'ta ready', and unblocking.
+source "$(dirname "$0")/lib.sh"
+
+fresh_repo
+
+say "Create three tasks. deploy-api and smoke-test both depend on migrate-db finishing."
+run ta create migrate-db title="Run DB migration" status=open
+run ta create deploy-api title="Deploy the API" status=open
+run ta create smoke-test title="Smoke-test prod" status=open
+pause
+
+say "'ta block <task> <depends_on>' adds a dependency edge."
+run ta block deploy-api migrate-db
+run ta block smoke-test deploy-api
+pause
+
+say "Now 'ta list' shows the DEPS column wired up."
+run ta list
+pause
+
+say "'ta ready' shows only NOT-done tasks whose dependencies are all done."
+say "Right now only migrate-db is actionable — the others are blocked."
+run ta ready
+pause
+
+say "Close the migration (status=closed is the configured 'done' value)."
+run ta update migrate-db status=closed
+pause
+
+say "deploy-api now unblocks — its only dependency is done. smoke-test still waits on deploy-api."
+run ta ready
+
+say "Dependencies form a DAG; 'ta ready' walks it and surfaces exactly what you can start now."
