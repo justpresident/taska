@@ -891,3 +891,416 @@ fn init_from_subdirectory_reuses_existing_store() {
         "must not create a nested .taska"
     );
 }
+
+#[test]
+fn unblock_makes_a_blocked_task_ready() {
+    let dir = fresh_dir("unblock");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+
+    // `api` depends on `db`, and `db` is still open, so `api` is blocked: only
+    // `db` itself is ready.
+    ta(&dir, &["create", "db", "status=open"]);
+    ta(&dir, &["create", "api", "status=open"]);
+    ta(&dir, &["block", "api", "db"]);
+    let before = ta(&dir, &["ready"]);
+    assert!(lists_task(&before, "db"), "db ready: {before}");
+    assert!(!lists_task(&before, "api"), "api blocked by open db: {before}");
+
+    // Removing the dependency lifts the block, so `api` becomes ready too.
+    let msg = ta(&dir, &["unblock", "api", "db"]);
+    assert!(
+        msg.contains("no longer depends"),
+        "unblock should confirm: {msg}"
+    );
+    let after = ta(&dir, &["ready"]);
+    assert!(lists_task(&after, "api"), "api ready after unblock: {after}");
+
+    // The dependency is gone from the materialized task, not just from `ready`.
+    let json = ta(&dir, &["show", "api", "--format", "json"]);
+    assert!(json.contains(r#""deps":[]"#), "dep removed: {json}");
+}
+
+#[test]
+fn dependency_cycle_is_reported_by_ready() {
+    let dir = fresh_dir("cycle");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+
+    // a -> b and b -> a form a cycle. `ready` runs the topological sort, so it
+    // must refuse and name the cycle (it can't order a circular graph).
+    ta(&dir, &["create", "a", "status=open"]);
+    ta(&dir, &["create", "b", "status=open"]);
+    ta(&dir, &["block", "a", "b"]);
+    ta(&dir, &["block", "b", "a"]);
+
+    let out = run(ta_bin(), &dir, &["ready"]);
+    assert!(
+        !out.status.success(),
+        "ready must exit non-zero on a dependency cycle, got:\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.to_lowercase().contains("cycle"),
+        "ready should report the cycle: {stderr}"
+    );
+}
+
+#[test]
+fn config_columns_and_max_width_are_honored() {
+    let dir = fresh_dir("display-config");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+
+    // The `[display]` config drives both the default column set and human-table
+    // truncation, with no command-line flags.
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[display]\ncolumns = [\"id\", \"note\"]\nmax_width = 8\n",
+    )
+    .unwrap();
+    ta(
+        &dir,
+        &["create", "a", "note=ThisIsAVeryLongNoteValue", "status=open"],
+    );
+
+    let human = ta(&dir, &["list"]);
+    // Only the configured columns appear (note, but not the unlisted status), and
+    // the long value is truncated to max_width with a trailing ellipsis.
+    assert!(
+        human.contains("NOTE") && !human.contains("STATUS"),
+        "config columns drive the header: {human}"
+    );
+    assert!(
+        human.contains("ThisIsA…"),
+        "max_width truncates with an ellipsis: {human}"
+    );
+    assert!(
+        !human.contains("ThisIsAVeryLong"),
+        "the full value must not appear once truncated: {human}"
+    );
+
+    // json honors the configured column order too (id then note, no status).
+    let json = ta(&dir, &["list", "--format", "json"]);
+    assert!(
+        json.contains(r#""note":"ThisIsAVeryLongNoteValue""#),
+        "json is not truncated: {json}"
+    );
+    assert!(!json.contains("status"), "status not a configured column: {json}");
+}
+
+#[test]
+fn empty_results_render_placeholders_and_empty_json_array() {
+    let dir = fresh_dir("empty-results");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+
+    // With no tasks at all, list/ready print their human placeholders and `[]`
+    // for json.
+    assert_eq!(ta(&dir, &["list"]).trim(), "(no tasks)");
+    assert_eq!(ta(&dir, &["list", "--format", "json"]).trim(), "[]");
+    assert_eq!(ta(&dir, &["ready"]).trim(), "(nothing ready)");
+    assert_eq!(ta(&dir, &["ready", "--format", "json"]).trim(), "[]");
+
+    // A search that matches nothing has its own placeholder and empty array.
+    ta(&dir, &["create", "a", "status=open"]);
+    assert_eq!(ta(&dir, &["search", "status", "closed"]).trim(), "(no matches)");
+    assert_eq!(
+        ta(&dir, &["search", "status", "closed", "--format", "json"]).trim(),
+        "[]"
+    );
+}
+
+#[test]
+fn reserved_field_keys_are_rejected() {
+    let dir = fresh_dir("reserved");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+
+    let log = dir.join(".taska/mutations.jsonl");
+    // Each reserved envelope key must be refused up front (non-zero exit) and
+    // append nothing, so it can never shadow the event envelope.
+    for key in ["seq", "op", "task_id", "timestamp", "_meta"] {
+        let out = run(ta_bin(), &dir, &["create", "x", &format!("{key}=v")]);
+        assert!(
+            !out.status.success(),
+            "reserved key `{key}` must be rejected, got:\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("reserved"),
+            "stderr should explain the reservation for `{key}`: {stderr}"
+        );
+        assert!(
+            !log.exists() || rows(&log) == 0,
+            "a rejected reserved-key create must append nothing"
+        );
+    }
+}
+
+#[test]
+fn null_value_unset_is_reflected_in_list_and_search() {
+    let dir = fresh_dir("null-list-search");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[display]\ncolumns = [\"id\", \"owner\", \"status\"]\n",
+    )
+    .unwrap();
+    ta(&dir, &["create", "x", "owner=bob", "status=open"]);
+
+    // The field is searchable before the unset.
+    assert!(
+        lists_task(&ta(&dir, &["search", "owner", "bob"]), "x"),
+        "owner=bob should match before unset"
+    );
+
+    // Unset via the null convention; the field disappears from every read path.
+    ta(&dir, &["update", "x", "owner=null"]);
+    assert_eq!(
+        ta(&dir, &["search", "owner", "bob"]).trim(),
+        "(no matches)",
+        "search no longer finds the unset field"
+    );
+    let list = ta(&dir, &["list", "--format", "json"]);
+    assert!(!list.contains("bob"), "owner value gone from list: {list}");
+    let show = ta(&dir, &["show", "x", "--format", "json"]);
+    assert!(!show.contains("owner"), "owner gone from show: {show}");
+    assert!(show.contains(r#""status":"open""#), "status preserved: {show}");
+}
+
+#[test]
+fn clean_disjoint_field_merge_has_no_conflict() {
+    let dir = fresh_dir("disjoint-fields");
+    init_repo(&dir);
+    ta(&dir, &["init"]); // default on_conflict = surface
+    ta(&dir, &["create", "t", "status=open"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    // Each branch sets a DIFFERENT field of the same task: no overlap, so even the
+    // strict `surface` policy must merge cleanly with no marker and no failure.
+    git(&dir, &["branch", "feature"]);
+    ta(&dir, &["update", "t", "owner=alice"]);
+    git(&dir, &["commit", "-aqm", "main edit"]);
+
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["update", "t", "priority=3"]);
+    git(&dir, &["commit", "-aqm", "feature edit"]);
+
+    git(&dir, &["checkout", "-q", "main"]);
+    let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
+    assert!(
+        merge.status.success(),
+        "disjoint-field edits must merge cleanly under surface: {}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    assert!(
+        !dir.join(".taska/merge-conflict.json").exists(),
+        "no conflict marker for a clean merge"
+    );
+
+    // Both disjoint edits survive.
+    let json = ta(&dir, &["show", "t", "--format", "json"]);
+    assert!(json.contains(r#""owner":"alice""#), "ours field kept: {json}");
+    assert!(json.contains(r#""priority":3"#), "theirs field kept: {json}");
+}
+
+#[test]
+fn ours_policy_keeps_the_branch_merged_into() {
+    let dir = fresh_dir("ours");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[merge]\non_conflict = \"ours\"\n",
+    )
+    .unwrap();
+    ta(&dir, &["create", "t", "status=open"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    git(&dir, &["branch", "feature"]);
+    ta(&dir, &["update", "t", "status=main"]);
+    git(&dir, &["commit", "-aqm", "main edit"]);
+
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["update", "t", "status=feature"]);
+    git(&dir, &["commit", "-aqm", "feature edit"]);
+
+    // Merge feature INTO main: `ours` keeps main's value, with no marker/failure.
+    git(&dir, &["checkout", "-q", "main"]);
+    let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
+    assert!(
+        merge.status.success(),
+        "ours policy must resolve cleanly: {}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    assert!(
+        !dir.join(".taska/merge-conflict.json").exists(),
+        "auto resolution leaves no marker"
+    );
+    let json = ta(&dir, &["list", "--format", "json"]);
+    assert!(
+        json.contains(r#""status":"main""#),
+        "ours (main) should win: {json}"
+    );
+}
+
+#[test]
+fn latest_policy_keeps_the_newest_write() {
+    let dir = fresh_dir("latest");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[merge]\non_conflict = \"latest\"\n",
+    )
+    .unwrap();
+    ta(&dir, &["create", "t", "status=open"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    // Write main's edit FIRST, then feature's: the feature write has the later
+    // timestamp, so `latest` must keep it regardless of merge direction.
+    git(&dir, &["branch", "feature"]);
+    ta(&dir, &["update", "t", "status=main"]);
+    git(&dir, &["commit", "-aqm", "main edit"]);
+
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["update", "t", "status=feature"]);
+    git(&dir, &["commit", "-aqm", "feature edit"]);
+
+    git(&dir, &["checkout", "-q", "main"]);
+    let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
+    assert!(
+        merge.status.success(),
+        "latest policy must resolve cleanly: {}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    let json = ta(&dir, &["list", "--format", "json"]);
+    assert!(
+        json.contains(r#""status":"feature""#),
+        "latest (the newer feature write) should win: {json}"
+    );
+}
+
+#[test]
+fn baseline_keep_ours_merges_after_both_branches_compact() {
+    let dir = fresh_dir("baseline-merge");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // Compaction needs more than keep_events to fold anything into baseline.jsonl,
+    // which is what exercises the keep-ours baseline driver on merge.
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[compaction]\nkeep_events = 100\nkeep_days = 0\n",
+    )
+    .unwrap();
+
+    // 130 creates > keep_events (100): 30 fold into the baseline, 100 stay.
+    for i in 0..130 {
+        ta(&dir, &["create", &format!("t{i}")]);
+    }
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    // Both branches compact independently (folding the shared prefix), so both
+    // baseline.jsonl AND mutations.jsonl diverge and must merge via their drivers.
+    git(&dir, &["branch", "feature"]);
+    ta(&dir, &["compact"]);
+    git(&dir, &["commit", "-aqm", "main compact"]);
+
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["create", "extra"]);
+    ta(&dir, &["compact"]);
+    git(&dir, &["commit", "-aqm", "feature compact"]);
+
+    git(&dir, &["checkout", "-q", "main"]);
+    let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
+    assert!(
+        merge.status.success(),
+        "compacted baselines must merge cleanly (keep-ours): {}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+
+    // ours' baseline is kept verbatim (the 30 folded tasks), and the log driver
+    // still reconciles the recent suffix, so every task — old, new, and feature's
+    // late `extra` — remains visible after the merge.
+    assert_eq!(
+        rows(&dir.join(".taska/baseline.jsonl")),
+        30,
+        "keep-ours retains our own baseline depth"
+    );
+    let list = ta(&dir, &["list"]);
+    for id in ["t0", "t129", "extra"] {
+        assert!(lists_task(&list, id), "missing {id} after merge:\n{list}");
+    }
+}
+
+#[test]
+fn reverts_converge_regardless_of_merge_direction() {
+    // A git revert of the commit that ADDED some tasks must converge to the same
+    // surviving set no matter which way the branches are later merged — the merge
+    // driver unions both sides' removals. We build the identical history twice and
+    // merge it both directions, then assert the materialized task sets match.
+    fn build(dir: &Path) {
+        init_repo(dir);
+        ta(dir, &["init"]);
+        ta(dir, &["create", "keep1"]);
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-qm", "c0 base"]);
+        ta(dir, &["create", "drop1"]);
+        ta(dir, &["create", "drop2"]);
+        git(dir, &["commit", "-aqm", "c1 adds drop1 drop2"]);
+        ta(dir, &["create", "keep2"]);
+        git(dir, &["commit", "-aqm", "c2 adds keep2"]);
+        // Revert the commit that introduced drop1/drop2 (its Create events vanish
+        // from the log), leaving keep1/keep2.
+        git(dir, &["revert", "--no-edit", "HEAD~1"]);
+        // Branch and add one distinct task per side.
+        git(dir, &["branch", "feature"]);
+        ta(dir, &["create", "on_main"]);
+        git(dir, &["commit", "-aqm", "main task"]);
+        git(dir, &["checkout", "-q", "feature"]);
+        ta(dir, &["create", "on_feature"]);
+        git(dir, &["commit", "-aqm", "feature task"]);
+    }
+
+    fn task_ids(dir: &Path) -> Vec<String> {
+        let mut ids: Vec<String> = ta(dir, &["list"])
+            .lines()
+            .skip(1) // header row
+            .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    // Direction 1: merge feature INTO main.
+    let d1 = fresh_dir("revert-fwd");
+    build(&d1);
+    git(&d1, &["checkout", "-q", "main"]);
+    let m1 = run("git", &d1, &["merge", "feature", "-m", "merge"]);
+    assert!(m1.status.success(), "fwd merge: {}", String::from_utf8_lossy(&m1.stderr));
+
+    // Direction 2: merge main INTO feature.
+    let d2 = fresh_dir("revert-rev");
+    build(&d2);
+    // Currently on `feature`; merge main in.
+    let m2 = run("git", &d2, &["merge", "main", "-m", "merge"]);
+    assert!(m2.status.success(), "rev merge: {}", String::from_utf8_lossy(&m2.stderr));
+
+    let fwd = task_ids(&d1);
+    let rev = task_ids(&d2);
+    assert_eq!(fwd, rev, "revert must converge both directions: {fwd:?} vs {rev:?}");
+    // The reverted tasks are gone; everything else survives, both ways.
+    assert_eq!(
+        fwd,
+        ["keep1", "keep2", "on_feature", "on_main"],
+        "surviving set after a reverted add: {fwd:?}"
+    );
+}
