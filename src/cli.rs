@@ -82,6 +82,12 @@ enum Commands {
         #[command(flatten)]
         display: DisplayArgs,
     },
+    /// Show a single task in full by id: `ta show <id>`
+    Show {
+        id: String,
+        #[command(flatten)]
+        display: DisplayArgs,
+    },
     /// Show tasks ready to work on (deps satisfied, not done)
     Ready {
         #[command(flatten)]
@@ -193,6 +199,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
         Commands::Search { key, val, display } => {
             cmd_search(store, &key, &val, &display, &store.config().display)
         }
+        Commands::Show { id, display } => cmd_show(store, &id, &display, &store.config().display),
         Commands::Ready { display } => {
             let workflow = store.config().workflow.clone();
             cmd_ready(store, &workflow, &display, &store.config().display)
@@ -339,6 +346,34 @@ fn cmd_search(
     Ok(())
 }
 
+/// Show a single task by id, defaulting to ALL of its fields (unlike `list`,
+/// which uses the configured columns). With no `--columns`, the columns are
+/// `id` + that task's own custom-field keys (sorted) + `deps`; an explicit
+/// `--columns` still restricts. `--full` is therefore a no-op here. Renders via
+/// the same human/json path as `list` (json is a one-element array, as in list).
+fn cmd_show(
+    store: &impl EventStore,
+    id: &str,
+    display: &DisplayArgs,
+    cfg: &DisplayConfig,
+) -> Result<(), DynError> {
+    let state = state_of(store)?;
+    let task = state.get(id).ok_or_else(|| format!("no task `{id}`"))?;
+    let tasks = [task];
+    // Default to the full task: every field of this one task. An explicit
+    // `--columns` overrides; we reuse the shared `render` plumbing for either.
+    let columns = display
+        .columns
+        .as_ref()
+        .map_or_else(|| full_columns(&tasks), Clone::clone);
+    let output = match display.format {
+        OutputFormat::Json => render_json(&tasks, &columns),
+        OutputFormat::Human => render_human(&tasks, &columns, cfg.max_width),
+    };
+    println!("{output}");
+    Ok(())
+}
+
 fn cmd_ready(
     store: &impl EventStore,
     workflow: &WorkflowConfig,
@@ -453,17 +488,23 @@ fn resolve_columns(
     tasks: &[&TaskState],
 ) -> Vec<String> {
     if display.full {
-        let fields: std::collections::BTreeSet<&String> =
-            tasks.iter().flat_map(|t| t.custom_fields.keys()).collect();
-        let mut cols = vec!["id".to_string()];
-        cols.extend(fields.into_iter().cloned());
-        cols.push("deps".to_string());
-        cols
+        full_columns(tasks)
     } else if let Some(cols) = &display.columns {
         cols.clone()
     } else {
         cfg.columns.clone()
     }
+}
+
+/// The "full" column set for a slice of tasks: `id` + every custom field seen
+/// (deduplicated and sorted) + `deps`. Used by `--full` and by `show`'s default.
+fn full_columns(tasks: &[&TaskState]) -> Vec<String> {
+    let fields: std::collections::BTreeSet<&String> =
+        tasks.iter().flat_map(|t| t.custom_fields.keys()).collect();
+    let mut cols = vec!["id".to_string()];
+    cols.extend(fields.into_iter().cloned());
+    cols.push("deps".to_string());
+    cols
 }
 
 fn render_human(tasks: &[&TaskState], columns: &[String], max_width: usize) -> String {
@@ -666,6 +707,30 @@ mod tests {
         let store = InMemoryStore::default();
         let err = cmd_create(&store, "x", &["no_equals_sign".into()]);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn show_full_columns_cover_every_field_and_unknown_errors() {
+        let store = InMemoryStore::default();
+        cmd_create(&store, "api", &["status=open".into(), "priority=3".into()]).unwrap();
+        let state = state_of(&store).unwrap();
+        let task = state.get("api").unwrap();
+
+        // `show`'s default column set is id + the task's own fields (sorted) + deps,
+        // so every field of the task is rendered.
+        let cols = full_columns(&[task]);
+        assert_eq!(cols, ["id", "priority", "status", "deps"], "full set: {cols:?}");
+        let json = render_json(&[task], &cols);
+        assert!(json.contains(r#""status":"open""#), "show full: {json}");
+        assert!(json.contains(r#""priority":3"#), "show full: {json}");
+
+        // An existing task renders Ok; an unknown id is an error (non-zero exit).
+        let d = display(OutputFormat::Human, false, None);
+        assert!(cmd_show(&store, "api", &d, &DisplayConfig::default()).is_ok());
+        assert!(
+            cmd_show(&store, "nope", &d, &DisplayConfig::default()).is_err(),
+            "unknown id must error"
+        );
     }
 
     #[test]

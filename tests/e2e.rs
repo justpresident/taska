@@ -222,6 +222,48 @@ fn output_format_columns_and_json() {
     );
 }
 
+#[test]
+fn show_displays_full_task_and_rejects_unknown_id() {
+    let dir = fresh_dir("show");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(
+        &dir,
+        &["create", "a", "title=Alpha", "status=open", "priority=3"],
+    );
+    ta(&dir, &["create", "dep"]);
+    ta(&dir, &["block", "a", "dep"]);
+
+    // `show` defaults to the FULL task: every field, even ones that are not
+    // default `list` columns (e.g. priority), plus deps.
+    let human = ta(&dir, &["show", "a"]);
+    assert!(lists_task(&human, "a"), "show should list the task: {human}");
+    assert!(human.contains("Alpha"), "title field: {human}");
+    assert!(human.contains("PRIORITY"), "priority header shown: {human}");
+    assert!(human.contains("dep"), "deps shown: {human}");
+
+    // json emits the same fields (a one-element array is fine, as for list).
+    let json = ta(&dir, &["show", "a", "--format", "json"]);
+    assert!(json.trim_start().starts_with('['), "json array: {json}");
+    assert!(json.contains(r#""priority":3"#), "priority in show json: {json}");
+    assert!(json.contains(r#""status":"open""#), "status in show json: {json}");
+
+    // An explicit --columns still restricts.
+    let cols = ta(&dir, &["show", "a", "--columns", "id,status", "--format", "json"]);
+    assert!(
+        cols.contains(r#""status":"open""#) && !cols.contains("priority"),
+        "explicit columns restrict show: {cols}"
+    );
+
+    // An unknown id exits non-zero.
+    let out = run(ta_bin(), &dir, &["show", "missing"]);
+    assert!(
+        !out.status.success(),
+        "show of an unknown id must exit non-zero, got:\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
 fn rows(path: &Path) -> usize {
     fs::read_to_string(path)
         .unwrap()

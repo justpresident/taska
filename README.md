@@ -160,6 +160,7 @@ max_width = 40
 | `ta delete <id>` | Delete a task |
 | `ta list` | List all tasks |
 | `ta search <key> <value>` | List tasks whose field equals a value |
+| `ta show <id>` | Show a single task with all of its fields |
 | `ta ready` | Not-done tasks whose dependencies are all done |
 | `ta compact` | Fold old events into the baseline snapshot |
 | `ta resolve` | Review and clear a surfaced merge conflict |
