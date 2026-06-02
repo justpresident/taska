@@ -142,7 +142,7 @@ on_conflict = "surface"
 [display]
 # Columns for list/search/ready (and the field order used by --format json).
 # "id" and "deps" are built-ins; any other name is a task field. Override per
-# command with --columns id,status or --all.
+# command with --columns id,status or --full.
 columns = ["id", "title", "status", "deps"]
 # Truncate long human cell values to this many characters (0 = no limit).
 max_width = 40
@@ -166,7 +166,7 @@ max_width = 40
 
 Field values are parsed as JSON when possible (`priority=3` is a number, `status=open` a string). The keys `seq`, `timestamp`, `op`, `task_id`, and `_meta` are reserved.
 
-`list`, `search`, and `ready` share display flags: `--format human|json` (json is a parseable array, ideal for agents and `jq`), `--all` to show every field, and `--columns id,status,…` to pick the columns for one run. The defaults and `max_width` live in `[display]`.
+`list`, `search`, and `ready` share display flags: `--format human|json` (json is a parseable array, ideal for agents and `jq`), `--full` to show every field, and `--columns id,status,…` to pick the columns for one run. The defaults and `max_width` live in `[display]`.
 
 ## Storage layout
 

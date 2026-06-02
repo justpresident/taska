@@ -132,13 +132,13 @@ fn crud_search_and_ready_workflow() {
     ta(&dir, &["create", "api", "status=open", "priority=3"]);
     ta(&dir, &["block", "api", "db"]);
 
-    // The human table lists ids; `--all --format json` exposes every field —
+    // The human table lists ids; `--full --format json` exposes every field —
     // priority coerced to a JSON number, and deps as a JSON array.
     assert!(
         lists_task(&ta(&dir, &["list"]), "api"),
         "api should be listed"
     );
-    let json = ta(&dir, &["list", "--all", "--format", "json"]);
+    let json = ta(&dir, &["list", "--full", "--format", "json"]);
     assert!(json.contains(r#""priority":3"#), "json: {json}");
     assert!(json.contains(r#""deps":["db"]"#), "json: {json}");
 
@@ -207,10 +207,10 @@ fn output_format_columns_and_json() {
         "priority not a default column: {json}"
     );
 
-    // --all exposes every field; --columns selects an explicit set.
+    // --full exposes every field; --columns selects an explicit set.
     assert!(
-        ta(&dir, &["list", "--all", "--format", "json"]).contains(r#""priority":3"#),
-        "--all shows priority"
+        ta(&dir, &["list", "--full", "--format", "json"]).contains(r#""priority":3"#),
+        "--full shows priority"
     );
     let cols = ta(
         &dir,
@@ -539,7 +539,7 @@ fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
         String::from_utf8_lossy(&merge.stderr)
     );
 
-    let list = ta(&dir, &["list", "--all", "--format", "json"]);
+    let list = ta(&dir, &["list", "--full", "--format", "json"]);
     // Overlapping fields go to theirs (feature); disjoint fields both survive.
     assert!(
         list.contains("\"status\":\"open\""),

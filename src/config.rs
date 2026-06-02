@@ -83,7 +83,7 @@ on_conflict = "{on_conflict}"
 # Columns shown by list/search/ready in human format — and the field set and
 # order used by `--format json`. "id" and "deps" are built-ins; any other name
 # is a task field (blank when a task lacks it). Override per command with
-# `--columns a,b,c` or `--all`.
+# `--columns a,b,c` or `--full`.
 columns = [{columns}]
 # Truncate long human cell values to this many characters (0 = no limit).
 max_width = {max_width}

@@ -26,7 +26,7 @@ struct Cli {
 }
 
 /// Output format for the listing commands. `--format` changes only *how* tasks
-/// are rendered, never *which* fields show — that is `--columns`/`--all`/config.
+/// are rendered, never *which* fields show — that is `--columns`/`--full`/config.
 #[derive(ValueEnum, Clone, Copy, PartialEq, Eq)]
 enum OutputFormat {
     Human,
@@ -41,7 +41,7 @@ struct DisplayArgs {
     format: OutputFormat,
     /// Show every field, not just the configured columns
     #[arg(long)]
-    all: bool,
+    full: bool,
     /// Comma-separated columns to show, overriding config (e.g. --columns id,status)
     #[arg(long, value_delimiter = ',')]
     columns: Option<Vec<String>>,
@@ -433,7 +433,7 @@ fn cmd_resolve(store: &FileStore) -> Result<(), DynError> {
     Ok(())
 }
 
-/// Render tasks per the display args. The selected columns (`--columns`/`--all`/
+/// Render tasks per the display args. The selected columns (`--columns`/`--full`/
 /// config) decide *which* fields appear; `--format` decides only how they print,
 /// and both formats share the same field order.
 fn render(tasks: &[&TaskState], display: &DisplayArgs, cfg: &DisplayConfig, empty: &str) -> String {
@@ -445,14 +445,14 @@ fn render(tasks: &[&TaskState], display: &DisplayArgs, cfg: &DisplayConfig, empt
     }
 }
 
-/// Decide the columns: `--all` (id + every field seen, sorted, + deps), else an
+/// Decide the columns: `--full` (id + every field seen, sorted, + deps), else an
 /// explicit `--columns`, else the configured default.
 fn resolve_columns(
     display: &DisplayArgs,
     cfg: &DisplayConfig,
     tasks: &[&TaskState],
 ) -> Vec<String> {
-    if display.all {
+    if display.full {
         let fields: std::collections::BTreeSet<&String> =
             tasks.iter().flat_map(|t| t.custom_fields.keys()).collect();
         let mut cols = vec!["id".to_string()];
@@ -703,10 +703,10 @@ mod tests {
         }
     }
 
-    fn display(format: OutputFormat, all: bool, columns: Option<&[&str]>) -> DisplayArgs {
+    fn display(format: OutputFormat, full: bool, columns: Option<&[&str]>) -> DisplayArgs {
         DisplayArgs {
             format,
-            all,
+            full,
             columns: columns.map(|c| c.iter().map(|s| (*s).to_string()).collect()),
         }
     }
@@ -765,7 +765,7 @@ mod tests {
         let b = task("b", &[], &[("y", serde_json::json!(2))]);
         let d = display(OutputFormat::Json, true, None);
         let out = render(&[&a, &b], &d, &DisplayConfig::default(), "(none)");
-        // --all unions fields: both x and y appear as keys.
+        // --full unions fields: both x and y appear as keys.
         assert!(
             out.contains("\"x\"") && out.contains("\"y\""),
             "union: {out}"
