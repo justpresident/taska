@@ -15,13 +15,17 @@ cargo test --all --all-features                      # all tests (unit + e2e)
 cargo test --lib                                     # unit tests only (in-crate #[cfg(test)] modules)
 cargo test --test e2e                                # end-to-end tests only
 cargo test <name>                                    # a single test, e.g. cargo test crud_search_and_ready_workflow
-cargo clippy --all --all-features -- -D warnings     # lint (CI fails on any warning)
+cargo clippy --all --all-features --all-targets -- -D warnings   # lint (CI fails on any warning; --all-targets also lints #[cfg(test)] code)
 cargo fmt --all                                      # format; CI runs `cargo fmt --all -- --check`
 ```
 
 CI (`.github/workflows/ci.yml`) runs test + clippy + fmt-check, and a separate coverage job via `cargo tarpaulin`.
 
+**The pre-commit gate.** CI fails on any clippy warning or fmt diff, so before each commit run clippy (with `--all-targets`, as above), `cargo fmt --all`, and `cargo test --all --all-features`. `--all-targets` is the easy-to-miss part: a plain `cargo build`/`clippy` skips `#[cfg(test)]` code, so a test broken by a model/signature change stays hidden until you lint with it. Build commit messages with `git commit -F` (a heredoc-in-`$()` mangles newlines); one task per commit, and keep the suite green at every commit.
+
 **Clippy is strict.** `lib.rs`/`main.rs` enable `clippy::pedantic`, `nursery`, and `cargo`, and deny `unwrap_used`, `panic`, and `dbg_macro` in non-test code — write accordingly. Test modules opt back in with `#![allow(clippy::unwrap_used)]`; `unwrap` is the conventional assertion style there.
+
+**`pub` vs `pub(crate)`.** `clippy::redundant_pub_crate` is denied and shapes every new file: inside a **private** module (`cli/commands/*`, `test_support`) use plain `pub` — the private parent already caps visibility to the crate, so `pub(crate)` is rejected as redundant; inside a **public** module (`cli`, `format`) use `pub(crate)` for cross-module-but-internal items.
 
 ## Architecture
 
@@ -54,12 +58,33 @@ Merging two diverged logs is a **rebase**, not a CRDT union: keep our events, re
 
 ⚠️ The lowercase `serde` names of `Strategy`, `Side`, `TaskOutcome`, `EdgeOutcome`, and the `_meta`/conflict-marker field names are an **on-disk serialization contract** (search `merge.rs` for "SERIALIZATION CONTRACT"). Renaming a variant without a migration breaks existing logs.
 
+### Computed timestamps work by read-time injection
+
+`create_time`/`update_time`/`close_time` are computed onto `TaskState` during replay (so they survive compaction via the baseline), but they're surfaced by **injecting them as ordinary RFC 3339 string fields in `state_of`**, under their configurable `[timestamps]` names. That read-time injection — not any per-feature plumbing — is why they "just work" as columns and in search/`--sort`/`show`. Two consequences:
+
+- `close_time` is the *most recent* close and is **cleared on reopen** (a deliberate product choice, not a bug).
+- A test asserting an **exact** column/field set must disable timestamps for that store (`test_support::store_without_timestamps()`, or `[timestamps]` names set to `""`), or the injected times leak in.
+
+### Adding a config option: backfill the local config
+
+`ta init` never overwrites an existing `config.toml`, so a new option is invisible in the dogfood store unless you **also add it (with its default + comment) to the repo's `.taska/config.toml`**, not just `default_toml()`. (TOML ordering bites too: scalar keys must precede any sub-table within a section.) Everything else is automatic — `Config` is `#[serde(default)]`, so partial/old files load and `ta config get/set/list` reflects the struct.
+
 ## Testing approach
 
 `tests/e2e.rs` drives the real compiled `ta` binary (path from `CARGO_BIN_EXE_ta`) against throwaway git repos. Each test runs in its own dir under the **system** temp dir, *not* `CARGO_TARGET_TMPDIR` — that is deliberate, so `ta`'s walk-up store discovery can't climb into the repo's own `.taska` store. Merge-driver tests prepend the binary's directory to `PATH` so git's `ta git-merge ...` resolves to the binary under test. Compaction tests stay at or above the `keep_events` floor and simply generate more events than they retain. Prefer adding coverage here over ad-hoc manual scripts.
 
 `tutorials/` holds runnable bash walkthroughs (`NN-*.sh`, driven by `lib.sh`; `run-all.sh` runs them in order) that double as UX validation and learning material. Each spins up its own throwaway repo outside the checkout. Run unattended with `TUTORIAL_NONINTERACTIVE=1`; they need `ta` on `PATH`.
 
+Two gotchas when writing tests:
+
+- **Default `--sort` is `create_time`** (oldest-first), not `id` — a test asserting row *order* must account for it or pass `--sort id`.
+- When a test result contradicts how something was described, **trust the test and investigate** — it's often surfacing a real decision (e.g. an unset field's *name* reappearing as `null` was a genuine product question, not a flaky test).
+
 ## This repo dogfoods taska
 
-The repo tracks its own work in `.taska/`. **Mutate that store only through the `ta` binary — never hand-edit `mutations.jsonl`/`baseline.jsonl`**, and never `git restore` it out from under in-flight work. Commit `.taska/` changes alongside the code they describe.
+The repo tracks its own work in `.taska/`, so:
+
+- **Mutate that store only through the `ta` binary** (`ta create`, `ta update <id> status=closed`, …) — never hand-edit `mutations.jsonl`/`baseline.jsonl`, and never `git restore` it out from under in-flight work; either corrupts the append-only log.
+- **Commit the eventlog change with the code it describes** — closing a task (`status=closed`; `done_status` is `closed`) goes in the same commit as the feature, and a pending eventlog change is flushed before the next task starts.
+- `config.toml` is plain config, not the eventlog — edit it directly (and you must when adding a config option; see above).
+- The roadmap lives in the store: `ta list` / `ta show <id>` carry the open tasks and the design questions in their notes.
