@@ -38,7 +38,9 @@ pub fn validate_and_sort_dependencies<S: BuildHasher>(
     Ok(sorted)
 }
 
-fn is_done(task: &TaskState, status_field: &str, done_status: &str) -> bool {
+/// Whether a task counts as complete: its `status_field` equals `done_status`.
+/// Shared with the `status` summary so "done" means the same thing everywhere.
+pub fn is_done(task: &TaskState, status_field: &str, done_status: &str) -> bool {
     task.custom_fields
         .get(status_field)
         .and_then(|v| v.as_str())

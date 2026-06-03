@@ -162,6 +162,7 @@ max_width = 40
 | `ta search <key> <value>` | List tasks whose field equals a value |
 | `ta show <id>` | Show a single task with all of its fields |
 | `ta ready` | Not-done tasks whose dependencies are all done |
+| `ta status` | Summary counts: total, per-status (discovered from the data), blocked, ready, and closed (`--format json` for a machine-readable object) |
 | `ta undo [--count N] [--remove] [--force]` | Reverse the last N events: truncate uncommitted ones, append compensating events for committed ones (`--remove` to force truncation) |
 | `ta compact` | Fold old events into the baseline snapshot |
 | `ta resolve` | Review and clear a surfaced merge conflict |

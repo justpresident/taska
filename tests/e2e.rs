@@ -302,6 +302,44 @@ fn rows(path: &Path) -> usize {
 }
 
 #[test]
+fn status_summarizes_counts_blocked_and_ready() {
+    let dir = fresh_dir("status");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // db is done; api depends on the open web, so api is blocked and web is ready.
+    ta(&dir, &["create", "db", "status=closed"]);
+    ta(&dir, &["create", "web", "status=open"]);
+    ta(&dir, &["create", "api", "status=open"]);
+    ta(&dir, &["block", "api", "web"]);
+
+    let human = ta(&dir, &["status"]);
+    assert!(human.contains("Total"), "total line: {human}");
+    assert!(human.contains("By status:"), "status section: {human}");
+    assert!(
+        human.contains("open") && human.contains("closed"),
+        "per-status buckets discovered from data: {human}"
+    );
+    assert!(
+        human.contains("Blocked") && human.contains("Ready"),
+        "{human}"
+    );
+
+    // JSON form is a single object with the computed fields.
+    let json = ta(&dir, &["status", "--format", "json"]);
+    assert!(json.contains(r#""total":3"#), "json total: {json}");
+    assert!(json.contains(r#""closed":1"#), "one done task: {json}");
+    assert!(
+        json.contains(r#""blocked":1"#),
+        "api blocked by web: {json}"
+    );
+    assert!(json.contains(r#""ready":1"#), "only web is ready: {json}");
+    assert!(
+        json.contains(r#""by_status":{"closed":1,"open":2}"#),
+        "buckets sorted, counted: {json}"
+    );
+}
+
+#[test]
 fn compact_folds_log_and_appends_resume() {
     let dir = fresh_dir("compact");
     init_repo(&dir);
