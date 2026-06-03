@@ -171,6 +171,7 @@ title = 80
 | `ta status` | Summary counts: total, per-status (discovered from the data), blocked, ready, and closed (`--format json` for a machine-readable object) |
 | `ta undo [--count N] [--remove] [--force]` | Reverse the last N events: truncate uncommitted ones, append compensating events for committed ones (`--remove` to force truncation) |
 | `ta compact` | Fold old events into the baseline snapshot |
+| `ta config get\|set\|list [key] [value]` | View or change `.taska/config.toml` by dotted key (e.g. `ta config set compaction.keep_events 500`); `set` validates and preserves comments |
 | `ta resolve` | Review and clear a surfaced merge conflict |
 
 Field values are parsed as JSON when possible (`priority=3` is a number, `status=open` a string). The keys `seq`, `timestamp`, `op`, `task_id`, and `_meta` are reserved.

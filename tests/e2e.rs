@@ -349,6 +349,70 @@ fn rows(path: &Path) -> usize {
 }
 
 #[test]
+fn config_get_set_list_validates_and_preserves_comments() {
+    let dir = fresh_dir("config-cmd");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    let cfg_path = dir.join(".taska/config.toml");
+
+    // get reads effective values, including defaults and nested sub-tables.
+    assert_eq!(
+        ta(&dir, &["config", "get", "compaction.keep_events"]).trim(),
+        "1000"
+    );
+    assert_eq!(
+        ta(&dir, &["config", "get", "workflow.status_field"]).trim(),
+        "status"
+    );
+
+    // set coerces by TOML grammar and persists the change.
+    ta(&dir, &["config", "set", "compaction.keep_events", "500"]);
+    assert_eq!(
+        ta(&dir, &["config", "get", "compaction.keep_events"]).trim(),
+        "500"
+    );
+    ta(&dir, &["config", "set", "merge.on_conflict", "ours"]);
+    assert_eq!(
+        ta(&dir, &["config", "get", "merge.on_conflict"]).trim(),
+        "ours"
+    );
+
+    // The documented comments survive a rewrite (toml_edit, not re-serialization).
+    let text = fs::read_to_string(&cfg_path).unwrap();
+    assert!(
+        text.contains("Keep at least this many"),
+        "comment kept: {text}"
+    );
+
+    // Invalid edits are rejected and leave the file untouched.
+    for bad in [
+        ["config", "set", "compaction.keep_events", "50"], // below the floor
+        ["config", "set", "merge.on_conflict", "bogus"],   // unknown enum variant
+        ["config", "set", "workflow.bogus_key", "x"],      // unknown key (typo guard)
+    ] {
+        let out = run(ta_bin(), &dir, &bad);
+        assert!(!out.status.success(), "`ta {}` should fail", bad.join(" "));
+    }
+    // keep_events is still 500 — no rejected edit slipped through.
+    assert_eq!(
+        ta(&dir, &["config", "get", "compaction.keep_events"]).trim(),
+        "500"
+    );
+
+    // list prints every effective value as sorted dotted keys.
+    let list = ta(&dir, &["config", "list"]);
+    assert!(
+        list.contains("compaction.keep_events = 500"),
+        "list: {list}"
+    );
+    assert!(list.contains("merge.on_conflict = ours"), "list: {list}");
+    assert!(
+        list.contains("display.column_max_width.title = 80"),
+        "nested key flattened: {list}"
+    );
+}
+
+#[test]
 fn status_summarizes_counts_blocked_and_ready() {
     let dir = fresh_dir("status");
     init_repo(&dir);
