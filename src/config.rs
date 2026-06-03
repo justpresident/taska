@@ -98,6 +98,9 @@ columns = [{columns}]
 # Truncate long human cell values to this many characters (0 = no limit). This
 # is the global fallback for any column not overridden below.
 max_width = {max_width}
+# Default column to sort list/search/ready by (ascending; --sort overrides,
+# --reverse flips). Any field, "id", or "deps"; empty/unknown falls back to id.
+sort = "{sort}"
 
 # Per-column truncation overrides. A column listed here is truncated to its own
 # width instead of max_width (0 = no limit). `--full` ignores these entirely.
@@ -123,6 +126,7 @@ close_time = "{close_time}"
         on_conflict = on_conflict,
         columns = columns,
         max_width = display.max_width,
+        sort = display.sort,
         column_max_width = column_max_width,
         create_time = timestamps.create_time,
         update_time = timestamps.update_time,
@@ -229,6 +233,10 @@ pub struct DisplayConfig {
     /// width instead of `max_width` (0 = no limit). `--full` ignores these. A
     /// `BTreeMap` so the rendered config is deterministically ordered.
     pub column_max_width: BTreeMap<String, usize>,
+    /// Default column to sort `list`/`search`/`ready` rows by (ascending). Any
+    /// field name, `id`, or `deps`; `--sort` overrides per command. An empty
+    /// value (or an unknown column) falls back to ordering by `id`.
+    pub sort: String,
 }
 
 impl Default for DisplayConfig {
@@ -242,6 +250,8 @@ impl Default for DisplayConfig {
             // Titles are usually the longest field, so give them more room than
             // the global default out of the box.
             column_max_width: std::iter::once(("title".to_string(), 80)).collect(),
+            // Oldest-first is the most useful default order for a task list.
+            sort: "create_time".to_string(),
         }
     }
 }

@@ -398,6 +398,65 @@ fn rows(path: &Path) -> usize {
 }
 
 #[test]
+fn sort_flag_orders_rows_with_reverse_and_configurable_default() {
+    let dir = fresh_dir("sort");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "b", "priority=2"]);
+    ta(&dir, &["create", "a", "priority=3"]);
+    ta(&dir, &["create", "c", "priority=1"]);
+
+    // Collect the id column (first token of each row after the header).
+    let ids = |out: &str| -> Vec<String> {
+        out.lines()
+            .skip(1)
+            .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+            .collect()
+    };
+
+    // --sort over a numeric column sorts numerically, and --reverse flips it.
+    let asc = ta(&dir, &["list", "--sort", "priority", "--columns", "id"]);
+    assert_eq!(ids(&asc), ["c", "b", "a"], "ascending by priority: {asc}");
+    let desc = ta(
+        &dir,
+        &["list", "--sort", "priority", "--reverse", "--columns", "id"],
+    );
+    assert_eq!(ids(&desc), ["a", "b", "c"], "reversed: {desc}");
+
+    // A task missing the sort column sorts last.
+    ta(&dir, &["create", "d"]);
+    let missing = ta(&dir, &["list", "--sort", "priority", "--columns", "id"]);
+    assert_eq!(
+        ids(&missing),
+        ["c", "b", "a", "d"],
+        "missing last: {missing}"
+    );
+
+    // search honors --sort too.
+    let s = ta(
+        &dir,
+        &[
+            "search",
+            "priority~.",
+            "--sort",
+            "priority",
+            "--columns",
+            "id",
+        ],
+    );
+    assert_eq!(ids(&s), ["c", "b", "a"], "search sorted: {s}");
+
+    // The default sort column is configurable (no --sort given).
+    fs::write(dir.join(".taska/config.toml"), "[display]\nsort = \"id\"\n").unwrap();
+    let by_id = ta(&dir, &["list", "--columns", "id"]);
+    assert_eq!(
+        ids(&by_id),
+        ["a", "b", "c", "d"],
+        "config default sort=id: {by_id}"
+    );
+}
+
+#[test]
 fn auto_timestamps_lifecycle_search_and_compaction() {
     let dir = fresh_dir("timestamps");
     init_repo(&dir);

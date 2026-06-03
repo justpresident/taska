@@ -3,6 +3,7 @@
 //! Command handlers depend on the [`EventStore`] abstraction rather than the
 //! concrete [`FileStore`], so they can be exercised against any store.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
@@ -49,6 +50,12 @@ struct DisplayArgs {
     /// Comma-separated columns to show, overriding config (e.g. --columns id,status)
     #[arg(long, value_delimiter = ',')]
     columns: Option<Vec<String>>,
+    /// Sort rows by this column (id, deps, or any field), overriding config
+    #[arg(long)]
+    sort: Option<String>,
+    /// Reverse the sort order (descending)
+    #[arg(long)]
+    reverse: bool,
 }
 
 #[derive(Subcommand)]
@@ -421,7 +428,7 @@ fn cmd_list(
 ) -> Result<(), DynError> {
     let state = state_of(store)?;
     let mut tasks: Vec<&TaskState> = state.values().collect();
-    tasks.sort_by(|a, b| a.id.cmp(&b.id));
+    sort_tasks(&mut tasks, display, cfg);
     println!("{}", render(&tasks, display, cfg, "(no tasks)"));
     Ok(())
 }
@@ -440,7 +447,7 @@ fn cmd_search(
         .values()
         .filter(|t| criteria.iter().all(|c| c.matches(t)))
         .collect();
-    hits.sort_by(|a, b| a.id.cmp(&b.id));
+    sort_tasks(&mut hits, display, cfg);
     println!("{}", render(&hits, display, cfg, "(no matches)"));
     Ok(())
 }
@@ -604,7 +611,11 @@ fn cmd_ready(
 ) -> Result<(), DynError> {
     let state = state_of(store)?;
     let ready = graph::ready_tasks(&state, &workflow.status_field, &workflow.done_status)?;
-    let tasks: Vec<&TaskState> = ready.iter().filter_map(|id| state.get(id)).collect();
+    let mut tasks: Vec<&TaskState> = ready.iter().filter_map(|id| state.get(id)).collect();
+    // ready_tasks returns a topological order, but ready tasks never depend on
+    // one another (their deps are all done, hence excluded), so re-sorting is
+    // free of ordering hazards and gives a consistent, configurable order.
+    sort_tasks(&mut tasks, display, cfg);
     println!("{}", render(&tasks, display, cfg, "(nothing ready)"));
     Ok(())
 }
@@ -1285,6 +1296,67 @@ fn render(tasks: &[&TaskState], display: &DisplayArgs, cfg: &DisplayConfig, empt
     }
 }
 
+/// Sort `tasks` in place by the effective sort column (`--sort`, else the
+/// configured default), ascending, with `id` as a stable tiebreaker; `--reverse`
+/// flips the result. The column may be `id`, `deps`, or any field (including the
+/// injected computed timestamps). Rows lacking the column sort last (ascending);
+/// an empty or unknown column leaves only the `id` tiebreak, i.e. orders by id.
+fn sort_tasks(tasks: &mut [&TaskState], display: &DisplayArgs, cfg: &DisplayConfig) {
+    let column = display.sort.as_deref().unwrap_or(cfg.sort.as_str());
+    tasks.sort_by(|a, b| {
+        let ord = match (sort_key(a, column), sort_key(b, column)) {
+            (Some(x), Some(y)) => cmp_json(&x, &y),
+            (Some(_), None) => Ordering::Less, // a present value sorts before a missing one
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        };
+        ord.then_with(|| a.id.cmp(&b.id))
+    });
+    if display.reverse {
+        tasks.reverse();
+    }
+}
+
+/// The comparable value of a task's `column`: the id, the deps (joined), or a
+/// custom/computed field (absent when the task lacks it).
+fn sort_key(task: &TaskState, column: &str) -> Option<Value> {
+    match column {
+        "id" => Some(Value::String(task.id.clone())),
+        "deps" => Some(Value::String(task.depends_on.join(", "))),
+        _ => task.custom_fields.get(column).cloned(),
+    }
+}
+
+/// A total order over heterogeneous JSON scalars: numbers compare numerically,
+/// strings/bools by their natural order, and any mismatch falls back to a stable
+/// per-type rank then the value's string form — so a column holding mixed types
+/// still sorts deterministically.
+fn cmp_json(a: &Value, b: &Value) -> Ordering {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x
+            .as_f64()
+            .partial_cmp(&y.as_f64())
+            .unwrap_or(Ordering::Equal),
+        (Value::String(x), Value::String(y)) => x.cmp(y),
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        _ => value_rank(a)
+            .cmp(&value_rank(b))
+            .then_with(|| a.to_string().cmp(&b.to_string())),
+    }
+}
+
+/// Stable per-type ordinal so values of different JSON types compare consistently.
+const fn value_rank(v: &Value) -> u8 {
+    match v {
+        Value::Null => 0,
+        Value::Bool(_) => 1,
+        Value::Number(_) => 2,
+        Value::String(_) => 3,
+        Value::Array(_) => 4,
+        Value::Object(_) => 5,
+    }
+}
+
 /// The per-column truncation cap, one entry per column (0 = no limit, which
 /// `truncate` already honors). `--full` prints everything untruncated, so every
 /// column gets cap 0. Otherwise a column listed in `[display.column_max_width]`
@@ -1643,6 +1715,7 @@ mod tests {
             columns: vec!["id".into(), "status".into(), "deps".into()],
             max_width: 0,
             column_max_width: BTreeMap::new(),
+            sort: String::new(),
         };
         let t = task(
             "api",
@@ -1681,6 +1754,52 @@ mod tests {
             assert!(at >= last, "json key `{c}` out of canonical order: {json}");
             last = at;
         }
+    }
+
+    #[test]
+    fn sort_tasks_orders_by_column_missing_last_and_reverse() {
+        let pri3 = task("a", &[], &[("priority", serde_json::json!(3))]);
+        let pri1 = task("b", &[], &[("priority", serde_json::json!(1))]);
+        let pri2 = task("c", &[], &[("priority", serde_json::json!(2))]);
+        let none = task("d", &[], &[]); // no priority -> sorts last (ascending)
+        let cfg = DisplayConfig::default();
+        let args = |sort: &str, reverse: bool| DisplayArgs {
+            format: OutputFormat::Human,
+            full: false,
+            columns: None,
+            sort: Some(sort.to_string()),
+            reverse,
+        };
+        let ids =
+            |tasks: &[&TaskState]| -> Vec<String> { tasks.iter().map(|t| t.id.clone()).collect() };
+
+        // Numeric ascending, with the missing-value task last.
+        let mut list = vec![&pri3, &pri1, &pri2, &none];
+        sort_tasks(&mut list, &args("priority", false), &cfg);
+        assert_eq!(ids(&list), ["b", "c", "a", "d"], "asc, missing last");
+
+        // --reverse flips the whole order.
+        let mut list = vec![&pri3, &pri1, &pri2, &none];
+        sort_tasks(&mut list, &args("priority", true), &cfg);
+        assert_eq!(ids(&list), ["d", "a", "c", "b"], "reversed");
+
+        // An unknown column leaves only the id tiebreak (orders by id).
+        let mut list = vec![&pri2, &pri3, &pri1];
+        sort_tasks(&mut list, &args("nope", false), &cfg);
+        assert_eq!(ids(&list), ["a", "b", "c"], "unknown column -> by id");
+    }
+
+    #[test]
+    fn cmp_json_orders_numbers_strings_and_mixed_types() {
+        use serde_json::json;
+        assert_eq!(
+            cmp_json(&json!(2), &json!(10)),
+            Ordering::Less,
+            "numeric, not lexical"
+        );
+        assert_eq!(cmp_json(&json!("a"), &json!("b")), Ordering::Less);
+        // Mixed types fall back to a stable per-type rank (number < string).
+        assert_eq!(cmp_json(&json!(1), &json!("1")), Ordering::Less);
     }
 
     #[test]
@@ -1726,6 +1845,8 @@ mod tests {
             format,
             full,
             columns: columns.map(|c| c.iter().map(|s| (*s).to_string()).collect()),
+            sort: None,
+            reverse: false,
         }
     }
 
@@ -1843,6 +1964,7 @@ mod tests {
             columns: vec!["id".into(), "notes".into()],
             max_width: 20,
             column_max_width: BTreeMap::new(),
+            sort: String::new(),
         };
 
         // --full: the full value survives, no ellipsis.
@@ -1891,6 +2013,7 @@ mod tests {
             columns: vec!["id".into(), "notes".into(), "summary".into()],
             max_width: 10,
             column_max_width: std::iter::once(("notes".to_string(), 60)).collect(),
+            sort: String::new(),
         };
         let out = render(
             &[&t],

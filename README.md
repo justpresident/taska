@@ -154,6 +154,9 @@ columns = ["id", "title", "status", "deps"]
 # Truncate long human cell values to this many characters (0 = no limit). The
 # global fallback for any column not overridden below.
 max_width = 40
+# Default column to sort list/search/ready by (ascending; --sort overrides,
+# --reverse flips). Any field, "id", or "deps"; empty/unknown falls back to id.
+sort = "create_time"
 
 # Per-column truncation overrides: a column listed here is truncated to its own
 # width instead of max_width (0 = no limit). --full ignores these entirely.
@@ -194,7 +197,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 
 Field values are parsed as JSON when possible (`priority=3` is a number, `status=open` a string). The keys `seq`, `timestamp`, `op`, `task_id`, and `_meta` are reserved.
 
-`list`, `search`, `ready`, and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON — one object per line — for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, and `--columns id,status,…` to pick the columns for one run. The defaults and `max_width` live in `[display]`.
+`list`, `search`, `ready`, and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON — one object per line — for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, `--columns id,status,…` to pick the columns for one run, and `--sort <column>` / `--reverse` to order the rows (`list`/`search`/`ready`; default column from `[display].sort`). The defaults and `max_width` live in `[display]`.
 
 ## Storage layout
 

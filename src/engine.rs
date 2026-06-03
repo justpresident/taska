@@ -201,6 +201,7 @@ impl Engine {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
     use serde_json::json;

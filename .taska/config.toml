@@ -45,6 +45,9 @@ columns = ["id", "title", "status", "deps"]
 # Truncate long human cell values to this many characters (0 = no limit). This
 # is the global fallback for any column not overridden below.
 max_width = 40
+# Default column to sort list/search/ready by (ascending; --sort overrides,
+# --reverse flips). Any field, "id", or "deps"; empty/unknown falls back to id.
+sort = "create_time"
 
 # Per-column truncation overrides. A column listed here is truncated to its own
 # width instead of max_width (0 = no limit). `--full` ignores these entirely.
