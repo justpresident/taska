@@ -234,7 +234,10 @@ fn show_displays_full_task_and_rejects_unknown_id() {
     // `show` defaults to the FULL task: every field, even ones that are not
     // default `list` columns (e.g. priority), plus deps.
     let human = ta(&dir, &["show", "a"]);
-    assert!(lists_task(&human, "a"), "show should list the task: {human}");
+    assert!(
+        lists_task(&human, "a"),
+        "show should list the task: {human}"
+    );
     assert!(human.contains("Alpha"), "title field: {human}");
     assert!(human.contains("PRIORITY"), "priority header shown: {human}");
     assert!(human.contains("dep"), "deps shown: {human}");
@@ -242,11 +245,20 @@ fn show_displays_full_task_and_rejects_unknown_id() {
     // json emits the same fields (a one-element array is fine, as for list).
     let json = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(json.trim_start().starts_with('['), "json array: {json}");
-    assert!(json.contains(r#""priority":3"#), "priority in show json: {json}");
-    assert!(json.contains(r#""status":"open""#), "status in show json: {json}");
+    assert!(
+        json.contains(r#""priority":3"#),
+        "priority in show json: {json}"
+    );
+    assert!(
+        json.contains(r#""status":"open""#),
+        "status in show json: {json}"
+    );
 
     // An explicit --columns still restricts.
-    let cols = ta(&dir, &["show", "a", "--columns", "id,status", "--format", "json"]);
+    let cols = ta(
+        &dir,
+        &["show", "a", "--columns", "id,status", "--format", "json"],
+    );
     assert!(
         cols.contains(r#""status":"open""#) && !cols.contains("priority"),
         "explicit columns restrict show: {cols}"
@@ -536,7 +548,10 @@ fn orphaned_events_warn_on_read_and_resolve_drops_them() {
 
     // A read command warns about the orphan on STDERR (without failing).
     let out = run(ta_bin(), &dir, &["list"]);
-    assert!(out.status.success(), "list should still succeed despite orphans");
+    assert!(
+        out.status.success(),
+        "list should still succeed despite orphans"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("orphaned event") && stderr.contains("ta resolve"),
@@ -925,7 +940,10 @@ fn unblock_makes_a_blocked_task_ready() {
     ta(&dir, &["block", "api", "db"]);
     let before = ta(&dir, &["ready"]);
     assert!(lists_task(&before, "db"), "db ready: {before}");
-    assert!(!lists_task(&before, "api"), "api blocked by open db: {before}");
+    assert!(
+        !lists_task(&before, "api"),
+        "api blocked by open db: {before}"
+    );
 
     // Removing the dependency lifts the block, so `api` becomes ready too.
     let msg = ta(&dir, &["unblock", "api", "db"]);
@@ -934,7 +952,10 @@ fn unblock_makes_a_blocked_task_ready() {
         "unblock should confirm: {msg}"
     );
     let after = ta(&dir, &["ready"]);
-    assert!(lists_task(&after, "api"), "api ready after unblock: {after}");
+    assert!(
+        lists_task(&after, "api"),
+        "api ready after unblock: {after}"
+    );
 
     // The dependency is gone from the materialized task, not just from `ready`.
     let json = ta(&dir, &["show", "api", "--format", "json"]);
@@ -982,7 +1003,12 @@ fn config_columns_and_max_width_are_honored() {
     .unwrap();
     ta(
         &dir,
-        &["create", "a", "note=ThisIsAVeryLongNoteValue", "status=open"],
+        &[
+            "create",
+            "a",
+            "note=ThisIsAVeryLongNoteValue",
+            "status=open",
+        ],
     );
 
     let human = ta(&dir, &["list"]);
@@ -1007,7 +1033,10 @@ fn config_columns_and_max_width_are_honored() {
         json.contains(r#""note":"ThisIsAVeryLongNoteValue""#),
         "json is not truncated: {json}"
     );
-    assert!(!json.contains("status"), "status not a configured column: {json}");
+    assert!(
+        !json.contains("status"),
+        "status not a configured column: {json}"
+    );
 }
 
 #[test]
@@ -1025,7 +1054,10 @@ fn empty_results_render_placeholders_and_empty_json_array() {
 
     // A search that matches nothing has its own placeholder and empty array.
     ta(&dir, &["create", "a", "status=open"]);
-    assert_eq!(ta(&dir, &["search", "status", "closed"]).trim(), "(no matches)");
+    assert_eq!(
+        ta(&dir, &["search", "status", "closed"]).trim(),
+        "(no matches)"
+    );
     assert_eq!(
         ta(&dir, &["search", "status", "closed", "--format", "json"]).trim(),
         "[]"
@@ -1089,7 +1121,10 @@ fn null_value_unset_is_reflected_in_list_and_search() {
     assert!(!list.contains("bob"), "owner value gone from list: {list}");
     let show = ta(&dir, &["show", "x", "--format", "json"]);
     assert!(!show.contains("owner"), "owner gone from show: {show}");
-    assert!(show.contains(r#""status":"open""#), "status preserved: {show}");
+    assert!(
+        show.contains(r#""status":"open""#),
+        "status preserved: {show}"
+    );
 }
 
 #[test]
@@ -1125,8 +1160,14 @@ fn clean_disjoint_field_merge_has_no_conflict() {
 
     // Both disjoint edits survive.
     let json = ta(&dir, &["show", "t", "--format", "json"]);
-    assert!(json.contains(r#""owner":"alice""#), "ours field kept: {json}");
-    assert!(json.contains(r#""priority":3"#), "theirs field kept: {json}");
+    assert!(
+        json.contains(r#""owner":"alice""#),
+        "ours field kept: {json}"
+    );
+    assert!(
+        json.contains(r#""priority":3"#),
+        "theirs field kept: {json}"
+    );
 }
 
 #[test]
@@ -1305,18 +1346,29 @@ fn reverts_converge_regardless_of_merge_direction() {
     build(&d1);
     git(&d1, &["checkout", "-q", "main"]);
     let m1 = run("git", &d1, &["merge", "feature", "-m", "merge"]);
-    assert!(m1.status.success(), "fwd merge: {}", String::from_utf8_lossy(&m1.stderr));
+    assert!(
+        m1.status.success(),
+        "fwd merge: {}",
+        String::from_utf8_lossy(&m1.stderr)
+    );
 
     // Direction 2: merge main INTO feature.
     let d2 = fresh_dir("revert-rev");
     build(&d2);
     // Currently on `feature`; merge main in.
     let m2 = run("git", &d2, &["merge", "main", "-m", "merge"]);
-    assert!(m2.status.success(), "rev merge: {}", String::from_utf8_lossy(&m2.stderr));
+    assert!(
+        m2.status.success(),
+        "rev merge: {}",
+        String::from_utf8_lossy(&m2.stderr)
+    );
 
     let fwd = task_ids(&d1);
     let rev = task_ids(&d2);
-    assert_eq!(fwd, rev, "revert must converge both directions: {fwd:?} vs {rev:?}");
+    assert_eq!(
+        fwd, rev,
+        "revert must converge both directions: {fwd:?} vs {rev:?}"
+    );
     // The reverted tasks are gone; everything else survives, both ways.
     assert_eq!(
         fwd,

@@ -768,7 +768,10 @@ fn confirm(prompt: &str, force: bool) -> Result<bool, DynError> {
     std::io::Write::flush(&mut std::io::stderr())?;
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
-    Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// Render tasks per the display args. The selected columns (`--columns`/`--full`/
@@ -1038,7 +1041,11 @@ mod tests {
         // `show`'s default column set is id + the task's own fields (sorted) + deps,
         // so every field of the task is rendered.
         let cols = full_columns(&[task]);
-        assert_eq!(cols, ["id", "priority", "status", "deps"], "full set: {cols:?}");
+        assert_eq!(
+            cols,
+            ["id", "priority", "status", "deps"],
+            "full set: {cols:?}"
+        );
         let json = render_json(&[task], &cols);
         assert!(json.contains(r#""status":"open""#), "show full: {json}");
         assert!(json.contains(r#""priority":3"#), "show full: {json}");
@@ -1261,7 +1268,10 @@ mod tests {
         let c: Vec<_> = events.iter().filter(|e| e.task_id == "c").collect();
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].op, OpType::Update);
-        assert_eq!(c[0].payload.get("status"), Some(&serde_json::json!("closed")));
+        assert_eq!(
+            c[0].payload.get("status"),
+            Some(&serde_json::json!("closed"))
+        );
     }
 
     #[test]
@@ -1277,13 +1287,13 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| e.op == OpType::AddDep && e.payload.get("dep") == Some(&serde_json::json!("y"))),
+                .any(|e| e.op == OpType::AddDep
+                    && e.payload.get("dep") == Some(&serde_json::json!("y"))),
             "adds y: {events:?}"
         );
         assert!(
-            events.iter().any(
-                |e| e.op == OpType::RemoveDep && e.payload.get("dep") == Some(&serde_json::json!("x"))
-            ),
+            events.iter().any(|e| e.op == OpType::RemoveDep
+                && e.payload.get("dep") == Some(&serde_json::json!("x"))),
             "removes x: {events:?}"
         );
     }
