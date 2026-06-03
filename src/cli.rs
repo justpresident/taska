@@ -1322,7 +1322,7 @@ fn render_rows(
 fn sort_tasks(tasks: &mut [&TaskState], display: &DisplayArgs, cfg: &DisplayConfig) {
     let column = display.sort.as_deref().unwrap_or(cfg.sort.as_str());
     tasks.sort_by(|a, b| {
-        let ord = match (sort_key(a, column), sort_key(b, column)) {
+        let ord = match (cell_value(a, column), cell_value(b, column)) {
             (Some(x), Some(y)) => cmp_json(&x, &y),
             (Some(_), None) => Ordering::Less, // a present value sorts before a missing one
             (None, Some(_)) => Ordering::Greater,
@@ -1335,12 +1335,17 @@ fn sort_tasks(tasks: &mut [&TaskState], display: &DisplayArgs, cfg: &DisplayConf
     }
 }
 
-/// The comparable value of a task's `column`: the id, the deps (joined), or a
-/// custom/computed field (absent when the task lacks it).
-fn sort_key(task: &TaskState, column: &str) -> Option<Value> {
+/// The value of `column` for a task as a JSON `Value` — the single source of
+/// truth shared by JSON output, human rendering, and sorting. `id` is the id
+/// string, `deps` the array of dependency ids, and anything else a custom or
+/// computed field. `None` only for a missing custom field (the built-ins always
+/// resolve), which is how JSON omits absent fields and sorting orders them last.
+fn cell_value(task: &TaskState, column: &str) -> Option<Value> {
     match column {
         "id" => Some(Value::String(task.id.clone())),
-        "deps" => Some(Value::String(task.depends_on.join(", "))),
+        "deps" => Some(Value::Array(
+            task.depends_on.iter().cloned().map(Value::String).collect(),
+        )),
         _ => task.custom_fields.get(column).cloned(),
     }
 }
@@ -1506,49 +1511,40 @@ fn render_jsonl(tasks: &[&TaskState], columns: &[String]) -> String {
 
 /// One task as a compact JSON object over `columns`, in order. A column the task
 /// lacks is OMITTED rather than emitted as null; only the built-ins `id`/`deps`
-/// are always present (`deps` is `[]` when empty, which is data, not absence).
+/// always resolve (`deps` is `[]` when empty, which is data, not absence).
 fn json_object(task: &TaskState, columns: &[String]) -> String {
     let pairs: Vec<String> = columns
         .iter()
-        .filter(|c| cell_present(task, c))
-        .map(|c| {
-            let key = serde_json::to_string(c).unwrap_or_default();
-            format!("{key}:{}", json_cell(task, c))
+        .filter_map(|c| {
+            cell_value(task, c).map(|v| {
+                let key = serde_json::to_string(c).unwrap_or_default();
+                format!("{key}:{}", serde_json::to_string(&v).unwrap_or_default())
+            })
         })
         .collect();
     format!("{{{}}}", pairs.join(","))
 }
 
-/// Whether a column has a value to emit for this task in JSON: the built-ins
-/// always do; a custom field only when the task actually carries it (a null is
-/// never stored, so "contains the key" means "has a real value").
-fn cell_present(task: &TaskState, col: &str) -> bool {
-    matches!(col, "id" | "deps") || task.custom_fields.contains_key(col)
-}
-
-/// A field's value for the human table: bare string, or compact JSON otherwise.
+/// A column's value for the human table: a bare string, an array joined by
+/// `", "` (so `deps` and any list field read the same), or compact JSON for
+/// anything else. Empty for a column the task lacks.
 fn human_cell(task: &TaskState, col: &str) -> String {
-    match col {
-        "id" => task.id.clone(),
-        "deps" => task.depends_on.join(", "),
-        _ => match task.custom_fields.get(col) {
-            Some(Value::String(s)) => s.clone(),
-            Some(v) => serde_json::to_string(v).unwrap_or_default(),
-            None => String::new(),
-        },
-    }
+    cell_value(task, col)
+        .as_ref()
+        .map(human_display)
+        .unwrap_or_default()
 }
 
-/// A field's value as a JSON literal. Only ever called for a column the task
-/// has (see `cell_present`); the `null` fallback is defensive, not emitted.
-fn json_cell(task: &TaskState, col: &str) -> String {
-    match col {
-        "id" => serde_json::to_string(&task.id).unwrap_or_default(),
-        "deps" => serde_json::to_string(&task.depends_on).unwrap_or_default(),
-        _ => task.custom_fields.get(col).map_or_else(
-            || "null".to_string(),
-            |v| serde_json::to_string(v).unwrap_or_default(),
-        ),
+/// Render a single JSON value for the human table (see [`human_cell`]).
+fn human_display(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Array(items) => items
+            .iter()
+            .map(human_display)
+            .collect::<Vec<_>>()
+            .join(", "),
+        other => other.to_string(),
     }
 }
 
@@ -1805,6 +1801,40 @@ mod tests {
         let mut list = vec![&pri2, &pri3, &pri1];
         sort_tasks(&mut list, &args("nope", false), &cfg);
         assert_eq!(ids(&list), ["a", "b", "c"], "unknown column -> by id");
+    }
+
+    #[test]
+    fn cell_value_unifies_columns_and_human_joins_arrays() {
+        let t = task(
+            "api",
+            &["db", "web"],
+            &[
+                ("tags", serde_json::json!(["x", "y"])),
+                ("priority", serde_json::json!(3)),
+            ],
+        );
+
+        // cell_value is the single source of truth: id string, deps array,
+        // custom passthrough, and None for a missing field.
+        assert_eq!(cell_value(&t, "id"), Some(serde_json::json!("api")));
+        assert_eq!(
+            cell_value(&t, "deps"),
+            Some(serde_json::json!(["db", "web"]))
+        );
+        assert_eq!(cell_value(&t, "priority"), Some(serde_json::json!(3)));
+        assert_eq!(cell_value(&t, "missing"), None);
+
+        // Human cells: bare string, arrays joined so deps and any list field read
+        // the same way, numbers as their text, empty for a missing column.
+        assert_eq!(human_cell(&t, "id"), "api");
+        assert_eq!(human_cell(&t, "deps"), "db, web");
+        assert_eq!(
+            human_cell(&t, "tags"),
+            "x, y",
+            "custom arrays join like deps"
+        );
+        assert_eq!(human_cell(&t, "priority"), "3");
+        assert_eq!(human_cell(&t, "missing"), "");
     }
 
     #[test]
