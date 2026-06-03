@@ -294,6 +294,53 @@ fn full_flag_disables_truncation_in_human_output() {
 }
 
 #[test]
+fn full_view_uses_canonical_column_order_in_both_formats() {
+    let dir = fresh_dir("canonical-order");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // Configure a deliberate column order; deps in the middle.
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[display]\ncolumns = [\"id\", \"status\", \"deps\"]\nmax_width = 0\n",
+    )
+    .unwrap();
+    ta(&dir, &["create", "dep"]);
+    // Custom fields supplied out of alphabetical order.
+    ta(&dir, &["create", "a", "zeta=1", "status=open", "alpha=2"]);
+    ta(&dir, &["block", "a", "dep"]);
+
+    // Human --full: configured columns first (id,status,deps), then the extra
+    // custom fields alphabetically (alpha, zeta).
+    let human = ta(&dir, &["list", "--full"]);
+    let header: Vec<&str> = human.lines().next().unwrap().split_whitespace().collect();
+    assert_eq!(
+        header,
+        ["ID", "STATUS", "DEPS", "ALPHA", "ZETA"],
+        "human: {human}"
+    );
+
+    // JSON --full: the keys appear in that identical order, for one object.
+    let json = ta(&dir, &["list", "--full", "--format", "json"]);
+    let a_obj = json.lines().find(|l| l.contains("\"a\"")).unwrap();
+    let order: Vec<usize> = ["id", "status", "deps", "alpha", "zeta"]
+        .iter()
+        .map(|k| a_obj.find(&format!("\"{k}\"")).unwrap())
+        .collect();
+    assert!(
+        order.windows(2).all(|w| w[0] < w[1]),
+        "json key order: {a_obj}"
+    );
+
+    // `show` shares the same default order.
+    let show = ta(&dir, &["show", "a", "--format", "json"]);
+    let sorder: Vec<usize> = ["id", "status", "deps", "alpha", "zeta"]
+        .iter()
+        .map(|k| show.find(&format!("\"{k}\"")).unwrap())
+        .collect();
+    assert!(sorder.windows(2).all(|w| w[0] < w[1]), "show order: {show}");
+}
+
+#[test]
 fn per_column_max_width_overrides_the_global_default() {
     let dir = fresh_dir("per-column-width");
     init_repo(&dir);
@@ -1326,7 +1373,7 @@ fn null_value_unset_is_reflected_in_list_and_search() {
         "owner=bob should match before unset"
     );
 
-    // Unset via the null convention; the field disappears from every read path.
+    // Unset via the null convention; the value disappears from every read path.
     ta(&dir, &["update", "x", "owner=null"]);
     assert_eq!(
         ta(&dir, &["search", "owner=bob"]).trim(),
@@ -1336,7 +1383,13 @@ fn null_value_unset_is_reflected_in_list_and_search() {
     let list = ta(&dir, &["list", "--format", "json"]);
     assert!(!list.contains("bob"), "owner value gone from list: {list}");
     let show = ta(&dir, &["show", "x", "--format", "json"]);
-    assert!(!show.contains("owner"), "owner gone from show: {show}");
+    assert!(!show.contains("bob"), "owner value gone from show: {show}");
+    // `owner` is a configured column, so it still appears — but as null, which
+    // is exactly how a missing field renders (the value is unset, not blanked).
+    assert!(
+        show.contains(r#""owner":null"#),
+        "owner unset -> null: {show}"
+    );
     assert!(
         show.contains(r#""status":"open""#),
         "status preserved: {show}"

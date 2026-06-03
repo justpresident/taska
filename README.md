@@ -142,7 +142,9 @@ on_conflict = "surface"
 [display]
 # Columns for list/search/ready (and the field order used by --format json).
 # "id" and "deps" are built-ins; any other name is a task field. Override per
-# command with --columns id,status or --full.
+# command with --columns id,status or --full. The all-fields views (--full and
+# `show`) use a canonical order: these configured columns first, then every
+# remaining field alphabetically — identical across human and json output.
 columns = ["id", "title", "status", "deps"]
 # Truncate long human cell values to this many characters (0 = no limit). The
 # global fallback for any column not overridden below.

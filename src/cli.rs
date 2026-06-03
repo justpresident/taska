@@ -3,7 +3,7 @@
 //! Command handlers depend on the [`EventStore`] abstraction rather than the
 //! concrete [`FileStore`], so they can be exercised against any store.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -552,7 +552,7 @@ fn cmd_show(
     let columns = display
         .columns
         .as_ref()
-        .map_or_else(|| full_columns(&tasks), Clone::clone);
+        .map_or_else(|| full_columns(&tasks, cfg), Clone::clone);
     let output = match display.format {
         OutputFormat::Json => render_json(&tasks, &columns),
         OutputFormat::Human => {
@@ -1252,15 +1252,15 @@ fn truncation_caps(columns: &[String], display: &DisplayArgs, cfg: &DisplayConfi
         .collect()
 }
 
-/// Decide the columns: `--full` (id + every field seen, sorted, + deps), else an
-/// explicit `--columns`, else the configured default.
+/// Decide the columns: `--full` (the canonical full order), else an explicit
+/// `--columns`, else the configured default.
 fn resolve_columns(
     display: &DisplayArgs,
     cfg: &DisplayConfig,
     tasks: &[&TaskState],
 ) -> Vec<String> {
     if display.full {
-        full_columns(tasks)
+        full_columns(tasks, cfg)
     } else if let Some(cols) = &display.columns {
         cols.clone()
     } else {
@@ -1268,14 +1268,28 @@ fn resolve_columns(
     }
 }
 
-/// The "full" column set for a slice of tasks: `id` + every custom field seen
-/// (deduplicated and sorted) + `deps`. Used by `--full` and by `show`'s default.
-fn full_columns(tasks: &[&TaskState]) -> Vec<String> {
-    let fields: std::collections::BTreeSet<&String> =
-        tasks.iter().flat_map(|t| t.custom_fields.keys()).collect();
-    let mut cols = vec!["id".to_string()];
-    cols.extend(fields.into_iter().cloned());
-    cols.push("deps".to_string());
+/// The canonical, fully-deterministic column order for an all-fields view
+/// (`--full` and `show`'s default): the configured `columns` in their exact
+/// order first — so `deps` (and any built-in) keeps its configured slot — then
+/// every other field present on the tasks, sorted alphabetically. The built-ins
+/// `id`/`deps` are always covered even if the configured list omits them. Both
+/// human and JSON rendering consume this same order, so their columns match.
+fn full_columns(tasks: &[&TaskState], cfg: &DisplayConfig) -> Vec<String> {
+    let listed: HashSet<&str> = cfg.columns.iter().map(String::as_str).collect();
+    // The universe a full view must cover: the built-ins plus every custom field
+    // present on any task. Whatever isn't already a configured column gets
+    // appended in alphabetical order (BTreeSet), keeping the tail deterministic.
+    let mut extras: BTreeSet<&str> = BTreeSet::from(["id", "deps"]);
+    for t in tasks {
+        extras.extend(t.custom_fields.keys().map(String::as_str));
+    }
+    let mut cols = cfg.columns.clone();
+    cols.extend(
+        extras
+            .into_iter()
+            .filter(|f| !listed.contains(f))
+            .map(String::from),
+    );
     cols
 }
 
@@ -1495,13 +1509,14 @@ mod tests {
         let state = state_of(&store).unwrap();
         let task = state.get("api").unwrap();
 
-        // `show`'s default column set is id + the task's own fields (sorted) + deps,
-        // so every field of the task is rendered.
-        let cols = full_columns(&[task]);
+        // `show`'s default columns follow the canonical order: the configured
+        // columns in order (default id,title,status,deps), then any remaining
+        // field alphabetically — so `priority` lands after the configured tail.
+        let cols = full_columns(&[task], &DisplayConfig::default());
         assert_eq!(
             cols,
-            ["id", "priority", "status", "deps"],
-            "full set: {cols:?}"
+            ["id", "title", "status", "deps", "priority"],
+            "canonical full set: {cols:?}"
         );
         let json = render_json(&[task], &cols);
         assert!(json.contains(r#""status":"open""#), "show full: {json}");
@@ -1514,6 +1529,54 @@ mod tests {
             cmd_show(&store, "nope", &d, &DisplayConfig::default()).is_err(),
             "unknown id must error"
         );
+    }
+
+    #[test]
+    fn canonical_full_order_shared_by_human_and_json() {
+        // Configured columns come first in their exact order; remaining fields
+        // follow alphabetically. `deps` keeps its configured slot.
+        let cfg = DisplayConfig {
+            columns: vec!["id".into(), "status".into(), "deps".into()],
+            max_width: 0,
+            column_max_width: BTreeMap::new(),
+        };
+        let t = task(
+            "api",
+            &["db"],
+            &[
+                ("zeta", serde_json::json!(1)),
+                ("status", serde_json::json!("open")),
+                ("alpha", serde_json::json!(2)),
+            ],
+        );
+        let cols = full_columns(&[&t], &cfg);
+        assert_eq!(
+            cols,
+            ["id", "status", "deps", "alpha", "zeta"],
+            "configured order then alphabetical extras: {cols:?}"
+        );
+
+        // The human header tokens are exactly the columns, in order.
+        let full = display(OutputFormat::Human, true, None);
+        let human = render_human(&[&t], &cols, &truncation_caps(&cols, &full, &cfg));
+        let header: Vec<String> = human
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        let expected: Vec<String> = cols.iter().map(|c| c.to_uppercase()).collect();
+        assert_eq!(header, expected, "human header follows canonical order");
+
+        // The JSON keys appear in the identical order.
+        let json = render_json(&[&t], &cols);
+        let mut last = 0;
+        for c in &cols {
+            let at = json.find(&format!("\"{c}\"")).unwrap();
+            assert!(at >= last, "json key `{c}` out of canonical order: {json}");
+            last = at;
+        }
     }
 
     #[test]
