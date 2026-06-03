@@ -16,7 +16,7 @@ use crate::error::DynError;
 use crate::git;
 use crate::graph;
 use crate::merge;
-use crate::model::{MutationEvent, OpType, TaskState};
+use crate::model::{is_done, MutationEvent, OpType, TaskState};
 use crate::storage::{EventStore, FileStore};
 
 #[derive(Parser)]
@@ -663,19 +663,14 @@ fn status_summary(
         }
     }
     let ready = graph::ready_tasks(state, field, done)?.len();
-    let closed = state
-        .values()
-        .filter(|t| graph::is_done(t, field, done))
-        .count();
+    let closed = state.values().filter(|t| is_done(t, field, done)).count();
     let blocked = state
         .values()
         .filter(|t| {
-            !graph::is_done(t, field, done)
-                && t.depends_on.iter().any(|d| {
-                    state
-                        .get(d)
-                        .is_some_and(|dep| !graph::is_done(dep, field, done))
-                })
+            !is_done(t, field, done)
+                && t.depends_on
+                    .iter()
+                    .any(|d| state.get(d).is_some_and(|dep| !is_done(dep, field, done)))
         })
         .count();
     Ok(StatusSummary {

@@ -5,7 +5,7 @@ use std::hash::BuildHasher;
 
 use petgraph::graphmap::DiGraphMap;
 
-use crate::model::TaskState;
+use crate::model::{is_done, TaskState};
 
 /// Validate the dependency DAG and return a topological ordering
 /// (dependencies before dependents). Errors on any cycle.
@@ -36,15 +36,6 @@ pub fn validate_and_sort_dependencies<S: BuildHasher>(
         .collect();
 
     Ok(sorted)
-}
-
-/// Whether a task counts as complete: its `status_field` equals `done_status`.
-/// Shared with the `status` summary so "done" means the same thing everywhere.
-pub fn is_done(task: &TaskState, status_field: &str, done_status: &str) -> bool {
-    task.custom_fields
-        .get(status_field)
-        .and_then(|v| v.as_str())
-        == Some(done_status)
 }
 
 /// Tasks that are not yet done and whose every existing dependency is done.

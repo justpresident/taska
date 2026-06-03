@@ -7,9 +7,8 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
-use serde_json::Value;
 
-use crate::model::{MutationEvent, OpType, TaskState};
+use crate::model::{is_done, MutationEvent, OpType, TaskState};
 
 pub struct Engine;
 
@@ -71,10 +70,6 @@ impl Engine {
             baseline.into_iter().map(|t| (t.id.clone(), t)).collect();
         let mut orphans: Vec<u64> = Vec::new();
 
-        let is_done = |task: &TaskState| {
-            task.custom_fields.get(status_field).and_then(Value::as_str) == Some(done_status)
-        };
-
         for event in mutations {
             let ts = event.timestamp;
             match event.op {
@@ -92,7 +87,7 @@ impl Engine {
                                 update_time: None,
                                 close_time: None,
                             });
-                    let was_done = is_done(entry);
+                    let was_done = is_done(entry, status_field, done_status);
                     for (k, v) in event.payload {
                         // A null value unsets the field (the field-unset convention),
                         // so it never reaches state, output, search, or the baseline.
@@ -107,11 +102,16 @@ impl Engine {
                         entry.create_time = Some(ts);
                     }
                     entry.update_time = Some(ts);
-                    refresh_close_time(entry, was_done, is_done(entry), ts);
+                    refresh_close_time(
+                        entry,
+                        was_done,
+                        is_done(entry, status_field, done_status),
+                        ts,
+                    );
                 }
                 OpType::Update => {
                     if let Some(task) = state_map.get_mut(&event.task_id) {
-                        let was_done = is_done(task);
+                        let was_done = is_done(task, status_field, done_status);
                         for (k, v) in event.payload {
                             // A null value unsets the field (see Create above).
                             if v.is_null() {
@@ -121,7 +121,12 @@ impl Engine {
                             }
                         }
                         task.update_time = Some(ts);
-                        refresh_close_time(task, was_done, is_done(task), ts);
+                        refresh_close_time(
+                            task,
+                            was_done,
+                            is_done(task, status_field, done_status),
+                            ts,
+                        );
                     } else {
                         orphans.push(event.seq);
                     }
@@ -204,7 +209,7 @@ impl Engine {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     fn ev(op: OpType, id: &str, payload: serde_json::Map<String, Value>) -> MutationEvent {
         MutationEvent::new(op, id, payload)

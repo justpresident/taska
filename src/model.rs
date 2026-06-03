@@ -109,6 +109,15 @@ pub struct TaskState {
     pub close_time: Option<DateTime<Utc>>,
 }
 
+/// Whether a task counts as done: its `status_field` equals `done_status`.
+///
+/// A pure predicate over [`TaskState`] (no I/O, no config dependency), so the
+/// engine (computing `close_time`), the graph (readiness), and the `status`
+/// summary all agree on what "done" means without duplicating the check.
+pub fn is_done(task: &TaskState, status_field: &str, done_status: &str) -> bool {
+    task.custom_fields.get(status_field).and_then(Value::as_str) == Some(done_status)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
