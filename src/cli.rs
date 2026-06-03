@@ -29,14 +29,18 @@ struct Cli {
 /// are rendered, never *which* fields show — that is `--columns`/`--full`/config.
 #[derive(ValueEnum, Clone, Copy, PartialEq, Eq)]
 enum OutputFormat {
+    /// Aligned human table.
     Human,
+    /// Pretty JSON array.
     Json,
+    /// Newline-delimited JSON (one object per line).
+    Jsonl,
 }
 
 /// Display flags shared by `list`, `search`, and `ready`.
 #[derive(Args, Clone)]
 struct DisplayArgs {
-    /// Render as an aligned table (human) or a JSON array (json)
+    /// Output format: human (aligned table), json (array), or jsonl (NDJSON)
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     format: OutputFormat,
     /// Show every field, not just the configured columns
@@ -555,6 +559,7 @@ fn cmd_show(
         .map_or_else(|| full_columns(&tasks, cfg), Clone::clone);
     let output = match display.format {
         OutputFormat::Json => render_json(&tasks, &columns),
+        OutputFormat::Jsonl => render_jsonl(&tasks, &columns),
         OutputFormat::Human => {
             render_human(&tasks, &columns, &truncation_caps(&columns, display, cfg))
         }
@@ -646,7 +651,8 @@ fn cmd_status(
     let state = state_of(store)?;
     let summary = status_summary(&state, workflow)?;
     let out = match format {
-        OutputFormat::Json => render_status_json(&summary),
+        // The summary is a single object, so json and jsonl render identically.
+        OutputFormat::Json | OutputFormat::Jsonl => render_status_json(&summary),
         OutputFormat::Human => render_status_human(&summary),
     };
     println!("{out}");
@@ -1225,6 +1231,7 @@ fn render(tasks: &[&TaskState], display: &DisplayArgs, cfg: &DisplayConfig, empt
     let columns = resolve_columns(display, cfg, tasks);
     match display.format {
         OutputFormat::Json => render_json(tasks, &columns),
+        OutputFormat::Jsonl => render_jsonl(tasks, &columns),
         OutputFormat::Human if tasks.is_empty() => empty.to_string(),
         OutputFormat::Human => {
             render_human(tasks, &columns, &truncation_caps(&columns, display, cfg))
@@ -1268,28 +1275,36 @@ fn resolve_columns(
     }
 }
 
-/// The canonical, fully-deterministic column order for an all-fields view
-/// (`--full` and `show`'s default): the configured `columns` in their exact
-/// order first — so `deps` (and any built-in) keeps its configured slot — then
-/// every other field present on the tasks, sorted alphabetically. The built-ins
-/// `id`/`deps` are always covered even if the configured list omits them. Both
-/// human and JSON rendering consume this same order, so their columns match.
+/// The canonical column order for an all-fields view (`--full` and `show`'s
+/// default): the configured `columns` that are actually present, in their exact
+/// configured order — so `deps` keeps its slot — then every other present field
+/// sorted alphabetically. The built-ins `id`/`deps` are always covered. A
+/// configured column that no task in the view has is dropped, so a single-task
+/// `show` and `--full` never pad with empty columns. Both human and JSON
+/// rendering consume this same order, so their columns match.
 fn full_columns(tasks: &[&TaskState], cfg: &DisplayConfig) -> Vec<String> {
-    let listed: HashSet<&str> = cfg.columns.iter().map(String::as_str).collect();
-    // The universe a full view must cover: the built-ins plus every custom field
-    // present on any task. Whatever isn't already a configured column gets
-    // appended in alphabetical order (BTreeSet), keeping the tail deterministic.
-    let mut extras: BTreeSet<&str> = BTreeSet::from(["id", "deps"]);
+    // Every field present across the view, plus the always-shown built-ins.
+    let mut present: BTreeSet<&str> = BTreeSet::from(["id", "deps"]);
     for t in tasks {
-        extras.extend(t.custom_fields.keys().map(String::as_str));
+        present.extend(t.custom_fields.keys().map(String::as_str));
     }
-    let mut cols = cfg.columns.clone();
-    cols.extend(
-        extras
-            .into_iter()
-            .filter(|f| !listed.contains(f))
-            .map(String::from),
-    );
+    // Configured columns that are present, in configured order...
+    let mut cols: Vec<String> = cfg
+        .columns
+        .iter()
+        .filter(|c| present.contains(c.as_str()))
+        .cloned()
+        .collect();
+    // ...then the remaining present fields (incl. id/deps if unconfigured),
+    // alphabetically (BTreeSet) for a deterministic tail.
+    let listed: HashSet<&str> = cols.iter().map(String::as_str).collect();
+    let tail: Vec<String> = present
+        .into_iter()
+        .filter(|f| !listed.contains(f))
+        .map(String::from)
+        .collect();
+    drop(listed);
+    cols.extend(tail);
     cols
 }
 
@@ -1330,24 +1345,49 @@ fn format_row(cells: &[String], widths: &[usize]) -> String {
         .to_string()
 }
 
+/// Pretty JSON array: one indented object per line, wrapped in `[ ]`.
 fn render_json(tasks: &[&TaskState], columns: &[String]) -> String {
     if tasks.is_empty() {
         return "[]".to_string();
     }
     let objects: Vec<String> = tasks
         .iter()
-        .map(|t| {
-            let pairs: Vec<String> = columns
-                .iter()
-                .map(|c| {
-                    let key = serde_json::to_string(c).unwrap_or_default();
-                    format!("{key}:{}", json_cell(t, c))
-                })
-                .collect();
-            format!("  {{{}}}", pairs.join(","))
-        })
+        .map(|t| format!("  {}", json_object(t, columns)))
         .collect();
     format!("[\n{}\n]", objects.join(",\n"))
+}
+
+/// Newline-delimited JSON (NDJSON): one compact object per line, no array
+/// wrapper — better for streaming, `grep`, and agents. Empty input yields no
+/// lines (an empty string).
+fn render_jsonl(tasks: &[&TaskState], columns: &[String]) -> String {
+    tasks
+        .iter()
+        .map(|t| json_object(t, columns))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// One task as a compact JSON object over `columns`, in order. A column the task
+/// lacks is OMITTED rather than emitted as null; only the built-ins `id`/`deps`
+/// are always present (`deps` is `[]` when empty, which is data, not absence).
+fn json_object(task: &TaskState, columns: &[String]) -> String {
+    let pairs: Vec<String> = columns
+        .iter()
+        .filter(|c| cell_present(task, c))
+        .map(|c| {
+            let key = serde_json::to_string(c).unwrap_or_default();
+            format!("{key}:{}", json_cell(task, c))
+        })
+        .collect();
+    format!("{{{}}}", pairs.join(","))
+}
+
+/// Whether a column has a value to emit for this task in JSON: the built-ins
+/// always do; a custom field only when the task actually carries it (a null is
+/// never stored, so "contains the key" means "has a real value").
+fn cell_present(task: &TaskState, col: &str) -> bool {
+    matches!(col, "id" | "deps") || task.custom_fields.contains_key(col)
 }
 
 /// A field's value for the human table: bare string, or compact JSON otherwise.
@@ -1363,7 +1403,8 @@ fn human_cell(task: &TaskState, col: &str) -> String {
     }
 }
 
-/// A field's value as a JSON literal; a task missing the field yields `null`.
+/// A field's value as a JSON literal. Only ever called for a column the task
+/// has (see `cell_present`); the `null` fallback is defensive, not emitted.
 fn json_cell(task: &TaskState, col: &str) -> String {
     match col {
         "id" => serde_json::to_string(&task.id).unwrap_or_default(),
@@ -1509,14 +1550,15 @@ mod tests {
         let state = state_of(&store).unwrap();
         let task = state.get("api").unwrap();
 
-        // `show`'s default columns follow the canonical order: the configured
-        // columns in order (default id,title,status,deps), then any remaining
-        // field alphabetically — so `priority` lands after the configured tail.
+        // `show`'s default columns follow the canonical order, but only over
+        // fields the task actually has: the configured columns that are present
+        // (id, status, deps — `title` is dropped, this task has none), then any
+        // remaining present field alphabetically (priority).
         let cols = full_columns(&[task], &DisplayConfig::default());
         assert_eq!(
             cols,
-            ["id", "title", "status", "deps", "priority"],
-            "canonical full set: {cols:?}"
+            ["id", "status", "deps", "priority"],
+            "canonical present-only set: {cols:?}"
         );
         let json = render_json(&[task], &cols);
         assert!(json.contains(r#""status":"open""#), "show full: {json}");
@@ -1671,21 +1713,54 @@ mod tests {
     }
 
     #[test]
-    fn all_unions_fields_and_empty_json_is_brackets() {
+    fn all_unions_fields_but_each_object_omits_absent_ones() {
         let a = task("a", &[], &[("x", serde_json::json!(1))]);
         let b = task("b", &[], &[("y", serde_json::json!(2))]);
         let d = display(OutputFormat::Json, true, None);
         let out = render(&[&a, &b], &d, &DisplayConfig::default(), "(none)");
-        // --full unions fields: both x and y appear as keys.
+        // --full unions the column set: both x and y appear across the array.
         assert!(
             out.contains("\"x\"") && out.contains("\"y\""),
             "union: {out}"
         );
-        // a missing field is null, not absent.
-        assert!(out.contains("\"y\":null"), "missing field is null: {out}");
+        // But an absent field is OMITTED, never emitted as null — no nulls anywhere.
+        assert!(
+            !out.contains("null"),
+            "absent fields omitted, not null: {out}"
+        );
 
         let empty = render(&[], &d, &DisplayConfig::default(), "(none)");
         assert_eq!(empty, "[]", "empty json is []");
+    }
+
+    #[test]
+    fn jsonl_is_one_object_per_line_omitting_absent_fields() {
+        let a = task("a", &["d"], &[("x", serde_json::json!(1))]);
+        let b = task("b", &[], &[("y", serde_json::json!(2))]);
+        let d = display(OutputFormat::Jsonl, true, None);
+        let out = render(&[&a, &b], &d, &DisplayConfig::default(), "(none)");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2, "one object per line: {out}");
+        // Each line is a standalone object (no array brackets), absent keys gone.
+        for line in &lines {
+            let v: Value = serde_json::from_str(line).unwrap();
+            assert!(v.is_object(), "each line is a JSON object: {line}");
+        }
+        assert!(
+            lines[0].contains(r#""x":1"#) && !lines[0].contains("\"y\""),
+            "a: {}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains(r#""y":2"#) && !lines[1].contains("\"x\""),
+            "b: {}",
+            lines[1]
+        );
+        // deps is a built-in: always present, [] when empty (data, not absence).
+        assert!(lines[0].contains(r#""deps":["d"]"#) && lines[1].contains(r#""deps":[]"#));
+
+        // Empty input yields no lines.
+        assert_eq!(render(&[], &d, &DisplayConfig::default(), "(none)"), "");
     }
 
     #[test]

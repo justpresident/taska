@@ -81,6 +81,11 @@ $ ta list --format json
   {"id":"deploy-api","title":"Deploy the API","status":"open","deps":["migrate-db"]},
   {"id":"migrate-db","title":"Run DB migration","status":"closed","deps":[]}
 ]
+
+# --format jsonl is NDJSON — one object per line, ideal for streaming/grep:
+$ ta list --format jsonl
+{"id":"deploy-api","title":"Deploy the API","status":"open","deps":["migrate-db"]}
+{"id":"migrate-db","title":"Run DB migration","status":"closed","deps":[]}
 ```
 
 Commit `.taska/` and `.gitattributes` along with your code — they travel with the repo.
@@ -170,7 +175,7 @@ title = 80
 | `ta search <criteria>...` | List tasks matching all AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`; `field` may be a task field, `id`, or `deps` (e.g. `ta search status~open priority=3`) |
 | `ta show <id>` | Show a single task with all of its fields |
 | `ta ready` | Not-done tasks whose dependencies are all done |
-| `ta status` | Summary counts: total, per-status (discovered from the data), blocked, ready, and closed (`--format json` for a machine-readable object) |
+| `ta status` | Summary counts: total, per-status (discovered from the data), blocked, ready, and closed (`--format json`/`jsonl` for a machine-readable object) |
 | `ta undo [--count N] [--remove] [--force]` | Reverse the last N events: truncate uncommitted ones, append compensating events for committed ones (`--remove` to force truncation) |
 | `ta compact` | Fold old events into the baseline snapshot |
 | `ta config get\|set\|list [key] [value]` | View or change `.taska/config.toml` by dotted key (e.g. `ta config set compaction.keep_events 500`); `set` validates and preserves comments |
@@ -178,7 +183,7 @@ title = 80
 
 Field values are parsed as JSON when possible (`priority=3` is a number, `status=open` a string). The keys `seq`, `timestamp`, `op`, `task_id`, and `_meta` are reserved.
 
-`list`, `search`, and `ready` share display flags: `--format human|json` (json is a parseable array, ideal for agents and `jq`), `--full` to show every field, and `--columns id,status,…` to pick the columns for one run. The defaults and `max_width` live in `[display]`.
+`list`, `search`, `ready`, and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON — one object per line — for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, and `--columns id,status,…` to pick the columns for one run. The defaults and `max_width` live in `[display]`.
 
 ## Storage layout
 

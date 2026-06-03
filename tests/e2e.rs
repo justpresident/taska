@@ -396,6 +396,61 @@ fn rows(path: &Path) -> usize {
 }
 
 #[test]
+fn jsonl_output_across_commands_omits_absent_fields() {
+    let dir = fresh_dir("jsonl");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "api", "status=open", "priority=3"]);
+    ta(&dir, &["create", "db", "status=closed"]);
+    ta(&dir, &["block", "api", "db"]);
+
+    // list/search/ready/show all speak jsonl: one bare object per line, no array
+    // wrapper, and never a null for an absent field.
+    for args in [
+        vec!["list", "--full", "--format", "jsonl"],
+        vec!["search", "status=open", "--format", "jsonl"],
+        vec!["ready", "--format", "jsonl"],
+        vec!["show", "api", "--format", "jsonl"],
+    ] {
+        let out = ta(&dir, &args);
+        // No top-level array wrapper (a `deps` value may still be an array).
+        assert!(
+            !out.trim_start().starts_with('['),
+            "no array wrapper in `{}`: {out}",
+            args.join(" ")
+        );
+        assert!(
+            !out.contains("null"),
+            "no null in `{}`: {out}",
+            args.join(" ")
+        );
+        for line in out.lines().filter(|l| !l.trim().is_empty()) {
+            assert!(
+                line.starts_with('{') && line.ends_with('}'),
+                "bare object: {line}"
+            );
+        }
+    }
+
+    // The full row for api carries its present fields and omits the title it lacks.
+    let full = ta(&dir, &["list", "--full", "--format", "jsonl"]);
+    let api = full.lines().find(|l| l.contains("\"api\"")).unwrap();
+    assert!(
+        api.contains(r#""priority":3"#) && !api.contains("title"),
+        "api: {api}"
+    );
+
+    // status --format jsonl is the single summary object.
+    let status = ta(&dir, &["status", "--format", "jsonl"]);
+    assert_eq!(
+        status.lines().count(),
+        1,
+        "status jsonl is one line: {status}"
+    );
+    assert!(status.contains(r#""total":2"#), "status: {status}");
+}
+
+#[test]
 fn search_supports_regex_negation_and_combined_criteria() {
     let dir = fresh_dir("search-improve");
     init_repo(&dir);
@@ -1382,14 +1437,11 @@ fn null_value_unset_is_reflected_in_list_and_search() {
     );
     let list = ta(&dir, &["list", "--format", "json"]);
     assert!(!list.contains("bob"), "owner value gone from list: {list}");
+    // show is a single task: the unset `owner` field vanishes entirely (no key,
+    // no null), and JSON never carries a null for an absent field.
     let show = ta(&dir, &["show", "x", "--format", "json"]);
-    assert!(!show.contains("bob"), "owner value gone from show: {show}");
-    // `owner` is a configured column, so it still appears — but as null, which
-    // is exactly how a missing field renders (the value is unset, not blanked).
-    assert!(
-        show.contains(r#""owner":null"#),
-        "owner unset -> null: {show}"
-    );
+    assert!(!show.contains("owner"), "owner gone from show: {show}");
+    assert!(!show.contains("null"), "no null in json: {show}");
     assert!(
         show.contains(r#""status":"open""#),
         "status preserved: {show}"
