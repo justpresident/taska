@@ -278,8 +278,8 @@ fn full_flag_disables_truncation_in_human_output() {
     let dir = fresh_dir("full-no-truncate");
     init_repo(&dir);
     ta(&dir, &["init"]);
-    // A title well past the default max_width (40), so it would otherwise be cut.
-    let long = "This title is considerably longer than forty characters so it gets truncated";
+    // A title well past the default title cap (80), so it would otherwise be cut.
+    let long = "This title is considerably longer than eighty characters in total, well past the per-column title override, so it still gets truncated by default";
     ta(&dir, &["create", "a", &format!("title={long}")]);
 
     // Default human view truncates with an ellipsis and drops the tail.
@@ -290,6 +290,53 @@ fn full_flag_disables_truncation_in_human_output() {
     // --full prints the whole value, no ellipsis.
     let full = ta(&dir, &["list", "--full"]);
     assert!(full.contains(long), "--full prints untruncated: {full}");
+    assert!(!full.contains('…'), "--full adds no ellipsis: {full}");
+}
+
+#[test]
+fn per_column_max_width_overrides_the_global_default() {
+    let dir = fresh_dir("per-column-width");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // Global cap of 10, but `title` overridden to 80.
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[display]\ncolumns = [\"id\", \"title\", \"notes\"]\nmax_width = 10\n\
+         [display.column_max_width]\ntitle = 80\n",
+    )
+    .unwrap();
+
+    let long_title = "A title that is far longer than ten characters but under eighty";
+    let long_notes = "Notes that also exceed ten characters and should be cut";
+    ta(
+        &dir,
+        &[
+            "create",
+            "a",
+            &format!("title={long_title}"),
+            &format!("notes={long_notes}"),
+        ],
+    );
+
+    let human = ta(&dir, &["list"]);
+    // title uses its own 80-wide cap, so the whole value survives...
+    assert!(
+        human.contains(long_title),
+        "title kept under its override: {human}"
+    );
+    // ...while notes falls back to the global 10 and is truncated.
+    assert!(!human.contains(long_notes), "notes truncated: {human}");
+    assert!(
+        human.contains('…'),
+        "ellipsis from the notes column: {human}"
+    );
+
+    // --full still ignores the per-column map and prints everything.
+    let full = ta(&dir, &["list", "--full"]);
+    assert!(
+        full.contains(long_notes),
+        "--full prints notes whole: {full}"
+    );
     assert!(!full.contains('…'), "--full adds no ellipsis: {full}");
 }
 

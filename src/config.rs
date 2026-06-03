@@ -6,6 +6,7 @@
 //! driver reconciles concurrent branches. Every key here is honored somewhere —
 //! this file is not a list of aspirations.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,14 @@ pub fn default_toml() -> String {
         .map(|c| format!("\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
+    // The `[display.column_max_width]` sub-table, one `name = width` per entry.
+    // Keys are quoted so a column name with TOML-special characters round-trips.
+    let column_max_width = display
+        .column_max_width
+        .iter()
+        .map(|(k, v)| format!("\"{k}\" = {v}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         r#"# taska configuration
 #
@@ -85,8 +94,14 @@ on_conflict = "{on_conflict}"
 # is a task field (blank when a task lacks it). Override per command with
 # `--columns a,b,c` or `--full`.
 columns = [{columns}]
-# Truncate long human cell values to this many characters (0 = no limit).
+# Truncate long human cell values to this many characters (0 = no limit). This
+# is the global fallback for any column not overridden below.
 max_width = {max_width}
+
+# Per-column truncation overrides. A column listed here is truncated to its own
+# width instead of max_width (0 = no limit). `--full` ignores these entirely.
+[display.column_max_width]
+{column_max_width}
 "#,
         min_keep = MIN_KEEP_EVENTS,
         keep_events = compaction.keep_events,
@@ -96,6 +111,7 @@ max_width = {max_width}
         on_conflict = on_conflict,
         columns = columns,
         max_width = display.max_width,
+        column_max_width = column_max_width,
     )
 }
 
@@ -190,8 +206,13 @@ pub struct DisplayConfig {
     /// Columns shown in human format and the field order used by `--format json`,
     /// in order. `id` and `deps` are built-ins; any other name is a task field.
     pub columns: Vec<String>,
-    /// Truncate human cell values to this many characters (0 = no limit).
+    /// Truncate human cell values to this many characters (0 = no limit). The
+    /// global fallback for any column not listed in `column_max_width`.
     pub max_width: usize,
+    /// Per-column truncation overrides: a column named here truncates to its own
+    /// width instead of `max_width` (0 = no limit). `--full` ignores these. A
+    /// `BTreeMap` so the rendered config is deterministically ordered.
+    pub column_max_width: BTreeMap<String, usize>,
 }
 
 impl Default for DisplayConfig {
@@ -202,6 +223,9 @@ impl Default for DisplayConfig {
                 .map(|s| (*s).to_string())
                 .collect(),
             max_width: 40,
+            // Titles are usually the longest field, so give them more room than
+            // the global default out of the box.
+            column_max_width: std::iter::once(("title".to_string(), 80)).collect(),
         }
     }
 }

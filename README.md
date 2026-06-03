@@ -144,8 +144,14 @@ on_conflict = "surface"
 # "id" and "deps" are built-ins; any other name is a task field. Override per
 # command with --columns id,status or --full.
 columns = ["id", "title", "status", "deps"]
-# Truncate long human cell values to this many characters (0 = no limit).
+# Truncate long human cell values to this many characters (0 = no limit). The
+# global fallback for any column not overridden below.
 max_width = 40
+
+# Per-column truncation overrides: a column listed here is truncated to its own
+# width instead of max_width (0 = no limit). --full ignores these entirely.
+[display.column_max_width]
+title = 80
 ```
 
 ## Commands

@@ -410,7 +410,9 @@ fn cmd_show(
         .map_or_else(|| full_columns(&tasks), Clone::clone);
     let output = match display.format {
         OutputFormat::Json => render_json(&tasks, &columns),
-        OutputFormat::Human => render_human(&tasks, &columns, effective_max_width(display, cfg)),
+        OutputFormat::Human => {
+            render_human(&tasks, &columns, &truncation_caps(&columns, display, cfg))
+        }
     };
     println!("{output}");
     Ok(())
@@ -935,20 +937,30 @@ fn render(tasks: &[&TaskState], display: &DisplayArgs, cfg: &DisplayConfig, empt
     match display.format {
         OutputFormat::Json => render_json(tasks, &columns),
         OutputFormat::Human if tasks.is_empty() => empty.to_string(),
-        OutputFormat::Human => render_human(tasks, &columns, effective_max_width(display, cfg)),
+        OutputFormat::Human => {
+            render_human(tasks, &columns, &truncation_caps(&columns, display, cfg))
+        }
     }
 }
 
-/// The truncation width to apply: `--full` prints values untruncated (0 is the
-/// "no limit" sentinel `truncate` already honors), so it reads the *complete*
-/// view it asked for. Without `--full`, the configured `max_width` still governs
-/// the default and `--columns` views.
-const fn effective_max_width(display: &DisplayArgs, cfg: &DisplayConfig) -> usize {
-    if display.full {
-        0
-    } else {
-        cfg.max_width
-    }
+/// The per-column truncation cap, one entry per column (0 = no limit, which
+/// `truncate` already honors). `--full` prints everything untruncated, so every
+/// column gets cap 0. Otherwise a column listed in `[display.column_max_width]`
+/// uses its own width and the rest fall back to the global `max_width`.
+fn truncation_caps(columns: &[String], display: &DisplayArgs, cfg: &DisplayConfig) -> Vec<usize> {
+    columns
+        .iter()
+        .map(|c| {
+            if display.full {
+                0
+            } else {
+                cfg.column_max_width
+                    .get(c)
+                    .copied()
+                    .unwrap_or(cfg.max_width)
+            }
+        })
+        .collect()
 }
 
 /// Decide the columns: `--full` (id + every field seen, sorted, + deps), else an
@@ -978,14 +990,17 @@ fn full_columns(tasks: &[&TaskState]) -> Vec<String> {
     cols
 }
 
-fn render_human(tasks: &[&TaskState], columns: &[String], max_width: usize) -> String {
+/// Render the aligned human table. `caps[i]` is the truncation width for column
+/// `i` (0 = no limit); the caller derives it from config/`--full` per column.
+fn render_human(tasks: &[&TaskState], columns: &[String], caps: &[usize]) -> String {
     let headers: Vec<String> = columns.iter().map(|c| c.to_uppercase()).collect();
     let rows: Vec<Vec<String>> = tasks
         .iter()
         .map(|t| {
             columns
                 .iter()
-                .map(|c| truncate(&human_cell(t, c), max_width))
+                .enumerate()
+                .map(|(i, c)| truncate(&human_cell(t, c), caps[i]))
                 .collect()
         })
         .collect();
@@ -1335,6 +1350,7 @@ mod tests {
         let cfg = DisplayConfig {
             columns: vec!["id".into(), "notes".into()],
             max_width: 20,
+            column_max_width: BTreeMap::new(),
         };
 
         // --full: the full value survives, no ellipsis.
@@ -1365,6 +1381,46 @@ mod tests {
             "(none)",
         );
         assert!(cols.contains('…'), "--columns still truncates: {cols}");
+    }
+
+    #[test]
+    fn per_column_max_width_overrides_the_global() {
+        // `notes` gets a wide override (60); `summary` falls back to max_width (10).
+        let long = "0123456789abcdefghij"; // 20 chars
+        let t = task(
+            "api",
+            &[],
+            &[
+                ("notes", serde_json::json!(long)),
+                ("summary", serde_json::json!(long)),
+            ],
+        );
+        let cfg = DisplayConfig {
+            columns: vec!["id".into(), "notes".into(), "summary".into()],
+            max_width: 10,
+            column_max_width: std::iter::once(("notes".to_string(), 60)).collect(),
+        };
+        let out = render(
+            &[&t],
+            &display(OutputFormat::Human, false, None),
+            &cfg,
+            "(none)",
+        );
+        // notes keeps all 20 chars (override 60 > 20, no ellipsis); summary is cut.
+        assert!(out.contains(long), "notes column not truncated: {out}");
+        assert!(
+            out.contains('…'),
+            "summary column truncated to max_width: {out}"
+        );
+
+        // --full ignores the per-column map entirely: both survive intact.
+        let full = render(
+            &[&t],
+            &display(OutputFormat::Human, true, None),
+            &cfg,
+            "(none)",
+        );
+        assert!(!full.contains('…'), "--full disables truncation: {full}");
     }
 
     fn state(tasks: &[TaskState]) -> HashMap<String, TaskState> {
