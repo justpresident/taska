@@ -27,8 +27,12 @@ pub mod cli;
 pub mod config;
 pub mod engine;
 pub mod error;
+pub mod format;
 pub mod git;
 pub mod graph;
 pub mod merge;
 pub mod model;
 pub mod storage;
+
+#[cfg(test)]
+mod test_support;

@@ -1,0 +1,684 @@
+//! Presentation: how tasks are turned into text.
+//!
+//! The selected columns (`--columns`/`--full`/config) decide *which* fields
+//! appear; `--format` decides only *how* they print, and every format shares the
+//! same column order. This module owns the display flags, column resolution,
+//! sorting, and the human/json/jsonl renderers; the command handlers feed it a
+//! task slice and print the result.
+
+use std::cmp::Ordering;
+use std::collections::{BTreeSet, HashSet};
+
+use clap::{Args, ValueEnum};
+use serde_json::Value;
+
+use crate::config::DisplayConfig;
+use crate::model::TaskState;
+
+/// Output format for the listing commands. `--format` changes only *how* tasks
+/// are rendered, never *which* fields show — that is `--columns`/`--full`/config.
+#[derive(ValueEnum, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputFormat {
+    /// Aligned human table.
+    Human,
+    /// Pretty JSON array.
+    Json,
+    /// Newline-delimited JSON (one object per line).
+    Jsonl,
+}
+
+/// Display flags shared by `list`, `search`, `ready`, and `show`.
+#[derive(Args, Clone)]
+pub(crate) struct DisplayArgs {
+    /// Output format: human (aligned table), json (array), or jsonl (NDJSON)
+    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+    pub(crate) format: OutputFormat,
+    /// Show every field, not just the configured columns
+    #[arg(long)]
+    pub(crate) full: bool,
+    /// Comma-separated columns to show, overriding config (e.g. --columns id,status)
+    #[arg(long, value_delimiter = ',')]
+    pub(crate) columns: Option<Vec<String>>,
+    /// Sort rows by this column (id, deps, or any field), overriding config
+    #[arg(long)]
+    pub(crate) sort: Option<String>,
+    /// Reverse the sort order (descending)
+    #[arg(long)]
+    pub(crate) reverse: bool,
+}
+
+/// Sort a collected task set by the display args and print it, with `empty` as
+/// the human placeholder for no rows. The shared tail of `list`/`search`/`ready`,
+/// each of which differs only in how it gathers the tasks.
+pub(crate) fn print_tasks(
+    mut tasks: Vec<&TaskState>,
+    display: &DisplayArgs,
+    cfg: &DisplayConfig,
+    empty: &str,
+) {
+    sort_tasks(&mut tasks, display, cfg);
+    println!("{}", render(&tasks, display, cfg, empty));
+}
+
+/// Render tasks per the display args. The selected columns decide *which* fields
+/// appear; `--format` decides only how they print, and both formats share the
+/// same field order.
+fn render(tasks: &[&TaskState], display: &DisplayArgs, cfg: &DisplayConfig, empty: &str) -> String {
+    // Only the human table needs an explicit empty placeholder; json/jsonl render
+    // their own empty forms (`[]` / no lines).
+    if display.format == OutputFormat::Human && tasks.is_empty() {
+        return empty.to_string();
+    }
+    let columns = resolve_columns(display, cfg, tasks);
+    render_rows(tasks, &columns, display, cfg)
+}
+
+/// Dispatch the chosen `--format` over an already-resolved column set. Shared by
+/// the multi-row `render` path and single-task `show`, so a new output format is
+/// wired in exactly one place.
+pub(crate) fn render_rows(
+    tasks: &[&TaskState],
+    columns: &[String],
+    display: &DisplayArgs,
+    cfg: &DisplayConfig,
+) -> String {
+    match display.format {
+        OutputFormat::Json => render_json(tasks, columns),
+        OutputFormat::Jsonl => render_jsonl(tasks, columns),
+        OutputFormat::Human => {
+            render_human(tasks, columns, &truncation_caps(columns, display, cfg))
+        }
+    }
+}
+
+/// Sort `tasks` in place by the effective sort column (`--sort`, else the
+/// configured default), ascending, with `id` as a stable tiebreaker; `--reverse`
+/// flips the result. The column may be `id`, `deps`, or any field (including the
+/// injected computed timestamps). Rows lacking the column sort last (ascending);
+/// an empty or unknown column leaves only the `id` tiebreak, i.e. orders by id.
+fn sort_tasks(tasks: &mut [&TaskState], display: &DisplayArgs, cfg: &DisplayConfig) {
+    let column = display.sort.as_deref().unwrap_or(cfg.sort.as_str());
+    tasks.sort_by(|a, b| {
+        let ord = match (cell_value(a, column), cell_value(b, column)) {
+            (Some(x), Some(y)) => cmp_json(&x, &y),
+            (Some(_), None) => Ordering::Less, // a present value sorts before a missing one
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        };
+        ord.then_with(|| a.id.cmp(&b.id))
+    });
+    if display.reverse {
+        tasks.reverse();
+    }
+}
+
+/// The value of `column` for a task as a JSON `Value` — the single source of
+/// truth shared by JSON output, human rendering, and sorting. `id` is the id
+/// string, `deps` the array of dependency ids, and anything else a custom or
+/// computed field. `None` only for a missing custom field (the built-ins always
+/// resolve), which is how JSON omits absent fields and sorting orders them last.
+fn cell_value(task: &TaskState, column: &str) -> Option<Value> {
+    match column {
+        "id" => Some(Value::String(task.id.clone())),
+        "deps" => Some(Value::Array(
+            task.depends_on.iter().cloned().map(Value::String).collect(),
+        )),
+        _ => task.custom_fields.get(column).cloned(),
+    }
+}
+
+/// A total order over heterogeneous JSON scalars: numbers compare numerically,
+/// strings/bools by their natural order, and any mismatch falls back to a stable
+/// per-type rank then the value's string form — so a column holding mixed types
+/// still sorts deterministically.
+fn cmp_json(a: &Value, b: &Value) -> Ordering {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x
+            .as_f64()
+            .partial_cmp(&y.as_f64())
+            .unwrap_or(Ordering::Equal),
+        (Value::String(x), Value::String(y)) => x.cmp(y),
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        _ => value_rank(a)
+            .cmp(&value_rank(b))
+            .then_with(|| a.to_string().cmp(&b.to_string())),
+    }
+}
+
+/// Stable per-type ordinal so values of different JSON types compare consistently.
+const fn value_rank(v: &Value) -> u8 {
+    match v {
+        Value::Null => 0,
+        Value::Bool(_) => 1,
+        Value::Number(_) => 2,
+        Value::String(_) => 3,
+        Value::Array(_) => 4,
+        Value::Object(_) => 5,
+    }
+}
+
+/// The per-column truncation cap, one entry per column (0 = no limit, which
+/// `truncate` already honors). `--full` prints everything untruncated, so every
+/// column gets cap 0. Otherwise a column listed in `[display.column_max_width]`
+/// uses its own width and the rest fall back to the global `max_width`.
+fn truncation_caps(columns: &[String], display: &DisplayArgs, cfg: &DisplayConfig) -> Vec<usize> {
+    columns
+        .iter()
+        .map(|c| {
+            if display.full {
+                0
+            } else {
+                cfg.column_max_width
+                    .get(c)
+                    .copied()
+                    .unwrap_or(cfg.max_width)
+            }
+        })
+        .collect()
+}
+
+/// Decide the columns: `--full` (the canonical full order), else an explicit
+/// `--columns`, else the configured default.
+fn resolve_columns(
+    display: &DisplayArgs,
+    cfg: &DisplayConfig,
+    tasks: &[&TaskState],
+) -> Vec<String> {
+    if display.full {
+        full_columns(tasks, cfg)
+    } else if let Some(cols) = &display.columns {
+        cols.clone()
+    } else {
+        cfg.columns.clone()
+    }
+}
+
+/// The canonical column order for an all-fields view (`--full` and `show`'s
+/// default): the configured `columns` that are actually present, in their exact
+/// configured order — so `deps` keeps its slot — then every other present field
+/// sorted alphabetically. The built-ins `id`/`deps` are always covered. A
+/// configured column that no task in the view has is dropped, so a single-task
+/// `show` and `--full` never pad with empty columns. Both human and JSON
+/// rendering consume this same order, so their columns match.
+pub(crate) fn full_columns(tasks: &[&TaskState], cfg: &DisplayConfig) -> Vec<String> {
+    // Every field present across the view, plus the always-shown built-ins.
+    let mut present: BTreeSet<&str> = BTreeSet::from(["id", "deps"]);
+    for t in tasks {
+        present.extend(t.custom_fields.keys().map(String::as_str));
+    }
+    // Configured columns that are present, in configured order...
+    let mut cols: Vec<String> = cfg
+        .columns
+        .iter()
+        .filter(|c| present.contains(c.as_str()))
+        .cloned()
+        .collect();
+    // ...then the remaining present fields (incl. id/deps if unconfigured),
+    // alphabetically (BTreeSet) for a deterministic tail.
+    let listed: HashSet<&str> = cols.iter().map(String::as_str).collect();
+    let tail: Vec<String> = present
+        .into_iter()
+        .filter(|f| !listed.contains(f))
+        .map(String::from)
+        .collect();
+    drop(listed);
+    cols.extend(tail);
+    cols
+}
+
+/// Render the aligned human table. `caps[i]` is the truncation width for column
+/// `i` (0 = no limit); the caller derives it from config/`--full` per column.
+fn render_human(tasks: &[&TaskState], columns: &[String], caps: &[usize]) -> String {
+    let headers: Vec<String> = columns.iter().map(|c| c.to_uppercase()).collect();
+    let rows: Vec<Vec<String>> = tasks
+        .iter()
+        .map(|t| {
+            columns
+                .iter()
+                .enumerate()
+                .map(|(i, c)| truncate(&human_cell(t, c), caps[i]))
+                .collect()
+        })
+        .collect();
+    let widths: Vec<usize> = (0..columns.len())
+        .map(|i| {
+            let header = headers[i].chars().count();
+            let body = rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0);
+            header.max(body)
+        })
+        .collect();
+    let mut lines = vec![format_row(&headers, &widths)];
+    lines.extend(rows.iter().map(|r| format_row(r, &widths)));
+    lines.join("\n")
+}
+
+fn format_row(cells: &[String], widths: &[usize]) -> String {
+    cells
+        .iter()
+        .zip(widths)
+        .map(|(c, w)| format!("{c:<w$}"))
+        .collect::<Vec<_>>()
+        .join("  ")
+        .trim_end()
+        .to_string()
+}
+
+/// Pretty JSON array: one indented object per line, wrapped in `[ ]`.
+fn render_json(tasks: &[&TaskState], columns: &[String]) -> String {
+    if tasks.is_empty() {
+        return "[]".to_string();
+    }
+    let objects: Vec<String> = tasks
+        .iter()
+        .map(|t| format!("  {}", json_object(t, columns)))
+        .collect();
+    format!("[\n{}\n]", objects.join(",\n"))
+}
+
+/// Newline-delimited JSON (NDJSON): one compact object per line, no array
+/// wrapper — better for streaming, `grep`, and agents. Empty input yields no
+/// lines (an empty string).
+fn render_jsonl(tasks: &[&TaskState], columns: &[String]) -> String {
+    tasks
+        .iter()
+        .map(|t| json_object(t, columns))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// One task as a compact JSON object over `columns`, in order. A column the task
+/// lacks is OMITTED rather than emitted as null; only the built-ins `id`/`deps`
+/// always resolve (`deps` is `[]` when empty, which is data, not absence).
+fn json_object(task: &TaskState, columns: &[String]) -> String {
+    let pairs: Vec<String> = columns
+        .iter()
+        .filter_map(|c| {
+            cell_value(task, c).map(|v| {
+                let key = serde_json::to_string(c).unwrap_or_default();
+                format!("{key}:{}", serde_json::to_string(&v).unwrap_or_default())
+            })
+        })
+        .collect();
+    format!("{{{}}}", pairs.join(","))
+}
+
+/// A column's value for the human table: a bare string, an array joined by
+/// `", "` (so `deps` and any list field read the same), or compact JSON for
+/// anything else. Empty for a column the task lacks.
+fn human_cell(task: &TaskState, col: &str) -> String {
+    cell_value(task, col)
+        .as_ref()
+        .map(human_display)
+        .unwrap_or_default()
+}
+
+/// Render a single JSON value for the human table (see [`human_cell`]).
+fn human_display(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Array(items) => items
+            .iter()
+            .map(human_display)
+            .collect::<Vec<_>>()
+            .join(", "),
+        other => other.to_string(),
+    }
+}
+
+fn truncate(s: &str, max_width: usize) -> String {
+    if max_width == 0 || s.chars().count() <= max_width {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max_width.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
+mod tests {
+    use super::*;
+    use crate::test_support::{display, task};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn full_columns_keeps_present_configured_then_alphabetical() {
+        // Default config columns are id,title,status,deps; this task has no title,
+        // so it is dropped, and the extra `priority` sorts after the configured
+        // tail. JSON over the same columns carries the present fields.
+        let t = task(
+            "api",
+            &[],
+            &[
+                ("status", serde_json::json!("open")),
+                ("priority", serde_json::json!(3)),
+            ],
+        );
+        let cols = full_columns(&[&t], &DisplayConfig::default());
+        assert_eq!(
+            cols,
+            ["id", "status", "deps", "priority"],
+            "canonical present-only set: {cols:?}"
+        );
+        let json = render_json(&[&t], &cols);
+        assert!(json.contains(r#""status":"open""#), "json: {json}");
+        assert!(json.contains(r#""priority":3"#), "json: {json}");
+    }
+
+    #[test]
+    fn canonical_full_order_shared_by_human_and_json() {
+        // Configured columns come first in their exact order; remaining fields
+        // follow alphabetically. `deps` keeps its configured slot.
+        let cfg = DisplayConfig {
+            columns: vec!["id".into(), "status".into(), "deps".into()],
+            max_width: 0,
+            column_max_width: BTreeMap::new(),
+            sort: String::new(),
+        };
+        let t = task(
+            "api",
+            &["db"],
+            &[
+                ("zeta", serde_json::json!(1)),
+                ("status", serde_json::json!("open")),
+                ("alpha", serde_json::json!(2)),
+            ],
+        );
+        let cols = full_columns(&[&t], &cfg);
+        assert_eq!(
+            cols,
+            ["id", "status", "deps", "alpha", "zeta"],
+            "configured order then alphabetical extras: {cols:?}"
+        );
+
+        // The human header tokens are exactly the columns, in order.
+        let full = display(OutputFormat::Human, true, None);
+        let human = render_human(&[&t], &cols, &truncation_caps(&cols, &full, &cfg));
+        let header: Vec<String> = human
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        let expected: Vec<String> = cols.iter().map(|c| c.to_uppercase()).collect();
+        assert_eq!(header, expected, "human header follows canonical order");
+
+        // The JSON keys appear in the identical order.
+        let json = render_json(&[&t], &cols);
+        let mut last = 0;
+        for c in &cols {
+            let at = json.find(&format!("\"{c}\"")).unwrap();
+            assert!(at >= last, "json key `{c}` out of canonical order: {json}");
+            last = at;
+        }
+    }
+
+    #[test]
+    fn sort_tasks_orders_by_column_missing_last_and_reverse() {
+        let pri3 = task("a", &[], &[("priority", serde_json::json!(3))]);
+        let pri1 = task("b", &[], &[("priority", serde_json::json!(1))]);
+        let pri2 = task("c", &[], &[("priority", serde_json::json!(2))]);
+        let none = task("d", &[], &[]); // no priority -> sorts last (ascending)
+        let cfg = DisplayConfig::default();
+        let args = |sort: &str, reverse: bool| DisplayArgs {
+            format: OutputFormat::Human,
+            full: false,
+            columns: None,
+            sort: Some(sort.to_string()),
+            reverse,
+        };
+        let ids =
+            |tasks: &[&TaskState]| -> Vec<String> { tasks.iter().map(|t| t.id.clone()).collect() };
+
+        // Numeric ascending, with the missing-value task last.
+        let mut list = vec![&pri3, &pri1, &pri2, &none];
+        sort_tasks(&mut list, &args("priority", false), &cfg);
+        assert_eq!(ids(&list), ["b", "c", "a", "d"], "asc, missing last");
+
+        // --reverse flips the whole order.
+        let mut list = vec![&pri3, &pri1, &pri2, &none];
+        sort_tasks(&mut list, &args("priority", true), &cfg);
+        assert_eq!(ids(&list), ["d", "a", "c", "b"], "reversed");
+
+        // An unknown column leaves only the id tiebreak (orders by id).
+        let mut list = vec![&pri2, &pri3, &pri1];
+        sort_tasks(&mut list, &args("nope", false), &cfg);
+        assert_eq!(ids(&list), ["a", "b", "c"], "unknown column -> by id");
+    }
+
+    #[test]
+    fn cell_value_unifies_columns_and_human_joins_arrays() {
+        let t = task(
+            "api",
+            &["db", "web"],
+            &[
+                ("tags", serde_json::json!(["x", "y"])),
+                ("priority", serde_json::json!(3)),
+            ],
+        );
+
+        // cell_value is the single source of truth: id string, deps array,
+        // custom passthrough, and None for a missing field.
+        assert_eq!(cell_value(&t, "id"), Some(serde_json::json!("api")));
+        assert_eq!(
+            cell_value(&t, "deps"),
+            Some(serde_json::json!(["db", "web"]))
+        );
+        assert_eq!(cell_value(&t, "priority"), Some(serde_json::json!(3)));
+        assert_eq!(cell_value(&t, "missing"), None);
+
+        // Human cells: bare string, arrays joined so deps and any list field read
+        // the same way, numbers as their text, empty for a missing column.
+        assert_eq!(human_cell(&t, "id"), "api");
+        assert_eq!(human_cell(&t, "deps"), "db, web");
+        assert_eq!(
+            human_cell(&t, "tags"),
+            "x, y",
+            "custom arrays join like deps"
+        );
+        assert_eq!(human_cell(&t, "priority"), "3");
+        assert_eq!(human_cell(&t, "missing"), "");
+    }
+
+    #[test]
+    fn cmp_json_orders_numbers_strings_and_mixed_types() {
+        use serde_json::json;
+        assert_eq!(
+            cmp_json(&json!(2), &json!(10)),
+            Ordering::Less,
+            "numeric, not lexical"
+        );
+        assert_eq!(cmp_json(&json!("a"), &json!("b")), Ordering::Less);
+        // Mixed types fall back to a stable per-type rank (number < string).
+        assert_eq!(cmp_json(&json!(1), &json!("1")), Ordering::Less);
+    }
+
+    #[test]
+    fn human_has_header_and_unquoted_values() {
+        let t = task("api", &["db"], &[("status", serde_json::json!("open"))]);
+        let d = display(OutputFormat::Human, false, Some(&["id", "status", "deps"]));
+        let out = render(&[&t], &d, &DisplayConfig::default(), "(none)");
+        assert!(
+            out.contains("ID") && out.contains("STATUS"),
+            "header: {out}"
+        );
+        assert!(out.lines().any(|l| l.starts_with("api")), "row: {out}");
+        // value is bare `open`, not JSON-quoted, and deps are comma-joined.
+        assert!(
+            out.contains("open") && !out.contains("\"open\""),
+            "unquoted: {out}"
+        );
+        assert!(out.contains("db"), "deps: {out}");
+    }
+
+    #[test]
+    fn json_is_array_in_column_order() {
+        let item = task(
+            "api",
+            &[],
+            &[
+                ("status", serde_json::json!("open")),
+                ("priority", serde_json::json!(3)),
+            ],
+        );
+        let args = display(
+            OutputFormat::Json,
+            false,
+            Some(&["id", "priority", "status"]),
+        );
+        let out = render(&[&item], &args, &DisplayConfig::default(), "(none)");
+        assert!(out.trim_start().starts_with('['), "array: {out}");
+        let id_at = out.find("\"id\"").unwrap();
+        let pri_at = out.find("\"priority\"").unwrap();
+        let status_at = out.find("\"status\"").unwrap();
+        assert!(
+            id_at < pri_at && pri_at < status_at,
+            "keys follow column order: {out}"
+        );
+        assert!(
+            out.contains("\"priority\":3"),
+            "number stays a number: {out}"
+        );
+    }
+
+    #[test]
+    fn all_unions_fields_but_each_object_omits_absent_ones() {
+        let a = task("a", &[], &[("x", serde_json::json!(1))]);
+        let b = task("b", &[], &[("y", serde_json::json!(2))]);
+        let d = display(OutputFormat::Json, true, None);
+        let out = render(&[&a, &b], &d, &DisplayConfig::default(), "(none)");
+        // --full unions the column set: both x and y appear across the array.
+        assert!(
+            out.contains("\"x\"") && out.contains("\"y\""),
+            "union: {out}"
+        );
+        // But an absent field is OMITTED, never emitted as null — no nulls anywhere.
+        assert!(
+            !out.contains("null"),
+            "absent fields omitted, not null: {out}"
+        );
+
+        let empty = render(&[], &d, &DisplayConfig::default(), "(none)");
+        assert_eq!(empty, "[]", "empty json is []");
+    }
+
+    #[test]
+    fn jsonl_is_one_object_per_line_omitting_absent_fields() {
+        let a = task("a", &["d"], &[("x", serde_json::json!(1))]);
+        let b = task("b", &[], &[("y", serde_json::json!(2))]);
+        let d = display(OutputFormat::Jsonl, true, None);
+        let out = render(&[&a, &b], &d, &DisplayConfig::default(), "(none)");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2, "one object per line: {out}");
+        // Each line is a standalone object (no array brackets), absent keys gone.
+        for line in &lines {
+            let v: Value = serde_json::from_str(line).unwrap();
+            assert!(v.is_object(), "each line is a JSON object: {line}");
+        }
+        assert!(
+            lines[0].contains(r#""x":1"#) && !lines[0].contains("\"y\""),
+            "a: {}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains(r#""y":2"#) && !lines[1].contains("\"x\""),
+            "b: {}",
+            lines[1]
+        );
+        // deps is a built-in: always present, [] when empty (data, not absence).
+        assert!(lines[0].contains(r#""deps":["d"]"#) && lines[1].contains(r#""deps":[]"#));
+
+        // Empty input yields no lines.
+        assert_eq!(render(&[], &d, &DisplayConfig::default(), "(none)"), "");
+    }
+
+    #[test]
+    fn truncate_caps_long_values() {
+        assert_eq!(truncate("hello", 0), "hello");
+        assert_eq!(truncate("hello", 10), "hello");
+        assert_eq!(truncate("hello world", 5), "hell…");
+    }
+
+    #[test]
+    fn full_disables_truncation_but_default_and_columns_still_truncate() {
+        let long = "a value that is definitely longer than the configured max width";
+        let t = task("api", &[], &[("notes", serde_json::json!(long))]);
+        let cfg = DisplayConfig {
+            columns: vec!["id".into(), "notes".into()],
+            max_width: 20,
+            column_max_width: BTreeMap::new(),
+            sort: String::new(),
+        };
+
+        // --full: the full value survives, no ellipsis.
+        let full = render(
+            &[&t],
+            &display(OutputFormat::Human, true, None),
+            &cfg,
+            "(none)",
+        );
+        assert!(full.contains(long), "--full prints untruncated: {full}");
+        assert!(!full.contains('…'), "--full adds no ellipsis: {full}");
+
+        // Default (config columns) still truncates per max_width.
+        let default = render(
+            &[&t],
+            &display(OutputFormat::Human, false, None),
+            &cfg,
+            "(none)",
+        );
+        assert!(!default.contains(long), "default truncates: {default}");
+        assert!(default.contains('…'), "default shows ellipsis: {default}");
+
+        // An explicit --columns view also still truncates.
+        let cols = render(
+            &[&t],
+            &display(OutputFormat::Human, false, Some(&["id", "notes"])),
+            &cfg,
+            "(none)",
+        );
+        assert!(cols.contains('…'), "--columns still truncates: {cols}");
+    }
+
+    #[test]
+    fn per_column_max_width_overrides_the_global() {
+        // `notes` gets a wide override (60); `summary` falls back to max_width (10).
+        let long = "0123456789abcdefghij"; // 20 chars
+        let t = task(
+            "api",
+            &[],
+            &[
+                ("notes", serde_json::json!(long)),
+                ("summary", serde_json::json!(long)),
+            ],
+        );
+        let cfg = DisplayConfig {
+            columns: vec!["id".into(), "notes".into(), "summary".into()],
+            max_width: 10,
+            column_max_width: std::iter::once(("notes".to_string(), 60)).collect(),
+            sort: String::new(),
+        };
+        let out = render(
+            &[&t],
+            &display(OutputFormat::Human, false, None),
+            &cfg,
+            "(none)",
+        );
+        // notes keeps all 20 chars (override 60 > 20, no ellipsis); summary is cut.
+        assert!(out.contains(long), "notes column not truncated: {out}");
+        assert!(
+            out.contains('…'),
+            "summary column truncated to max_width: {out}"
+        );
+
+        // --full ignores the per-column map entirely: both survive intact.
+        let full = render(
+            &[&t],
+            &display(OutputFormat::Human, true, None),
+            &cfg,
+            "(none)",
+        );
+        assert!(!full.contains('…'), "--full disables truncation: {full}");
+    }
+}
