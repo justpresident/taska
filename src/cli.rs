@@ -282,6 +282,28 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
     }
 }
 
+/// Materialize via the engine using the store's own workflow config (only the
+/// `close_time` computation needs `status_field`/`done_status`), so callers don't
+/// repeat those two arguments at every replay site.
+fn replay(
+    store: &impl EventStore,
+    baseline: Vec<TaskState>,
+    mutations: Vec<MutationEvent>,
+) -> HashMap<String, TaskState> {
+    let w = &store.config().workflow;
+    Engine::materialize_state(baseline, mutations, &w.status_field, &w.done_status)
+}
+
+/// Like [`replay`] but keeping the orphan report (see [`Engine::materialize_report`]).
+fn replay_report(
+    store: &impl EventStore,
+    baseline: Vec<TaskState>,
+    mutations: Vec<MutationEvent>,
+) -> (HashMap<String, TaskState>, Vec<u64>) {
+    let w = &store.config().workflow;
+    Engine::materialize_report(baseline, mutations, &w.status_field, &w.done_status)
+}
+
 /// Load and materialize the current task map from any store.
 ///
 /// Replay also reports *orphaned* events — `Update`/`AddDep`/`RemoveDep`/`Delete`
@@ -290,13 +312,8 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
 /// revert, or a manual edit), so every read command warns about them on STDERR
 /// and points at `ta resolve`. The warning never blocks the read.
 fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskState>, DynError> {
-    let workflow = &store.config().workflow;
-    let (mut state, orphans) = Engine::materialize_report(
-        store.load_baseline()?,
-        store.load_mutations()?,
-        &workflow.status_field,
-        &workflow.done_status,
-    );
+    let (mut state, orphans) =
+        replay_report(store, store.load_baseline()?, store.load_mutations()?);
     if !orphans.is_empty() {
         eprintln!(
             "taska: warning: {} orphaned event(s) in the log (no matching task) — \
@@ -427,9 +444,7 @@ fn cmd_list(
     cfg: &DisplayConfig,
 ) -> Result<(), DynError> {
     let state = state_of(store)?;
-    let mut tasks: Vec<&TaskState> = state.values().collect();
-    sort_tasks(&mut tasks, display, cfg);
-    println!("{}", render(&tasks, display, cfg, "(no tasks)"));
+    print_tasks(state.values().collect(), display, cfg, "(no tasks)");
     Ok(())
 }
 
@@ -443,12 +458,11 @@ fn cmd_search(
     // we touch the store.
     let criteria = compile_criteria(criteria)?;
     let state = state_of(store)?;
-    let mut hits: Vec<&TaskState> = state
+    let hits: Vec<&TaskState> = state
         .values()
         .filter(|t| criteria.iter().all(|c| c.matches(t)))
         .collect();
-    sort_tasks(&mut hits, display, cfg);
-    println!("{}", render(&hits, display, cfg, "(no matches)"));
+    print_tasks(hits, display, cfg, "(no matches)");
     Ok(())
 }
 
@@ -587,19 +601,12 @@ fn cmd_show(
     let task = state.get(id).ok_or_else(|| format!("no task `{id}`"))?;
     let tasks = [task];
     // Default to the full task: every field of this one task. An explicit
-    // `--columns` overrides; we reuse the shared `render` plumbing for either.
+    // `--columns` overrides; either way the shared `render_rows` dispatch prints.
     let columns = display
         .columns
-        .as_ref()
-        .map_or_else(|| full_columns(&tasks, cfg), Clone::clone);
-    let output = match display.format {
-        OutputFormat::Json => render_json(&tasks, &columns),
-        OutputFormat::Jsonl => render_jsonl(&tasks, &columns),
-        OutputFormat::Human => {
-            render_human(&tasks, &columns, &truncation_caps(&columns, display, cfg))
-        }
-    };
-    println!("{output}");
+        .clone()
+        .unwrap_or_else(|| full_columns(&tasks, cfg));
+    println!("{}", render_rows(&tasks, &columns, display, cfg));
     Ok(())
 }
 
@@ -611,12 +618,11 @@ fn cmd_ready(
 ) -> Result<(), DynError> {
     let state = state_of(store)?;
     let ready = graph::ready_tasks(&state, &workflow.status_field, &workflow.done_status)?;
-    let mut tasks: Vec<&TaskState> = ready.iter().filter_map(|id| state.get(id)).collect();
+    let tasks: Vec<&TaskState> = ready.iter().filter_map(|id| state.get(id)).collect();
     // ready_tasks returns a topological order, but ready tasks never depend on
-    // one another (their deps are all done, hence excluded), so re-sorting is
-    // free of ordering hazards and gives a consistent, configurable order.
-    sort_tasks(&mut tasks, display, cfg);
-    println!("{}", render(&tasks, display, cfg, "(nothing ready)"));
+    // one another (their deps are all done, hence excluded), so re-sorting in
+    // print_tasks is free of ordering hazards and gives a consistent order.
+    print_tasks(tasks, display, cfg, "(nothing ready)");
     Ok(())
 }
 
@@ -783,16 +789,10 @@ fn cmd_compact(
     }
 
     // Fold the old prefix into the baseline; retain the recent suffix in the log
-    // so divergent branches can still be reconciled by event id. Pass the workflow
-    // config so the folded baseline carries up-to-date computed timestamps.
+    // so divergent branches can still be reconciled by event id. `replay` uses the
+    // store's workflow config so the folded baseline carries computed timestamps.
     let (to_fold, to_keep) = mutations.split_at(split);
-    let workflow = &store.config().workflow;
-    let folded = Engine::materialize_state(
-        baseline,
-        to_fold.to_vec(),
-        &workflow.status_field,
-        &workflow.done_status,
-    );
+    let folded = replay(store, baseline, to_fold.to_vec());
     let mut new_baseline: Vec<TaskState> = folded.into_values().collect();
     new_baseline.sort_by(|a, b| a.id.cmp(&b.id));
 
@@ -977,13 +977,8 @@ fn cmd_undo(store: &FileStore, count: usize, force: bool, remove: bool) -> Resul
     let keep = n - count;
     let undone = &mutations[keep..];
 
-    let workflow = store.config().workflow.clone();
-    let (sf, ds) = (
-        workflow.status_field.as_str(),
-        workflow.done_status.as_str(),
-    );
-    let current = Engine::materialize_state(baseline.clone(), mutations.clone(), sf, ds);
-    let target = Engine::materialize_state(baseline.clone(), mutations[..keep].to_vec(), sf, ds);
+    let current = replay(store, baseline.clone(), mutations.clone());
+    let target = replay(store, baseline.clone(), mutations[..keep].to_vec());
 
     // The tasks any undone event touched, sorted for stable output.
     let mut affected: Vec<String> = undone.iter().map(|e| e.task_id.clone()).collect();
@@ -1028,7 +1023,7 @@ fn cmd_undo(store: &FileStore, count: usize, force: bool, remove: bool) -> Resul
         // Default committed path: keep committed history, append compensating
         // events. Build them from the committed prefix's state toward the target.
         let truncate_to = committed_count;
-        let post = Engine::materialize_state(baseline, mutations[..truncate_to].to_vec(), sf, ds);
+        let post = replay(store, baseline, mutations[..truncate_to].to_vec());
         let comps = compensate(&post, &target, &affected);
 
         // Continue the seq sequence past the highest committed seq we keep.
@@ -1230,13 +1225,7 @@ fn resolve_merge_marker(store: &FileStore) -> Result<bool, DynError> {
 fn resolve_orphans(store: &FileStore, force: bool) -> Result<usize, DynError> {
     let baseline = store.load_baseline()?;
     let mutations = store.load_mutations()?;
-    let workflow = &store.config().workflow;
-    let (_, orphans) = Engine::materialize_report(
-        baseline,
-        mutations.clone(),
-        &workflow.status_field,
-        &workflow.done_status,
-    );
+    let (_, orphans) = replay_report(store, baseline, mutations.clone());
     if orphans.is_empty() {
         return Ok(0);
     }
@@ -1285,13 +1274,42 @@ fn confirm(prompt: &str, force: bool) -> Result<bool, DynError> {
 /// config) decide *which* fields appear; `--format` decides only how they print,
 /// and both formats share the same field order.
 fn render(tasks: &[&TaskState], display: &DisplayArgs, cfg: &DisplayConfig, empty: &str) -> String {
+    // Only the human table needs an explicit empty placeholder; json/jsonl render
+    // their own empty forms (`[]` / no lines).
+    if display.format == OutputFormat::Human && tasks.is_empty() {
+        return empty.to_string();
+    }
     let columns = resolve_columns(display, cfg, tasks);
+    render_rows(tasks, &columns, display, cfg)
+}
+
+/// Sort a collected task set by the display args and print it, with `empty` as
+/// the human placeholder for no rows. The shared tail of `list`/`search`/`ready`,
+/// each of which differs only in how it gathers the tasks.
+fn print_tasks(
+    mut tasks: Vec<&TaskState>,
+    display: &DisplayArgs,
+    cfg: &DisplayConfig,
+    empty: &str,
+) {
+    sort_tasks(&mut tasks, display, cfg);
+    println!("{}", render(&tasks, display, cfg, empty));
+}
+
+/// Dispatch the chosen `--format` over an already-resolved column set. Shared by
+/// the multi-row `render` path and single-task `show`, so a new output format is
+/// wired in exactly one place.
+fn render_rows(
+    tasks: &[&TaskState],
+    columns: &[String],
+    display: &DisplayArgs,
+    cfg: &DisplayConfig,
+) -> String {
     match display.format {
-        OutputFormat::Json => render_json(tasks, &columns),
-        OutputFormat::Jsonl => render_jsonl(tasks, &columns),
-        OutputFormat::Human if tasks.is_empty() => empty.to_string(),
+        OutputFormat::Json => render_json(tasks, columns),
+        OutputFormat::Jsonl => render_jsonl(tasks, columns),
         OutputFormat::Human => {
-            render_human(tasks, &columns, &truncation_caps(&columns, display, cfg))
+            render_human(tasks, columns, &truncation_caps(columns, display, cfg))
         }
     }
 }
