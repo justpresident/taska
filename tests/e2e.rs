@@ -298,10 +298,12 @@ fn full_view_uses_canonical_column_order_in_both_formats() {
     let dir = fresh_dir("canonical-order");
     init_repo(&dir);
     ta(&dir, &["init"]);
-    // Configure a deliberate column order; deps in the middle.
+    // Configure a deliberate column order; deps in the middle. Disable the
+    // computed timestamp columns so this test sees only the fields under test.
     fs::write(
         dir.join(".taska/config.toml"),
-        "[display]\ncolumns = [\"id\", \"status\", \"deps\"]\nmax_width = 0\n",
+        "[display]\ncolumns = [\"id\", \"status\", \"deps\"]\nmax_width = 0\n\
+         [timestamps]\ncreate_time = \"\"\nupdate_time = \"\"\nclose_time = \"\"\n",
     )
     .unwrap();
     ta(&dir, &["create", "dep"]);
@@ -393,6 +395,77 @@ fn rows(path: &Path) -> usize {
         .lines()
         .filter(|l| !l.trim().is_empty())
         .count()
+}
+
+#[test]
+fn auto_timestamps_lifecycle_search_and_compaction() {
+    let dir = fresh_dir("timestamps");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "api", "status=open", "title=API"]);
+
+    // create_time + update_time are materialized; close_time only once done.
+    let open = ta(&dir, &["show", "api", "--format", "json"]);
+    assert!(
+        open.contains("create_time") && open.contains("update_time"),
+        "{open}"
+    );
+    assert!(
+        !open.contains("close_time"),
+        "open task has no close_time: {open}"
+    );
+
+    ta(&dir, &["update", "api", "status=closed"]);
+    assert!(
+        ta(&dir, &["show", "api", "--format", "json"]).contains("close_time"),
+        "closing sets close_time"
+    );
+
+    // Reopening clears close_time (the user's 'cleared on reopen' choice).
+    ta(&dir, &["update", "api", "status=open"]);
+    assert!(
+        !ta(&dir, &["show", "api", "--format", "json"]).contains("close_time"),
+        "reopen clears close_time"
+    );
+
+    // The times are ordinary string fields: searchable and selectable as columns.
+    assert!(
+        lists_task(&ta(&dir, &["search", "create_time~^20"]), "api"),
+        "searchable by create_time"
+    );
+
+    // Renaming/disabling via config: blank name hides the column entirely.
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[timestamps]\ncreate_time = \"made_at\"\nupdate_time = \"\"\n",
+    )
+    .unwrap();
+    let renamed = ta(&dir, &["show", "api", "--format", "json"]);
+    assert!(
+        renamed.contains("made_at"),
+        "create_time renamed: {renamed}"
+    );
+    assert!(
+        !renamed.contains("update_time"),
+        "update_time disabled: {renamed}"
+    );
+
+    // create_time survives compaction (it is folded into the baseline). Generate
+    // enough events to fold the original Create past the keep_events floor.
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[compaction]\nkeep_events = 100\nkeep_days = 0\n",
+    )
+    .unwrap();
+    for i in 0..120 {
+        ta(&dir, &["create", &format!("t{i}")]);
+    }
+    ta(&dir, &["compact"]);
+    // api's Create is now folded away, yet its create_time persists via baseline.
+    assert!(
+        ta(&dir, &["show", "api", "--format", "json"]).contains("create_time"),
+        "create_time survives compaction"
+    );
 }
 
 #[test]

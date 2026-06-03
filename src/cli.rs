@@ -283,8 +283,13 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
 /// revert, or a manual edit), so every read command warns about them on STDERR
 /// and points at `ta resolve`. The warning never blocks the read.
 fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskState>, DynError> {
-    let (state, orphans) =
-        Engine::materialize_report(store.load_baseline()?, store.load_mutations()?);
+    let workflow = &store.config().workflow;
+    let (mut state, orphans) = Engine::materialize_report(
+        store.load_baseline()?,
+        store.load_mutations()?,
+        &workflow.status_field,
+        &workflow.done_status,
+    );
     if !orphans.is_empty() {
         eprintln!(
             "taska: warning: {} orphaned event(s) in the log (no matching task) — \
@@ -292,7 +297,30 @@ fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskState>, DynEr
             orphans.len()
         );
     }
+    // Surface the computed timestamps as ordinary (RFC 3339 string) fields under
+    // their configured names, so list/search/show/--sort treat them like any
+    // other column. This is display-only: the raw Option<DateTime> stays on
+    // TaskState (and in the baseline); injection never reaches the stored log.
+    let ts = &store.config().timestamps;
+    for task in state.values_mut() {
+        inject_time(&mut task.custom_fields, &ts.create_time, task.create_time);
+        inject_time(&mut task.custom_fields, &ts.update_time, task.update_time);
+        inject_time(&mut task.custom_fields, &ts.close_time, task.close_time);
+    }
     Ok(state)
+}
+
+/// Insert a computed timestamp into a task's fields under `name` (RFC 3339), so
+/// it renders/searches/sorts like a normal field. A blank `name` disables that
+/// timestamp; a `None` value (e.g. `close_time` on an open task) injects
+/// nothing, staying consistent with the omit-absent-fields rule.
+fn inject_time(fields: &mut Map<String, Value>, name: &str, value: Option<DateTime<Utc>>) {
+    if name.is_empty() {
+        return;
+    }
+    if let Some(t) = value {
+        fields.insert(name.to_string(), Value::String(t.to_rfc3339()));
+    }
 }
 
 /// Event keys that are struct fields, not schema-agnostic task fields. Letting a
@@ -744,9 +772,16 @@ fn cmd_compact(
     }
 
     // Fold the old prefix into the baseline; retain the recent suffix in the log
-    // so divergent branches can still be reconciled by event id.
+    // so divergent branches can still be reconciled by event id. Pass the workflow
+    // config so the folded baseline carries up-to-date computed timestamps.
     let (to_fold, to_keep) = mutations.split_at(split);
-    let folded = Engine::materialize_state(baseline, to_fold.to_vec());
+    let workflow = &store.config().workflow;
+    let folded = Engine::materialize_state(
+        baseline,
+        to_fold.to_vec(),
+        &workflow.status_field,
+        &workflow.done_status,
+    );
     let mut new_baseline: Vec<TaskState> = folded.into_values().collect();
     new_baseline.sort_by(|a, b| a.id.cmp(&b.id));
 
@@ -931,8 +966,13 @@ fn cmd_undo(store: &FileStore, count: usize, force: bool, remove: bool) -> Resul
     let keep = n - count;
     let undone = &mutations[keep..];
 
-    let current = Engine::materialize_state(baseline.clone(), mutations.clone());
-    let target = Engine::materialize_state(baseline.clone(), mutations[..keep].to_vec());
+    let workflow = store.config().workflow.clone();
+    let (sf, ds) = (
+        workflow.status_field.as_str(),
+        workflow.done_status.as_str(),
+    );
+    let current = Engine::materialize_state(baseline.clone(), mutations.clone(), sf, ds);
+    let target = Engine::materialize_state(baseline.clone(), mutations[..keep].to_vec(), sf, ds);
 
     // The tasks any undone event touched, sorted for stable output.
     let mut affected: Vec<String> = undone.iter().map(|e| e.task_id.clone()).collect();
@@ -977,7 +1017,7 @@ fn cmd_undo(store: &FileStore, count: usize, force: bool, remove: bool) -> Resul
         // Default committed path: keep committed history, append compensating
         // events. Build them from the committed prefix's state toward the target.
         let truncate_to = committed_count;
-        let post = Engine::materialize_state(baseline, mutations[..truncate_to].to_vec());
+        let post = Engine::materialize_state(baseline, mutations[..truncate_to].to_vec(), sf, ds);
         let comps = compensate(&post, &target, &affected);
 
         // Continue the seq sequence past the highest committed seq we keep.
@@ -1179,7 +1219,13 @@ fn resolve_merge_marker(store: &FileStore) -> Result<bool, DynError> {
 fn resolve_orphans(store: &FileStore, force: bool) -> Result<usize, DynError> {
     let baseline = store.load_baseline()?;
     let mutations = store.load_mutations()?;
-    let (_, orphans) = Engine::materialize_report(baseline, mutations.clone());
+    let workflow = &store.config().workflow;
+    let (_, orphans) = Engine::materialize_report(
+        baseline,
+        mutations.clone(),
+        &workflow.status_field,
+        &workflow.done_status,
+    );
     if orphans.is_empty() {
         return Ok(0);
     }
@@ -1437,9 +1483,13 @@ mod tests {
     struct InMemoryStore {
         events: RefCell<Vec<MutationEvent>>,
         baseline: RefCell<Vec<TaskState>>,
+        config: Config,
     }
 
     impl EventStore for InMemoryStore {
+        fn config(&self) -> &Config {
+            &self.config
+        }
         fn load_baseline(&self) -> Result<Vec<TaskState>, DynError> {
             Ok(self.baseline.borrow().clone())
         }
@@ -1543,9 +1593,21 @@ mod tests {
         assert!(err.is_err());
     }
 
+    /// An in-memory store with the computed-timestamp columns disabled, for
+    /// tests asserting exact field/column sets that shouldn't see injected times.
+    fn store_without_timestamps() -> InMemoryStore {
+        let mut store = InMemoryStore::default();
+        store.config.timestamps = crate::config::TimestampConfig {
+            create_time: String::new(),
+            update_time: String::new(),
+            close_time: String::new(),
+        };
+        store
+    }
+
     #[test]
     fn show_full_columns_cover_every_field_and_unknown_errors() {
-        let store = InMemoryStore::default();
+        let store = store_without_timestamps();
         cmd_create(&store, "api", &["status=open".into(), "priority=3".into()]).unwrap();
         let state = state_of(&store).unwrap();
         let task = state.get("api").unwrap();
@@ -1653,6 +1715,9 @@ mod tests {
                 .iter()
                 .map(|(k, v)| ((*k).to_string(), v.clone()))
                 .collect(),
+            create_time: None,
+            update_time: None,
+            close_time: None,
         }
     }
 

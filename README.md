@@ -159,7 +159,18 @@ max_width = 40
 # width instead of max_width (0 = no limit). --full ignores these entirely.
 [display.column_max_width]
 title = 80
+
+[timestamps]
+# Computed (never user-set) timestamp fields materialized onto every task from
+# the event log. These name the columns they surface under; "" disables one.
+# They behave like ordinary string fields — usable with --columns/--full/show,
+# search, and --sort.
+create_time = "create_time"   # the Create event's time
+update_time = "update_time"   # the latest touching event's time
+close_time  = "close_time"    # most recent time status hit done_status (cleared on reopen)
 ```
+
+Because the times are folded into the baseline at compaction, they survive even after their source events are compacted away. They are best-effort: event timestamps are informational (`seq` is the authoritative order), so after a cross-branch merge they can be non-monotonic.
 
 ## Commands
 

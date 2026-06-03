@@ -7,21 +7,44 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
+use serde_json::Value;
 
 use crate::model::{MutationEvent, OpType, TaskState};
 
 pub struct Engine;
 
+/// Update `close_time` to reflect a task's CURRENT closure: set it on a
+/// transition INTO done (`was_done` → `now_done`), clear it whenever the task is
+/// currently not done. Staying done leaves the prior close time untouched — so it
+/// records the *most recent* close and resets to empty on reopen.
+const fn refresh_close_time(
+    task: &mut TaskState,
+    was_done: bool,
+    now_done: bool,
+    ts: DateTime<Utc>,
+) {
+    if now_done {
+        if !was_done {
+            task.close_time = Some(ts);
+        }
+    } else {
+        task.close_time = None;
+    }
+}
+
 impl Engine {
     /// Fold `mutations` over `baseline` to produce the current task map.
     ///
     /// Thin wrapper over [`Engine::materialize_report`] that discards the orphan
-    /// report, for callers that only need the state.
+    /// report, for callers that only need the state. `status_field`/`done_status`
+    /// are needed only to compute each task's `close_time`.
     pub fn materialize_state(
         baseline: Vec<TaskState>,
         mutations: Vec<MutationEvent>,
+        status_field: &str,
+        done_status: &str,
     ) -> HashMap<String, TaskState> {
-        Self::materialize_report(baseline, mutations).0
+        Self::materialize_report(baseline, mutations, status_field, done_status).0
     }
 
     /// Like [`Engine::materialize_state`], but also reports *orphaned* events:
@@ -33,15 +56,27 @@ impl Engine {
     /// Replay stays non-fatal: orphans are merely counted, never errored. They can
     /// arise from the merge driver's removal-union, reverts, or manual edits that
     /// drop a task's `Create` while leaving later events that target it.
+    ///
+    /// Along the way it materializes each task's computed timestamps (see
+    /// [`TaskState`]): `create_time` (first `Create`), `update_time` (latest
+    /// touching event), and `close_time` (most recent transition of
+    /// `status_field` into `done_status`, cleared while currently not done).
     pub fn materialize_report(
         baseline: Vec<TaskState>,
         mutations: Vec<MutationEvent>,
+        status_field: &str,
+        done_status: &str,
     ) -> (HashMap<String, TaskState>, Vec<u64>) {
         let mut state_map: HashMap<String, TaskState> =
             baseline.into_iter().map(|t| (t.id.clone(), t)).collect();
         let mut orphans: Vec<u64> = Vec::new();
 
+        let is_done = |task: &TaskState| {
+            task.custom_fields.get(status_field).and_then(Value::as_str) == Some(done_status)
+        };
+
         for event in mutations {
+            let ts = event.timestamp;
             match event.op {
                 OpType::Create => {
                     // Re-creating an existing id refreshes its fields but keeps
@@ -53,7 +88,11 @@ impl Engine {
                                 id: event.task_id.clone(),
                                 depends_on: Vec::new(),
                                 custom_fields: serde_json::Map::new(),
+                                create_time: None,
+                                update_time: None,
+                                close_time: None,
                             });
+                    let was_done = is_done(entry);
                     for (k, v) in event.payload {
                         // A null value unsets the field (the field-unset convention),
                         // so it never reaches state, output, search, or the baseline.
@@ -63,9 +102,16 @@ impl Engine {
                             entry.custom_fields.insert(k, v);
                         }
                     }
+                    // First Create wins for create_time (a re-Create keeps it).
+                    if entry.create_time.is_none() {
+                        entry.create_time = Some(ts);
+                    }
+                    entry.update_time = Some(ts);
+                    refresh_close_time(entry, was_done, is_done(entry), ts);
                 }
                 OpType::Update => {
                     if let Some(task) = state_map.get_mut(&event.task_id) {
+                        let was_done = is_done(task);
                         for (k, v) in event.payload {
                             // A null value unsets the field (see Create above).
                             if v.is_null() {
@@ -74,6 +120,8 @@ impl Engine {
                                 task.custom_fields.insert(k, v);
                             }
                         }
+                        task.update_time = Some(ts);
+                        refresh_close_time(task, was_done, is_done(task), ts);
                     } else {
                         orphans.push(event.seq);
                     }
@@ -86,6 +134,8 @@ impl Engine {
                                 task.depends_on.push(dep_id);
                             }
                         }
+                        // A dep change touches the task but never its status.
+                        task.update_time = Some(ts);
                     } else {
                         orphans.push(event.seq);
                     }
@@ -95,6 +145,7 @@ impl Engine {
                         if let Some(dep_id) = event.payload.get("dep").and_then(|v| v.as_str()) {
                             task.depends_on.retain(|d| d != dep_id);
                         }
+                        task.update_time = Some(ts);
                     } else {
                         orphans.push(event.seq);
                     }
@@ -152,7 +203,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, Value};
+    use serde_json::json;
 
     fn ev(op: OpType, id: &str, payload: serde_json::Map<String, Value>) -> MutationEvent {
         MutationEvent::new(op, id, payload)
@@ -166,6 +217,59 @@ mod tests {
     }
 
     #[test]
+    fn materializes_timestamps_and_resets_close_on_reopen() {
+        let base = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let at = |secs: i64| base + Duration::seconds(secs);
+        let mk = |seq, op, payload, secs| {
+            let mut e = MutationEvent::new(op, "a", payload);
+            e.seq = seq;
+            e.timestamp = at(secs);
+            e
+        };
+        let mutations = vec![
+            mk(1, OpType::Create, fields(&[("status", json!("open"))]), 0),
+            mk(
+                2,
+                OpType::Update,
+                fields(&[("status", json!("closed"))]),
+                10,
+            ), // close
+            mk(3, OpType::Update, fields(&[("priority", json!(2))]), 20), // stays closed
+            mk(4, OpType::Update, fields(&[("status", json!("open"))]), 30), // reopen -> clear
+            mk(
+                5,
+                OpType::Update,
+                fields(&[("status", json!("closed"))]),
+                40,
+            ), // re-close
+        ];
+        let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
+        let a = &state["a"];
+        assert_eq!(a.create_time, Some(at(0)), "first Create's time");
+        assert_eq!(a.update_time, Some(at(40)), "latest event's time");
+        // Cleared on reopen, then set to the MOST RECENT close (not the first).
+        assert_eq!(a.close_time, Some(at(40)), "most recent close");
+    }
+
+    #[test]
+    fn open_task_has_create_and_update_but_no_close_time() {
+        let mutations = vec![ev(
+            OpType::Create,
+            "a",
+            fields(&[("status", json!("open"))]),
+        )];
+        let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
+        assert!(state["a"].create_time.is_some());
+        assert!(state["a"].update_time.is_some());
+        assert!(
+            state["a"].close_time.is_none(),
+            "an open task is never closed"
+        );
+    }
+
+    #[test]
     fn replays_create_update_dep_and_delete() {
         let mutations = vec![
             ev(OpType::Create, "a", fields(&[("status", json!("open"))])),
@@ -175,7 +279,7 @@ mod tests {
             ev(OpType::Create, "c", serde_json::Map::new()),
             ev(OpType::Delete, "c", serde_json::Map::new()),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations);
+        let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
 
         assert_eq!(state.len(), 2, "c was deleted");
         assert_eq!(
@@ -192,12 +296,15 @@ mod tests {
             id: "a".into(),
             depends_on: vec!["x".into()],
             custom_fields: fields(&[("status", json!("open"))]),
+            create_time: None,
+            update_time: None,
+            close_time: None,
         }];
         let mutations = vec![
             ev(OpType::Update, "a", fields(&[("status", json!("done"))])),
             ev(OpType::RemoveDep, "a", fields(&[("dep", json!("x"))])),
         ];
-        let state = Engine::materialize_state(baseline, mutations);
+        let state = Engine::materialize_state(baseline, mutations, "status", "closed");
 
         assert_eq!(state["a"].custom_fields["status"], json!("done"));
         assert!(
@@ -230,7 +337,8 @@ mod tests {
             })
             .collect();
 
-        let (state, orphans) = Engine::materialize_report(Vec::new(), mutations);
+        let (state, orphans) =
+            Engine::materialize_report(Vec::new(), mutations, "status", "closed");
 
         assert_eq!(state.len(), 1, "only `a` survives");
         assert_eq!(state["a"].custom_fields["status"], json!("done"));
@@ -247,7 +355,7 @@ mod tests {
             ev(OpType::AddDep, "a", fields(&[("dep", json!("b"))])),
             ev(OpType::AddDep, "a", fields(&[("dep", json!("b"))])),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations);
+        let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
         assert_eq!(
             state["a"].depends_on,
             vec!["b".to_string()],

@@ -89,6 +89,24 @@ pub struct TaskState {
     pub id: String,
     pub depends_on: Vec<String>,
     pub custom_fields: Map<String, Value>,
+
+    /// Computed, best-effort timestamps materialized from the event log — never
+    /// user-set. They are persisted into the baseline so they survive
+    /// compaction (their source events get folded away), then extended on each
+    /// replay. Best-effort because event timestamps are informational only
+    /// (`seq` is the authoritative order), so after a merge restacks another
+    /// branch's events these can be non-monotonic. `create_time` is the first
+    /// `Create`'s timestamp; `update_time` the latest touching event's;
+    /// `close_time` the most recent transition of `status` into `done_status`,
+    /// cleared whenever the task is currently not done. `#[serde(default,
+    /// skip_serializing_if)]` keeps old baselines readable and unset times out
+    /// of the serialized line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create_time: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_time: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_time: Option<DateTime<Utc>>,
 }
 
 #[cfg(test)]

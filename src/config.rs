@@ -33,6 +33,7 @@ pub fn default_toml() -> String {
         workflow,
         merge,
         display,
+        timestamps,
     } = Config::default();
     let on_conflict = merge.on_conflict.as_str();
     let columns = display
@@ -102,6 +103,17 @@ max_width = {max_width}
 # width instead of max_width (0 = no limit). `--full` ignores these entirely.
 [display.column_max_width]
 {column_max_width}
+
+[timestamps]
+# Computed timestamp fields materialized onto every task from the event log
+# (never user-set). These name the columns they surface under; set a name to ""
+# to disable that timestamp. create_time = the Create event's time; update_time
+# = the latest touching event's time; close_time = the most recent time status
+# reached done_status (cleared while the task is currently not done). They are
+# available to --columns/--full/show/search and as a --sort key.
+create_time = "{create_time}"
+update_time = "{update_time}"
+close_time = "{close_time}"
 "#,
         min_keep = MIN_KEEP_EVENTS,
         keep_events = compaction.keep_events,
@@ -112,6 +124,9 @@ max_width = {max_width}
         columns = columns,
         max_width = display.max_width,
         column_max_width = column_max_width,
+        create_time = timestamps.create_time,
+        update_time = timestamps.update_time,
+        close_time = timestamps.close_time,
     )
 }
 
@@ -122,6 +137,7 @@ pub struct Config {
     pub workflow: WorkflowConfig,
     pub merge: MergeConfig,
     pub display: DisplayConfig,
+    pub timestamps: TimestampConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -226,6 +242,33 @@ impl Default for DisplayConfig {
             // Titles are usually the longest field, so give them more room than
             // the global default out of the box.
             column_max_width: std::iter::once(("title".to_string(), 80)).collect(),
+        }
+    }
+}
+
+/// Names of the computed timestamp fields materialized onto every task.
+///
+/// They are never user-set (replay computes them from the event log); these
+/// settings only control the *column names* they surface under. An empty string
+/// disables that timestamp entirely (neither computed-for-display nor shown).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct TimestampConfig {
+    /// Column name for the `Create` event's timestamp.
+    pub create_time: String,
+    /// Column name for the latest touching event's timestamp.
+    pub update_time: String,
+    /// Column name for the most recent transition of status into `done_status`
+    /// (cleared while the task is currently not done).
+    pub close_time: String,
+}
+
+impl Default for TimestampConfig {
+    fn default() -> Self {
+        Self {
+            create_time: "create_time".to_string(),
+            update_time: "update_time".to_string(),
+            close_time: "close_time".to_string(),
         }
     }
 }

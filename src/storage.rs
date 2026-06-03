@@ -18,6 +18,10 @@ use crate::model::{MutationEvent, TaskState};
 
 /// The persistence operations the application relies on.
 pub trait EventStore {
+    /// The store's loaded configuration. On the trait so command handlers can
+    /// reach config (e.g. the workflow/timestamp settings replay needs) through
+    /// the abstraction, while tests substitute a store carrying any `Config`.
+    fn config(&self) -> &Config;
     /// Read the compacted baseline snapshot.
     fn load_baseline(&self) -> Result<Vec<TaskState>, DynError>;
     /// Read every event from the active mutation log.
@@ -100,11 +104,6 @@ impl FileStore {
         self.base_dir.parent()
     }
 
-    /// The loaded configuration.
-    pub const fn config(&self) -> &Config {
-        &self.config
-    }
-
     fn mutations_path(&self) -> PathBuf {
         self.base_dir.join("mutations.jsonl")
     }
@@ -115,6 +114,10 @@ impl FileStore {
 }
 
 impl EventStore for FileStore {
+    fn config(&self) -> &Config {
+        &self.config
+    }
+
     fn load_baseline(&self) -> Result<Vec<TaskState>, DynError> {
         let path = self.baseline_path();
         if !path.exists() {

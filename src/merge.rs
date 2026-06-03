@@ -762,7 +762,7 @@ mod tests {
             Strategy::for_policy(policy),
         );
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
-        let state = Engine::materialize_state(Vec::new(), merged);
+        let state = Engine::materialize_state(Vec::new(), merged, "status", "closed");
         state
             .get(task)
             .map(|t| t.custom_fields.clone())
@@ -786,9 +786,10 @@ mod tests {
         let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
         let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
-        let mut ids: Vec<String> = Engine::materialize_state(Vec::new(), merged)
-            .into_keys()
-            .collect();
+        let mut ids: Vec<String> =
+            Engine::materialize_state(Vec::new(), merged, "status", "closed")
+                .into_keys()
+                .collect();
         ids.sort();
         ids
     }
@@ -917,7 +918,7 @@ mod tests {
             &plan,
             fork,
         );
-        let state = Engine::materialize_state(Vec::new(), merged);
+        let state = Engine::materialize_state(Vec::new(), merged, "status", "closed");
         assert!(
             !state.contains_key("X"),
             "ours deleted, so the task is gone"
@@ -958,7 +959,7 @@ mod tests {
         assert_eq!(meta["resolved"][0]["kept"], json!("theirs"));
 
         // But replay ignores it: the task has no `_meta` field, just the winner.
-        let state = Engine::materialize_state(Vec::new(), merged);
+        let state = Engine::materialize_state(Vec::new(), merged, "status", "closed");
         assert!(
             !state["X"].custom_fields.contains_key("_meta"),
             "provenance stays out of state"

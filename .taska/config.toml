@@ -50,3 +50,14 @@ max_width = 40
 # width instead of max_width (0 = no limit). `--full` ignores these entirely.
 [display.column_max_width]
 title = 80
+
+[timestamps]
+# Computed timestamp fields materialized onto every task from the event log
+# (never user-set). These name the columns they surface under; set a name to ""
+# to disable that timestamp. create_time = the Create event's time; update_time
+# = the latest touching event's time; close_time = the most recent time status
+# reached done_status (cleared while the task is currently not done). They are
+# available to --columns/--full/show/search and as a --sort key.
+create_time = "create_time"
+update_time = "update_time"
+close_time = "close_time"
