@@ -7,27 +7,36 @@
 
 A local-first, **git-native** task & dependency tracker for human and agent workflows. Tasks live in an append-only event log inside your repository, and concurrent edits on different branches are reconciled **automatically** by a custom git merge driver — no database, no daemon, no manual sync step.
 
-The binary is `ta`; the crate is `taska`.
+## What it does better than other in-repo task managers
 
-```console
-$ ta create migrate-db title="Run DB migration" status=open   # ids and fields are yours
-$ ta create deploy-api title="Deploy the API" status=open
-$ ta block deploy-api migrate-db        # deploy-api depends on migrate-db
-$ ta ready                              # only what's actionable, as a configurable table
-ID          TITLE             STATUS  DEPS
-migrate-db  Run DB migration  open
-```
+### Everything is configurable!
 
-## Why a log, not a snapshot
+No assumptions about your workflow. Only a bare minimum of fields is fixed — `id` and `deps`. Everything else is arbitrary `key=value` fields that you define yourself. Even the `status` field, which carries a lot of meaning for dependency tracking, can be renamed in the config. You can also configure the value that signals a task is finished — name it `closed`, `done`, or whatever you're used to; taska defines no fixed schema, so you grow your own conventions. That also keeps the search and manipulation commands simple and flexible: no dozens of custom flags pinned to a reserved field name.
 
-Most task trackers store the **current state** of each task — a row in a database, a line in a YAML file — and *overwrite* it on every change. taska stores the opposite: an **append-only log of every change** (`create`, `update`, `delete`, …) in `.taska/mutations.jsonl`. The state you see is *replayed* from that log on demand; it is never written down.
+TODO: task schema validation will be implemented soon. You'll be able to enforce a schema for your tasks. And of course it will be highly configurable — you'd be able to define a different schema per task type.
+
+### An append-only log, not a snapshot
+
+The append-only log is inspired by how high-performance KV stores like Cassandra absorb concurrent updates from tens of thousands of clients. Raw speed isn't the goal for a task tracker, but the same design earns its keep here for a different reason. Most trackers store the **current state** of each task — a row in a database, a line in a YAML file — and *overwrite* it on every change; taska stores the opposite: an **append-only log of every change** (`create`, `update`, `delete`, …) in `.taska/mutations.jsonl`. The state you see is *replayed* from that log on demand; it is never written down.
 
 That single choice is the whole point, because it is what makes git work *for* you instead of against you:
 
+- **One-pass reconstruction.** The whole dependency graph is rebuilt in a single sweep of the event log — no separate load-then-resolve step, and friendlier to cache than a two-pass walk over a full graph.
 - **Branches actually merge.** Two people (or two agents) on separate branches each *append* their events, so merging is just unioning two lists — which taska's git merge driver does cleanly and **per-field**. Two overwritten *snapshots*, by contrast, can only collide. The log is the reason concurrent edits reconcile instead of clobbering each other: no database to keep in sync, no manual sync step, no tasks silently dropped or "resurrected" after deletion.
 - **Full history, for free.** Every change is in the log, so you can see exactly how a task reached its current state — and a delete is just another event, so it stays deleted.
-- **Schema-agnostic.** A task is an id plus arbitrary `key=value` fields; taska defines no fixed schema, so you grow your own conventions.
-- **Non-intrusive.** No git hooks, no edits to your `AGENTS.md`/`CLAUDE.md`, no forced remote. It works entirely offline — prototype locally, review an agent's branch before merging, push when *you* decide.
+
+When the event log eventually grows large enough that replaying it gets slow, you can compact it — the same move Cassandra makes with its SSTables. Compaction folds the old prefix of the log into `baseline.jsonl`, a snapshot of the dependency graph in its final state. That file never produces merge conflicts, because it is built only from old, settled events. The smaller `mutations.jsonl` holds the recent events and is the one the merge driver reconciles.
+
+TODO: link detailed design of how the append log, merge, revert and conflict resolution work.
+
+TODO: compaction will support not only jsonl, but also more compact and fast binary indexes for when your task counts are measured in millions.
+
+### Non-intrusive
+
+No git hooks, no agent session hooks, no mandatory `AGENTS.md`/`CLAUDE.md` edits, and no remote required. It works entirely offline — prototype locally, review an agent's branch before merging, and push when *you* decide.
+
+The default setup installs a custom merge driver — via `.gitattributes` — for **only** the two files taska manages: `.taska/mutations.jsonl` (the event log) and `.taska/baseline.jsonl` (the checkpoint). Unlike a git hook, it runs only for those files; taska never touches anything else during your merge conflict resolutions.
+
 
 ## Install
 
