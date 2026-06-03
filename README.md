@@ -1,7 +1,7 @@
-![CI](https://github.com/justpresident/taska/actions/workflows/ci.yml/badge.svg?branch=master)
-![Coverage](https://raw.githubusercontent.com/justpresident/taska/master/.github/badges/coverage.svg)
 # taska
 
+![CI](https://github.com/justpresident/taska/actions/workflows/ci.yml/badge.svg?branch=master)
+![Coverage](https://raw.githubusercontent.com/justpresident/taska/master/.github/badges/coverage.svg)
 [![Crates.io](https://img.shields.io/crates/v/taska.svg)](https://crates.io/crates/taska)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
