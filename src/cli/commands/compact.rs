@@ -51,13 +51,14 @@ mod tests {
     use super::*;
     use crate::cli::commands::create::cmd_create;
     use crate::cli::state_of;
+    use crate::config::WorkflowConfig;
     use crate::test_support::InMemoryStore;
 
     #[test]
     fn compact_folds_log_into_baseline() {
         let store = InMemoryStore::default();
-        cmd_create(&store, "a", &[]).unwrap();
-        cmd_create(&store, "b", &[]).unwrap();
+        cmd_create(&store, &WorkflowConfig::default(), "a", &[]).unwrap();
+        cmd_create(&store, &WorkflowConfig::default(), "b", &[]).unwrap();
         // keep_events = 0 still retains the most recent event (the log never
         // empties, so the seq watermark stays derivable); the rest folds.
         let cfg = CompactionConfig {
@@ -72,7 +73,7 @@ mod tests {
         );
         assert_eq!(store.load_baseline().unwrap().len(), 1, "the rest folded");
         // Appends still work and overlay the baseline post-compaction.
-        cmd_create(&store, "c", &[]).unwrap();
+        cmd_create(&store, &WorkflowConfig::default(), "c", &[]).unwrap();
         assert_eq!(state_of(&store).unwrap().len(), 3);
     }
 
@@ -80,7 +81,7 @@ mod tests {
     fn compact_retains_recent_events() {
         let store = InMemoryStore::default();
         for id in ["a", "b", "c", "d", "e"] {
-            cmd_create(&store, id, &[]).unwrap();
+            cmd_create(&store, &WorkflowConfig::default(), id, &[]).unwrap();
         }
         // Keep the 2 most recent, time window off.
         let cfg = CompactionConfig {

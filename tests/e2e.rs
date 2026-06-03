@@ -752,6 +752,46 @@ fn status_summarizes_counts_blocked_and_ready() {
 }
 
 #[test]
+fn create_stamps_configurable_default_status() {
+    let dir = fresh_dir("default-status");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+
+    // A bare create gets the out-of-the-box default status.
+    ta(&dir, &["create", "a"]);
+    assert!(
+        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""status":"todo""#),
+        "bare create defaults status to todo"
+    );
+
+    // An explicit status still wins over the default.
+    ta(&dir, &["create", "b", "status=open"]);
+    assert!(
+        ta(&dir, &["show", "b", "--format", "json"]).contains(r#""status":"open""#),
+        "explicit status overrides the default"
+    );
+
+    // The default is configurable.
+    ta(
+        &dir,
+        &["config", "set", "workflow.default_status", "backlog"],
+    );
+    ta(&dir, &["create", "c"]);
+    assert!(
+        ta(&dir, &["show", "c", "--format", "json"]).contains(r#""status":"backlog""#),
+        "configured default status is applied"
+    );
+
+    // Setting it empty restores statusless creation.
+    ta(&dir, &["config", "set", "workflow.default_status", ""]);
+    ta(&dir, &["create", "d"]);
+    assert!(
+        !ta(&dir, &["show", "d", "--format", "json"]).contains("status"),
+        "empty default_status leaves the task statusless"
+    );
+}
+
+#[test]
 fn compact_folds_log_and_appends_resume() {
     let dir = fresh_dir("compact");
     init_repo(&dir);

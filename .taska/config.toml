@@ -25,6 +25,9 @@ keep_days = 30
 # `done_status`.
 status_field = "status"
 done_status = "closed"
+# Status stamped onto a new task when `ta create` doesn't set one. Set to "" to
+# create statusless tasks (the status field stays absent until you set it).
+default_status = "todo"
 
 [merge]
 # What to do when concurrent branches change the SAME field (or dependency) to

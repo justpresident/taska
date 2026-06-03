@@ -78,6 +78,9 @@ keep_days = {keep_days}
 # `done_status`.
 status_field = "{status_field}"
 done_status = "{done_status}"
+# Status stamped onto a new task when `ta create` doesn't set one. Set to "" to
+# create statusless tasks (the status field stays absent until you set it).
+default_status = "{default_status}"
 
 [merge]
 # What to do when concurrent branches change the SAME field (or dependency) to
@@ -123,6 +126,7 @@ close_time = "{close_time}"
         keep_days = compaction.keep_days,
         status_field = workflow.status_field,
         done_status = workflow.done_status,
+        default_status = workflow.default_status,
         on_conflict = on_conflict,
         columns = columns,
         max_width = display.max_width,
@@ -169,6 +173,10 @@ impl Default for CompactionConfig {
 pub struct WorkflowConfig {
     pub status_field: String,
     pub done_status: String,
+    /// Status stamped onto a new task when `ta create` doesn't set the status
+    /// field. Empty means create statusless tasks (the status field is simply
+    /// absent until set).
+    pub default_status: String,
 }
 
 impl Default for WorkflowConfig {
@@ -176,6 +184,7 @@ impl Default for WorkflowConfig {
         Self {
             status_field: "status".to_string(),
             done_status: "closed".to_string(),
+            default_status: "todo".to_string(),
         }
     }
 }

@@ -88,3 +88,4 @@ The repo tracks its own work in `.taska/`, so:
 - **Commit the eventlog change with the code it describes** — closing a task (`status=closed`; `done_status` is `closed`) goes in the same commit as the feature, and a pending eventlog change is flushed before the next task starts.
 - `config.toml` is plain config, not the eventlog — edit it directly (and you must when adding a config option; see above).
 - The roadmap lives in the store: `ta list` / `ta show <id>` carry the open tasks and the design questions in their notes.
+- **File a roadmap task** with `ta create <kebab-id> title="…" notes="…"` — one task per feature; put the design questions in `notes` (read untruncated with `ta show <id> --full`). Don't pass `status=`: `ta create` stamps the `[workflow] default_status` (`todo`) automatically.
