@@ -165,7 +165,7 @@ title = 80
 | `ta unblock <task> <depends_on>` | Remove a dependency edge |
 | `ta delete <id>` | Delete a task |
 | `ta list` | List all tasks |
-| `ta search <key> <value>` | List tasks whose field equals a value |
+| `ta search <criteria>...` | List tasks matching all AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`; `field` may be a task field, `id`, or `deps` (e.g. `ta search status~open priority=3`) |
 | `ta show <id>` | Show a single task with all of its fields |
 | `ta ready` | Not-done tasks whose dependencies are all done |
 | `ta status` | Summary counts: total, per-status (discovered from the data), blocked, ready, and closed (`--format json` for a machine-readable object) |

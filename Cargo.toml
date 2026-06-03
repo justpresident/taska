@@ -29,5 +29,7 @@ toml = "0.8"
 toml_edit = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 petgraph = "0.6"
+# Per-field regex matching for `ta search`.
+regex = "1"
 fd-lock = "4.0"
 clap = { version = "4.4", features = ["derive"] }

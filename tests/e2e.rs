@@ -139,7 +139,7 @@ fn crud_search_and_ready_workflow() {
     assert!(json.contains(r#""priority":3"#), "json: {json}");
     assert!(json.contains(r#""deps":["db"]"#), "json: {json}");
 
-    let search = ta(&dir, &["search", "status", "open"]);
+    let search = ta(&dir, &["search", "status=open"]);
     assert!(lists_task(&search, "api"), "search: {search}");
     assert!(!lists_task(&search, "db"), "db is done, not open: {search}");
 
@@ -346,6 +346,73 @@ fn rows(path: &Path) -> usize {
         .lines()
         .filter(|l| !l.trim().is_empty())
         .count()
+}
+
+#[test]
+fn search_supports_regex_negation_and_combined_criteria() {
+    let dir = fresh_dir("search-improve");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(
+        &dir,
+        &[
+            "create",
+            "api",
+            "status=open",
+            "priority=3",
+            "title=API work",
+        ],
+    );
+    ta(
+        &dir,
+        &[
+            "create",
+            "db",
+            "status=closed",
+            "priority=1",
+            "title=DB migration",
+        ],
+    );
+    ta(
+        &dir,
+        &["create", "web", "status=open", "priority=2", "title=Web UI"],
+    );
+    ta(&dir, &["block", "web", "api"]);
+
+    // Multiple criteria are AND-combined.
+    let both = ta(&dir, &["search", "status=open", "priority=3"]);
+    assert!(
+        lists_task(&both, "api") && !lists_task(&both, "web"),
+        "AND: {both}"
+    );
+
+    // `~` is a regex over the field's string form; numbers match too.
+    let re = ta(&dir, &["search", r"priority~^[12]$"]);
+    assert!(
+        lists_task(&re, "db") && lists_task(&re, "web") && !lists_task(&re, "api"),
+        "regex on numeric field: {re}"
+    );
+
+    // Negation, and querying built-in id / deps fields.
+    let ne = ta(&dir, &["search", "status!=open"]);
+    assert!(
+        lists_task(&ne, "db") && !lists_task(&ne, "api"),
+        "negation: {ne}"
+    );
+    assert!(
+        lists_task(&ta(&dir, &["search", "deps=api"]), "web"),
+        "deps query"
+    );
+    assert!(
+        lists_task(&ta(&dir, &["search", "id~^a"]), "api"),
+        "id regex"
+    );
+
+    // A malformed criterion or bad regex is rejected (non-zero exit).
+    assert!(!run(ta_bin(), &dir, &["search", "nooperator"])
+        .status
+        .success());
+    assert!(!run(ta_bin(), &dir, &["search", "title~["]).status.success());
 }
 
 #[test]
@@ -1204,11 +1271,11 @@ fn empty_results_render_placeholders_and_empty_json_array() {
     // A search that matches nothing has its own placeholder and empty array.
     ta(&dir, &["create", "a", "status=open"]);
     assert_eq!(
-        ta(&dir, &["search", "status", "closed"]).trim(),
+        ta(&dir, &["search", "status=closed"]).trim(),
         "(no matches)"
     );
     assert_eq!(
-        ta(&dir, &["search", "status", "closed", "--format", "json"]).trim(),
+        ta(&dir, &["search", "status=closed", "--format", "json"]).trim(),
         "[]"
     );
 }
@@ -1255,14 +1322,14 @@ fn null_value_unset_is_reflected_in_list_and_search() {
 
     // The field is searchable before the unset.
     assert!(
-        lists_task(&ta(&dir, &["search", "owner", "bob"]), "x"),
+        lists_task(&ta(&dir, &["search", "owner=bob"]), "x"),
         "owner=bob should match before unset"
     );
 
     // Unset via the null convention; the field disappears from every read path.
     ta(&dir, &["update", "x", "owner=null"]);
     assert_eq!(
-        ta(&dir, &["search", "owner", "bob"]).trim(),
+        ta(&dir, &["search", "owner=bob"]).trim(),
         "(no matches)",
         "search no longer finds the unset field"
     );

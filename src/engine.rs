@@ -1,4 +1,4 @@
-//! State materialization (the overlay engine) and field search.
+//! State materialization (the overlay engine).
 //!
 //! A pure replay algorithm: it folds a mutation log over a baseline snapshot
 //! and knows nothing about where either came from. Keeping it free of storage
@@ -7,7 +7,6 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
-use serde_json::Value;
 
 use crate::model::{MutationEvent, OpType, TaskState};
 
@@ -148,24 +147,12 @@ impl Engine {
         // Never fold the final event, so the log can't be emptied.
         by_count.min(by_time).min(n.saturating_sub(1))
     }
-
-    /// Return tasks whose `key` field exactly equals `val`.
-    pub fn filter_tasks<'a>(
-        state: &'a HashMap<String, TaskState>,
-        key: &str,
-        val: &Value,
-    ) -> Vec<&'a TaskState> {
-        state
-            .values()
-            .filter(|t| t.custom_fields.get(key) == Some(val))
-            .collect()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     fn ev(op: OpType, id: &str, payload: serde_json::Map<String, Value>) -> MutationEvent {
         MutationEvent::new(op, id, payload)
