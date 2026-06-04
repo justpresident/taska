@@ -1894,3 +1894,53 @@ fn revert_to_empty_log_is_handled() {
         "an emptied log reports zero tasks"
     );
 }
+
+#[test]
+fn merge_warns_when_one_branch_reverts_a_shared_event() {
+    // main and feature share a committed task `shared`; main alone reverts it.
+    // The merge reconciles (the revert wins) but must WARN that a shared event was
+    // reverted on one branch and kept on the other — not silently drop it.
+    let dir = fresh_dir("revert-warn");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "base"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "base"]);
+    ta(&dir, &["create", "shared"]);
+    git(&dir, &["commit", "-aqm", "add shared"]);
+
+    // Branch BEFORE reverting, so feature keeps `shared` while main drops it.
+    // main only reverts and does NOT create afterwards: the freed seq stays unused,
+    // so this is the pure presence-divergence the detector catches (a later create
+    // would reuse the seq and surface as a content mismatch instead). The revert
+    // auto-commits.
+    git(&dir, &["branch", "feature"]);
+    git(&dir, &["revert", "--no-edit", "HEAD"]); // main reverts the "add shared" commit
+
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["create", "on_feature"]);
+    git(&dir, &["commit", "-aqm", "feature task"]);
+
+    git(&dir, &["checkout", "-q", "main"]);
+    let m = run("git", &dir, &["merge", "feature", "-m", "merge"]);
+    assert!(
+        m.status.success(),
+        "merge should succeed (warn, not fail): {}",
+        String::from_utf8_lossy(&m.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&m.stderr).contains("reverted on one branch"),
+        "expected the shared-revert warning on stderr, got: {}",
+        String::from_utf8_lossy(&m.stderr)
+    );
+
+    // The revert wins convergently: `shared` is gone, everything else survives.
+    let list = ta(&dir, &["list"]);
+    assert!(
+        !lists_task(&list, "shared"),
+        "reverted shared task is gone: {list}"
+    );
+    for id in ["base", "on_feature"] {
+        assert!(lists_task(&list, id), "missing {id}: {list}");
+    }
+}

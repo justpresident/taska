@@ -73,6 +73,23 @@ pub fn execute_git_merge(
         );
     }
 
+    // A shared event present on one side but reverted on the other (compared only
+    // above BOTH branches' watermarks, so a baseline fold is never mistaken for a
+    // revert) means the shared prefix was rewritten — usually a `git revert`. The
+    // removal-union above already reconciles it convergently by honoring the
+    // removal, but that silently drops events the other branch still had, so we
+    // surface it. (A revert BELOW the higher watermark stays invisible — see
+    // `removed_seqs` and the `revert_below_the_watermark_is_a_known_limitation` test.)
+    let rewritten = rewritten_shared_seqs(fork, &ours, &theirs);
+    if !rewritten.is_empty() {
+        eprintln!(
+            "taska: warning: {} shared event(s) were reverted on one branch but kept on the \
+             other (seq {:?}); the merge honored the removal. Review if that drop was unexpected.",
+            rewritten.len(),
+            rewritten
+        );
+    }
+
     // `surface` still writes a valid, deterministic file (resolving tentatively
     // as `ours`) so it's never broken, then flags the conflicts and fails so Git
     // marks the path unmerged.
@@ -112,14 +129,13 @@ pub fn execute_git_merge(
 /// i.e. reverted or hand-removed. Unioning both sides' removals makes a revert
 /// converge regardless of merge direction.
 ///
-/// LIMITATION (accepted): the watermark cannot distinguish a revert *below* it — a
-/// revert of the branch's earliest events, or one that compaction later folded
-/// past — from an ordinary baseline fold, so that removal is missed and the event
-/// can resurrect or the merge diverge by direction. A log-only detector can't fix
-/// this: it can't tell the revert from a compaction fold without the baseline, and
-/// this driver is handed only the mutation logs (`%O %A %B`), never the baseline.
-/// Characterized by the `revert_below_the_watermark_is_a_known_limitation` test
-/// below; analysis in the closed `merge-revert-compact-detector` task.
+/// LIMITATION: this only sees absences *above* the branch's watermark. A revert
+/// *below* it — of the branch's earliest events, or one that compaction later
+/// folded past — is indistinguishable from a baseline fold using the log alone, so
+/// the removal is missed and the event can resurrect or the merge diverge by
+/// direction. `rewritten_shared_seqs` *warns* about the above-watermark rewrites it
+/// can see; the below-watermark case stays a blind spot (the
+/// `revert_below_the_watermark_is_a_known_limitation` test).
 fn removed_seqs(anc: &[MutationEvent], branch: &[MutationEvent]) -> HashSet<u64> {
     let watermark = branch
         .iter()
@@ -131,6 +147,36 @@ fn removed_seqs(anc: &[MutationEvent], branch: &[MutationEvent]) -> HashSet<u64>
         .filter(|e| e.seq > watermark && !present.contains(&e.seq))
         .map(|e| e.seq)
         .collect()
+}
+
+/// Shared-region seqs (`<= fork`) present on exactly one side, compared only
+/// *above both branches' compaction watermarks* — the region both still hold in
+/// their logs. A mismatch there means the shared prefix was rewritten on one
+/// branch (a `git revert` of an event the other kept). Restricting to above both
+/// watermarks is what keeps this sound: anything either side folded into its
+/// baseline sits below the higher watermark and is excluded, so ordinary
+/// compaction never trips it. The blind spot is a revert *below* that watermark
+/// (see `removed_seqs`).
+fn rewritten_shared_seqs(fork: u64, ours: &[MutationEvent], theirs: &[MutationEvent]) -> Vec<u64> {
+    let watermark = |log: &[MutationEvent]| {
+        log.iter()
+            .map(|e| e.seq)
+            .min()
+            .map_or(0, |m| m.saturating_sub(1))
+    };
+    let lo = watermark(ours).max(watermark(theirs));
+    let in_window = |log: &[MutationEvent]| -> HashSet<u64> {
+        log.iter()
+            .map(|e| e.seq)
+            .filter(|&s| s > lo && s <= fork)
+            .collect()
+    };
+    let mut diff: Vec<u64> = in_window(ours)
+        .symmetric_difference(&in_window(theirs))
+        .copied()
+        .collect();
+    diff.sort_unstable();
+    diff
 }
 
 /// Count shared-region (`seq <= fork`) seqs that carry *different* content on
@@ -964,14 +1010,12 @@ mod tests {
 
     #[test]
     fn revert_below_the_watermark_is_a_known_limitation() {
-        // ACCEPTED LIMITATION (see the closed `merge-revert-compact-detector` task).
-        // `removed_seqs` only inspects ancestor events ABOVE the branch's min-seq
-        // watermark, so a revert of the EARLIEST event — which raises that branch's
-        // min, the same shape that compaction-past-a-revert produces — is invisible.
-        // The event then resurrects and the merge DIVERGES by direction. A log-only
-        // detector can't fix this — it can't tell the revert from a compaction fold
-        // without the baseline, which the merge driver isn't given — so this test
-        // pins the behavior to keep the tradeoff visible.
+        // KNOWN LIMITATION — the BELOW-watermark blind spot of the revert checks.
+        // `removed_seqs` and `rewritten_shared_seqs` only see reverts ABOVE the
+        // branch's min-seq watermark. A revert of the EARLIEST event raises that
+        // branch's min — the same shape compaction-past-a-revert produces — so it
+        // falls below the watermark and is invisible: the event resurrects and the
+        // merge DIVERGES by direction. This pins that residual behavior.
         let anc = vec![
             ev(1, 0, OpType::Create, "a", &[]),
             ev(2, 0, OpType::Create, "b", &[]),
@@ -999,7 +1043,62 @@ mod tests {
         );
         assert_ne!(
             into_kept, into_reverted,
-            "so the merge diverges by direction — the accepted limitation"
+            "so the merge diverges by direction — the below-watermark blind spot"
+        );
+        // And the above-watermark detector cannot see it either (it is below the
+        // higher watermark), which is exactly why it stays a limitation.
+        assert!(
+            rewritten_shared_seqs(3, &kept, &reverted).is_empty(),
+            "the below-watermark revert is outside the detector's window"
+        );
+    }
+
+    #[test]
+    fn rewritten_shared_seqs_flags_a_reverted_shared_event() {
+        // Ancestor 1..5; one branch reverts seq 3 (a still-shared event, above both
+        // watermarks), the other keeps it. The detector flags seq 3, either order.
+        let anc = vec![
+            ev(1, 0, OpType::Create, "a", &[]),
+            ev(2, 0, OpType::Create, "b", &[]),
+            ev(3, 0, OpType::Create, "c", &[]),
+            ev(4, 0, OpType::Create, "d", &[]),
+            ev(5, 0, OpType::Create, "e", &[]),
+        ];
+        let reverted = vec![
+            anc[0].clone(),
+            anc[1].clone(),
+            anc[3].clone(),
+            anc[4].clone(),
+        ]; // c (seq 3) gone
+        let kept = anc;
+        let fork = 5;
+        assert_eq!(rewritten_shared_seqs(fork, &kept, &reverted), vec![3]);
+        assert_eq!(
+            rewritten_shared_seqs(fork, &reverted, &kept),
+            vec![3],
+            "symmetric — flagged regardless of side"
+        );
+    }
+
+    #[test]
+    fn rewritten_shared_seqs_ignores_legitimate_compaction() {
+        // The key soundness case: two branches that compacted to DIFFERENT depths.
+        // ours folded 1,2 (log 3..5); theirs folded 1,2,3 (log 4..6). Nothing was
+        // reverted, so the detector must stay silent — the differing folded prefix
+        // is below the higher watermark and excluded from the comparison.
+        let ours = vec![
+            ev(3, 0, OpType::Create, "c", &[]),
+            ev(4, 0, OpType::Create, "d", &[]),
+            ev(5, 0, OpType::Create, "e", &[]),
+        ];
+        let theirs = vec![
+            ev(4, 0, OpType::Create, "d", &[]),
+            ev(5, 0, OpType::Create, "e", &[]),
+            ev(6, 0, OpType::Create, "f", &[]),
+        ];
+        assert!(
+            rewritten_shared_seqs(5, &ours, &theirs).is_empty(),
+            "compaction to different depths must not be flagged as a revert"
         );
     }
 
