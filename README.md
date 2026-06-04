@@ -27,7 +27,7 @@ That single choice is the whole point, because it is what makes git work *for* y
 
 When the event log eventually grows large enough that replaying it gets slow, you can compact it — the same move Cassandra makes with its SSTables. Compaction folds the old prefix of the log into `baseline.jsonl`, a snapshot of the dependency graph in its final state. That file never produces merge conflicts, because it is built only from old, settled events. The smaller `mutations.jsonl` holds the recent events and is the one the merge driver reconciles.
 
-TODO: link detailed design of how the append log, merge, revert and conflict resolution work.
+See [docs/MERGE.md](docs/MERGE.md) for the detailed design: the event log and `seq` model, the merge/rebase algorithm, revert handling, per-field conflict resolution, and compaction.
 
 TODO: compaction will support not only jsonl, but also more compact and fast binary indexes for when your task counts are measured in millions.
 
