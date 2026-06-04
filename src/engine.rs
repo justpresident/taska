@@ -4,7 +4,7 @@
 //! and knows nothing about where either came from. Keeping it free of storage
 //! dependencies makes it trivially testable and reusable.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value};
@@ -31,6 +31,40 @@ fn apply_set(fields: &mut Map<String, Value>, payload: Map<String, Value>) {
             fields.remove(&k);
         } else {
             fields.insert(k, v);
+        }
+    }
+}
+
+/// Apply an `AddDep`/`RemoveDep` (`add` = true/false). The edge's `type` (absent
+/// = the legacy/default `depends_on`) routes it: `depends_on` stays in the
+/// `depends_on` field, every other type lives in the `relationships` map. An
+/// emptied non-`depends_on` entry is dropped so the map stays clean.
+fn apply_dep(task: &mut TaskState, payload: &Map<String, Value>, add: bool) {
+    let Some(dep_id) = payload.get("dep").and_then(Value::as_str) else {
+        return;
+    };
+    let rel_type = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("depends_on");
+
+    if rel_type == "depends_on" {
+        if add {
+            if !task.depends_on.iter().any(|d| d == dep_id) {
+                task.depends_on.push(dep_id.to_string());
+            }
+        } else {
+            task.depends_on.retain(|d| d != dep_id);
+        }
+    } else if add {
+        let targets = task.relationships.entry(rel_type.to_string()).or_default();
+        if !targets.iter().any(|d| d == dep_id) {
+            targets.push(dep_id.to_string());
+        }
+    } else if let Some(targets) = task.relationships.get_mut(rel_type) {
+        targets.retain(|d| d != dep_id);
+        if targets.is_empty() {
+            task.relationships.remove(rel_type);
         }
     }
 }
@@ -122,6 +156,7 @@ impl Engine {
                             .or_insert_with(|| TaskState {
                                 id: event.task_id.clone(),
                                 depends_on: Vec::new(),
+                                relationships: BTreeMap::new(),
                                 custom_fields: serde_json::Map::new(),
                                 create_time: None,
                                 update_time: None,
@@ -168,12 +203,7 @@ impl Engine {
                 }
                 OpType::AddDep => {
                     if let Some(task) = state_map.get_mut(&event.task_id) {
-                        if let Some(dep_id) = event.payload.get("dep").and_then(|v| v.as_str()) {
-                            let dep_id = dep_id.to_string();
-                            if !task.depends_on.contains(&dep_id) {
-                                task.depends_on.push(dep_id);
-                            }
-                        }
+                        apply_dep(task, &event.payload, true);
                         // A dep change touches the task but never its status.
                         task.update_time = Some(ts);
                     } else {
@@ -182,9 +212,7 @@ impl Engine {
                 }
                 OpType::RemoveDep => {
                     if let Some(task) = state_map.get_mut(&event.task_id) {
-                        if let Some(dep_id) = event.payload.get("dep").and_then(|v| v.as_str()) {
-                            task.depends_on.retain(|d| d != dep_id);
-                        }
+                        apply_dep(task, &event.payload, false);
                         task.update_time = Some(ts);
                     } else {
                         orphans.push(event.seq);
@@ -351,10 +379,67 @@ mod tests {
     }
 
     #[test]
+    fn typed_deps_route_to_field_or_map() {
+        let mutations = vec![
+            ev(OpType::Create, "a", serde_json::Map::new()),
+            // Legacy untyped, and explicit depends_on, both land in depends_on.
+            ev(OpType::AddDep, "a", fields(&[("dep", json!("b"))])),
+            ev(
+                OpType::AddDep,
+                "a",
+                fields(&[("dep", json!("c")), ("type", json!("depends_on"))]),
+            ),
+            // A typed edge lands in the relationships map (not depends_on).
+            ev(
+                OpType::AddDep,
+                "a",
+                fields(&[("dep", json!("d")), ("type", json!("relates_to"))]),
+            ),
+            ev(
+                OpType::AddDep,
+                "a",
+                fields(&[("dep", json!("e")), ("type", json!("relates_to"))]),
+            ),
+            ev(
+                OpType::RemoveDep,
+                "a",
+                fields(&[("dep", json!("d")), ("type", json!("relates_to"))]),
+            ),
+        ];
+        let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
+        let a = &state["a"];
+        assert_eq!(a.depends_on, vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(a.relationships["relates_to"], vec!["e".to_string()]);
+    }
+
+    #[test]
+    fn removing_last_typed_edge_drops_the_map_entry() {
+        let mutations = vec![
+            ev(OpType::Create, "a", serde_json::Map::new()),
+            ev(
+                OpType::AddDep,
+                "a",
+                fields(&[("dep", json!("d")), ("type", json!("relates_to"))]),
+            ),
+            ev(
+                OpType::RemoveDep,
+                "a",
+                fields(&[("dep", json!("d")), ("type", json!("relates_to"))]),
+            ),
+        ];
+        let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
+        assert!(
+            state["a"].relationships.is_empty(),
+            "an emptied typed entry is removed, leaving a clean map"
+        );
+    }
+
+    #[test]
     fn mutations_overlay_the_baseline() {
         let baseline = vec![TaskState {
             id: "a".into(),
             depends_on: vec!["x".into()],
+            relationships: BTreeMap::new(),
             custom_fields: fields(&[("status", json!("open"))]),
             create_time: None,
             update_time: None,

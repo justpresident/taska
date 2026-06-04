@@ -2,6 +2,8 @@
 //!
 //! Pure data with no knowledge of how it is stored, replayed, or displayed.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -97,6 +99,15 @@ pub fn verify_seq_order(events: &[MutationEvent]) -> Result<(), String> {
 pub struct TaskState {
     pub id: String,
     pub depends_on: Vec<String>,
+
+    /// Typed relationship edges OTHER than `depends_on`: type name → target ids.
+    /// The `depends_on` type keeps its own field above (the default blocker, and
+    /// the `deps` column); every other declared type (`relates_to`, `blocks`,
+    /// `duplicates`, …) lives here. `skip_serializing_if` keeps it off the line
+    /// when unused and old baselines (which lack it) readable.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub relationships: BTreeMap<String, Vec<String>>,
+
     pub custom_fields: Map<String, Value>,
 
     /// Computed, best-effort timestamps materialized from the event log — never

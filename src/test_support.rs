@@ -71,6 +71,7 @@ pub fn task(id: &str, deps: &[&str], fields: &[(&str, Value)]) -> TaskState {
     TaskState {
         id: id.to_string(),
         depends_on: deps.iter().map(|d| (*d).to_string()).collect(),
+        relationships: std::collections::BTreeMap::new(),
         custom_fields: fields
             .iter()
             .map(|(k, v)| ((*k).to_string(), v.clone()))
