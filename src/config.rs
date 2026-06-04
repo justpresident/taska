@@ -27,6 +27,9 @@ pub const MIN_KEEP_EVENTS: usize = 300;
 /// serialization alone can't emit those. A test asserts the rendered file
 /// round-trips back to `Config::default()`, which also catches template typos
 /// such as a misspelled key.
+// A prose template that grows with each config option — line count is not a
+// useful signal here, unlike for real logic.
+#[allow(clippy::too_many_lines)]
 pub fn default_toml() -> String {
     let Config {
         compaction,
@@ -34,22 +37,12 @@ pub fn default_toml() -> String {
         merge,
         display,
         timestamps,
+        relationships,
     } = Config::default();
     let on_conflict = merge.on_conflict.as_str();
-    let columns = display
-        .columns
-        .iter()
-        .map(|c| format!("\"{c}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    // The `[display.column_max_width]` sub-table, one `name = width` per entry.
-    // Keys are quoted so a column name with TOML-special characters round-trips.
-    let column_max_width = display
-        .column_max_width
-        .iter()
-        .map(|(k, v)| format!("\"{k}\" = {v}"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let columns = render_columns(&display.columns);
+    let column_max_width = render_column_widths(&display.column_max_width);
+    let relationships_toml = render_relationships(&relationships);
     format!(
         r#"# taska configuration
 #
@@ -120,6 +113,13 @@ sort = "{sort}"
 create_time = "{create_time}"
 update_time = "{update_time}"
 close_time = "{close_time}"
+
+# Relationship types. `ta dep <a> <type>=<b>` adds an edge; an undeclared type is
+# rejected. type = "blocker" makes the target a prerequisite (feeds `ta ready` and
+# cycle detection); "info" is informational. inverse names the reverse direction
+# and is OPTIONAL — omit it for a one-way type; the type's own name makes it
+# symmetric (`a relates_to b` reads both ways); else it labels the inverse.
+{relationships_toml}
 "#,
         min_keep = MIN_KEEP_EVENTS,
         keep_events = compaction.keep_events,
@@ -135,7 +135,47 @@ close_time = "{close_time}"
         create_time = timestamps.create_time,
         update_time = timestamps.update_time,
         close_time = timestamps.close_time,
+        relationships_toml = relationships_toml,
     )
+}
+
+fn render_columns(columns: &[String]) -> String {
+    columns
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The `[display.column_max_width]` sub-table, one `name = width` per entry.
+/// Keys are quoted so a column name with TOML-special characters round-trips.
+fn render_column_widths(widths: &BTreeMap<String, usize>) -> String {
+    widths
+        .iter()
+        .map(|(k, v)| format!("\"{k}\" = {v}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// One `[relationships.<name>]` sub-table per declared relationship type.
+fn render_relationships(relationships: &RelationshipConfig) -> String {
+    relationships
+        .types
+        .iter()
+        .map(|(name, k)| {
+            // `inverse` is optional: omit it for a one-way relationship.
+            let inverse = if k.inverse.is_empty() {
+                String::new()
+            } else {
+                format!("\ninverse = \"{}\"", k.inverse)
+            };
+            format!(
+                "[relationships.{name}]\ntype = \"{}\"{inverse}",
+                k.kind.as_str()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
@@ -146,6 +186,7 @@ pub struct Config {
     pub merge: MergeConfig,
     pub display: DisplayConfig,
     pub timestamps: TimestampConfig,
+    pub relationships: RelationshipConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -292,6 +333,78 @@ impl Default for TimestampConfig {
     }
 }
 
+/// What a relationship type does to the dependency graph.
+///
+/// SERIALIZATION CONTRACT: the lowercase names are config values users write.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RelType {
+    /// `A <type> B` makes `B` a prerequisite of `A`: `A` is ready only once `B`
+    /// is done. Feeds `ta ready` and cycle detection (the dependency DAG).
+    Blocker,
+    /// No effect on readiness or cycles — purely informational.
+    #[default]
+    Info,
+}
+
+impl RelType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Blocker => "blocker",
+            Self::Info => "info",
+        }
+    }
+}
+
+/// One relationship type's semantics.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct RelationshipDef {
+    /// `blocker` (gates readiness/cycles) or `info` (informational). The config
+    /// key is `type`.
+    #[serde(rename = "type")]
+    pub kind: RelType,
+    /// Name the reverse edge is shown under. **Optional**; empty (the default)
+    /// means a one-way relationship whose reverse isn't surfaced (e.g. a small
+    /// task that `duplicates` part of a bigger one). The type's OWN name means
+    /// **symmetric** — `a relates_to b` also reads as `b relates_to a`, removable
+    /// from either side. Any other name labels the inverse direction
+    /// (`depends_on`'s reverse is `blocks`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub inverse: String,
+}
+
+/// Declared relationship types, by name.
+///
+/// `ta dep <a> <type>=<b>` rejects a type not listed here. A newtype over the map
+/// so it gets a non-empty `Default` and serializes transparently as
+/// `[relationships.<name>]` sub-tables.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct RelationshipConfig {
+    pub types: BTreeMap<String, RelationshipDef>,
+}
+
+impl Default for RelationshipConfig {
+    fn default() -> Self {
+        let def = |kind, inverse: &str| RelationshipDef {
+            kind,
+            inverse: inverse.to_string(),
+        };
+        Self {
+            // `depends_on` blocks (reverse `blocks`); `relates_to` is symmetric
+            // (self-inverse); `duplicates` is one-way (no inverse surfaced).
+            types: [
+                ("depends_on".to_string(), def(RelType::Blocker, "blocks")),
+                ("relates_to".to_string(), def(RelType::Info, "relates_to")),
+                ("duplicates".to_string(), def(RelType::Info, "")),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+}
+
 impl Config {
     /// Load config from `path`, falling back to defaults if the file is absent.
     /// `#[serde(default)]` means a partial file still loads — only the keys
@@ -332,6 +445,33 @@ mod tests {
         // from — catches a typo'd key or section in the prose template.
         let parsed: Config = toml::from_str(&default_toml()).unwrap();
         assert_eq!(parsed, Config::default());
+    }
+
+    #[test]
+    fn relationship_defaults_set_kind_and_inverse() {
+        let r = RelationshipConfig::default();
+        assert_eq!(
+            r.types["depends_on"].kind,
+            RelType::Blocker,
+            "depends_on blocks"
+        );
+        assert_eq!(
+            r.types["depends_on"].inverse, "blocks",
+            "depends_on's reverse is blocks"
+        );
+        assert_eq!(
+            r.types["relates_to"].kind,
+            RelType::Info,
+            "relates_to informational"
+        );
+        assert_eq!(
+            r.types["relates_to"].inverse, "relates_to",
+            "relates_to is symmetric (self-inverse)"
+        );
+        // A `[relationships.x]` sub-table with only `type` defaults inverse="".
+        let parsed: Config = toml::from_str("[relationships.needs]\ntype = \"blocker\"\n").unwrap();
+        assert_eq!(parsed.relationships.types["needs"].kind, RelType::Blocker);
+        assert_eq!(parsed.relationships.types["needs"].inverse, "");
     }
 
     #[test]

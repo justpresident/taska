@@ -67,3 +67,22 @@ title = 80
 create_time = "create_time"
 update_time = "update_time"
 close_time = "close_time"
+
+# Relationship types between tasks. `ta dep <a> <type>=<b>` adds an edge; a type
+# not declared here is rejected. type = "blocker" makes the target a prerequisite
+# of the source (feeds `ta ready` and cycle detection); type = "info" is
+# informational. inverse names the reverse direction and is OPTIONAL — omit it for
+# a one-way relationship; a type's OWN name means it is symmetric (`a relates_to b`
+# also reads as `b relates_to a`, removable from either side); any other name
+# labels the inverse (`depends_on`'s reverse is `blocks`).
+[relationships.depends_on]
+type = "blocker"
+inverse = "blocks"
+
+[relationships.relates_to]
+type = "info"
+inverse = "relates_to"
+
+# One-way: `a duplicates b` (no reverse surfaced) — inverse omitted.
+[relationships.duplicates]
+type = "info"
