@@ -216,7 +216,7 @@ mod tests {
         pairs.sort();
         // Nested sub-tables flatten to dotted keys; strings render bare.
         assert!(pairs.contains(&("workflow.status_field".to_string(), "status".to_string())));
-        assert!(pairs.contains(&("compaction.keep_events".to_string(), "1000".to_string())));
+        assert!(pairs.contains(&("compaction.keep_events".to_string(), "5000".to_string())));
         assert!(pairs.contains(&(
             "display.column_max_width.title".to_string(),
             "80".to_string()

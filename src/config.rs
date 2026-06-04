@@ -18,7 +18,7 @@ use crate::error::DynError;
 /// Retaining fewer than this risks folding away events a concurrent branch still
 /// needs to reconcile on merge, which is unrecoverable, so `enforce_config`
 /// rejects any smaller value on every store-backed command.
-pub const MIN_KEEP_EVENTS: usize = 100;
+pub const MIN_KEEP_EVENTS: usize = 300;
 
 /// The `config.toml` written by `ta init`.
 ///
@@ -162,7 +162,7 @@ pub struct CompactionConfig {
 impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
-            keep_events: 1000,
+            keep_events: 5000,
             keep_days: 30,
         }
     }

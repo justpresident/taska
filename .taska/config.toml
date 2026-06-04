@@ -12,9 +12,9 @@
 # baseline can no longer be reconciled. Keep enough history to cover your
 # longest-lived branch.
 #
-# Keep at least this many of the most recent events (minimum 100); also
+# Keep at least this many of the most recent events (minimum 300); also
 # the minimum log size before compaction does anything.
-keep_events = 1000
+keep_events = 5000
 # Also keep every event from at least this many days back (0 disables the time
 # window). An event is retained if it is recent by either rule.
 keep_days = 30

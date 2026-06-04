@@ -103,7 +103,7 @@ fn init_creates_config_and_registers_merge_driver() {
         cfg.contains("[compaction]") && cfg.contains("[workflow]"),
         "config: {cfg}"
     );
-    assert!(cfg.contains("keep_events = 1000"), "config: {cfg}");
+    assert!(cfg.contains("keep_events = 5000"), "config: {cfg}");
     assert!(cfg.contains("status_field = \"status\""), "config: {cfg}");
 
     let attrs = fs::read_to_string(dir.join(".gitattributes")).unwrap();
@@ -513,10 +513,10 @@ fn auto_timestamps_lifecycle_search_and_compaction() {
     // enough events to fold the original Create past the keep_events floor.
     fs::write(
         dir.join(".taska/config.toml"),
-        "[compaction]\nkeep_events = 100\nkeep_days = 0\n",
+        "[compaction]\nkeep_events = 300\nkeep_days = 0\n",
     )
     .unwrap();
-    for i in 0..120 {
+    for i in 0..350 {
         ta(&dir, &["create", &format!("t{i}")]);
     }
     ta(&dir, &["compact"]);
@@ -659,7 +659,7 @@ fn config_get_set_list_validates_and_preserves_comments() {
     // get reads effective values, including defaults and nested sub-tables.
     assert_eq!(
         ta(&dir, &["config", "get", "compaction.keep_events"]).trim(),
-        "1000"
+        "5000"
     );
     assert_eq!(
         ta(&dir, &["config", "get", "workflow.status_field"]).trim(),
@@ -796,37 +796,37 @@ fn compact_folds_log_and_appends_resume() {
     let dir = fresh_dir("compact");
     init_repo(&dir);
     ta(&dir, &["init"]);
-    // A valid retention floor (>= MIN_KEEP_EVENTS = 100). We then generate MORE
+    // A valid retention floor (>= MIN_KEEP_EVENTS = 300). We then generate MORE
     // events than that so compaction actually folds the old prefix and retains
     // exactly the recent suffix — the fold-and-resume path.
     fs::write(
         dir.join(".taska/config.toml"),
-        "[compaction]\nkeep_events = 100\nkeep_days = 0\n",
+        "[compaction]\nkeep_events = 300\nkeep_days = 0\n",
     )
     .unwrap();
 
-    // 150 creates > keep_events (100), so 50 fold into the baseline and 100 stay.
-    for i in 0..150 {
+    // 350 creates > keep_events (300), so 50 fold into the baseline and 300 stay.
+    for i in 0..350 {
         ta(&dir, &["create", &format!("t{i}")]);
     }
     ta(&dir, &["compact"]);
 
     assert_eq!(
         rows(&dir.join(".taska/mutations.jsonl")),
-        100,
+        300,
         "keep_events most-recent events retained in the log"
     );
     assert_eq!(
         rows(&dir.join(".taska/baseline.jsonl")),
         50,
-        "the folded remainder (150 - keep_events) is in the baseline"
+        "the folded remainder (350 - keep_events) is in the baseline"
     );
 
     // Appends overlay the baseline after compaction, and the older folded tasks
     // are still visible — fold-and-resume keeps everything reachable.
     ta(&dir, &["create", "resumed"]);
     let list = ta(&dir, &["list"]);
-    for id in ["t0", "t75", "t149", "resumed"] {
+    for id in ["t0", "t75", "t349", "resumed"] {
         assert!(lists_task(&list, id), "missing {id} in list:\n{list}");
     }
 }
@@ -840,33 +840,33 @@ fn compact_retains_recent_events_for_merge() {
     // recent suffix is retained in the log so divergent branches can still merge.
     fs::write(
         dir.join(".taska/config.toml"),
-        "[compaction]\nkeep_events = 120\nkeep_days = 0\n",
+        "[compaction]\nkeep_events = 300\nkeep_days = 0\n",
     )
     .unwrap();
 
-    // 150 creates > keep_events (120): 30 fold into baseline, 120 newest retained.
-    for i in 0..150 {
+    // 350 creates > keep_events (300): 50 fold into baseline, 300 newest retained.
+    for i in 0..350 {
         ta(&dir, &["create", &format!("t{i}")]);
     }
     let out = ta(&dir, &["compact"]);
-    assert!(out.contains("kept 120 recent event(s)"), "got: {out}");
+    assert!(out.contains("kept 300 recent event(s)"), "got: {out}");
 
     assert_eq!(
         rows(&dir.join(".taska/mutations.jsonl")),
-        120,
+        300,
         "kept keep_events recent events for merge reconciliation"
     );
     assert_eq!(
         rows(&dir.join(".taska/baseline.jsonl")),
-        30,
-        "folded the oldest 30 into baseline"
+        50,
+        "folded the oldest 50 into baseline"
     );
 
     // The retained log holds the most recent creations (not the oldest, which
     // were folded away). The newest task is in the log; the oldest is not.
     let mutations = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        mutations.contains(r#""task_id":"t149""#),
+        mutations.contains(r#""task_id":"t349""#),
         "expected the newest event retained: {mutations}"
     );
     assert!(
@@ -876,7 +876,7 @@ fn compact_retains_recent_events_for_merge() {
 
     // All tasks remain visible (baseline + retained log), old and new alike.
     let list = ta(&dir, &["list"]);
-    for id in ["t0", "t29", "t30", "t149"] {
+    for id in ["t0", "t49", "t50", "t349"] {
         assert!(lists_task(&list, id), "missing {id}:\n{list}");
     }
 }
@@ -905,7 +905,7 @@ fn low_keep_events_is_rejected_on_the_next_command() {
     assert!(!out.status.success(), "list should fail on invalid config");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("keep_events") && stderr.contains("100"),
+        stderr.contains("keep_events") && stderr.contains("300"),
         "stderr: {stderr}"
     );
 }
@@ -914,7 +914,7 @@ fn low_keep_events_is_rejected_on_the_next_command() {
 fn compact_is_noop_below_threshold() {
     let dir = fresh_dir("compact_noop");
     init_repo(&dir);
-    ta(&dir, &["init"]); // default keep_events = 1000
+    ta(&dir, &["init"]); // default keep_events = 5000
 
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
@@ -1751,12 +1751,12 @@ fn baseline_keep_ours_merges_after_both_branches_compact() {
     // which is what exercises the keep-ours baseline driver on merge.
     fs::write(
         dir.join(".taska/config.toml"),
-        "[compaction]\nkeep_events = 100\nkeep_days = 0\n",
+        "[compaction]\nkeep_events = 300\nkeep_days = 0\n",
     )
     .unwrap();
 
-    // 130 creates > keep_events (100): 30 fold into the baseline, 100 stay.
-    for i in 0..130 {
+    // 350 creates > keep_events (300): 50 fold into the baseline, 300 stay.
+    for i in 0..350 {
         ta(&dir, &["create", &format!("t{i}")]);
     }
     git(&dir, &["add", "-A"]);
@@ -1781,16 +1781,16 @@ fn baseline_keep_ours_merges_after_both_branches_compact() {
         String::from_utf8_lossy(&merge.stderr)
     );
 
-    // ours' baseline is kept verbatim (the 30 folded tasks), and the log driver
+    // ours' baseline is kept verbatim (the 50 folded tasks), and the log driver
     // still reconciles the recent suffix, so every task — old, new, and feature's
     // late `extra` — remains visible after the merge.
     assert_eq!(
         rows(&dir.join(".taska/baseline.jsonl")),
-        30,
+        50,
         "keep-ours retains our own baseline depth"
     );
     let list = ta(&dir, &["list"]);
-    for id in ["t0", "t129", "extra"] {
+    for id in ["t0", "t349", "extra"] {
         assert!(lists_task(&list, id), "missing {id} after merge:\n{list}");
     }
 }
@@ -1867,5 +1867,30 @@ fn reverts_converge_regardless_of_merge_direction() {
         fwd,
         ["keep1", "keep2", "on_feature", "on_main"],
         "surviving set after a reverted add: {fwd:?}"
+    );
+}
+
+#[test]
+fn revert_to_empty_log_is_handled() {
+    // Reverting the commit that introduced the only task empties (or removes)
+    // mutations.jsonl. The CLI must treat that degenerate empty / None-watermark
+    // state as "no tasks", never erroring.
+    let dir = fresh_dir("revert-empty");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    ta(&dir, &["create", "only"]);
+    git(&dir, &["commit", "-aqm", "add only"]);
+    // Reverting the create drops its line, leaving the log empty.
+    git(&dir, &["revert", "--no-edit", "HEAD"]);
+
+    assert!(
+        !lists_task(&ta(&dir, &["list"]), "only"),
+        "the reverted task must be gone and `list` must not error"
+    );
+    assert!(
+        ta(&dir, &["status", "--format", "json"]).contains(r#""total":0"#),
+        "an emptied log reports zero tasks"
     );
 }

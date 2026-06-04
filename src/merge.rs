@@ -111,6 +111,13 @@ pub fn execute_git_merge(
 /// watermark (so not merely folded into its baseline) yet absent from its log —
 /// i.e. reverted or hand-removed. Unioning both sides' removals makes a revert
 /// converge regardless of merge direction.
+///
+/// LIMITATION: the watermark cannot distinguish a revert *below* it — a revert of
+/// the branch's earliest events, or one that compaction later folded past — from
+/// an ordinary baseline fold, so that removal is missed and the event can
+/// resurrect or the merge diverge by direction. Tracked by the
+/// `merge-revert-compact-detector` task; characterized by the
+/// `revert_below_the_watermark_is_not_yet_detected` test below.
 fn removed_seqs(anc: &[MutationEvent], branch: &[MutationEvent]) -> HashSet<u64> {
     let watermark = branch
         .iter()
@@ -818,6 +825,177 @@ mod tests {
             one,
             vec!["a".to_string(), "c".to_string(), "d".to_string()],
             "b stays reverted, a/c/d present"
+        );
+    }
+
+    #[test]
+    fn multiple_reverts_converge_with_several_gaps() {
+        // Ancestor a..e (seq 1..5). One branch reverts b and d (seq 2 and 4 — two
+        // separate gaps); the other keeps all five and adds f (seq 6). Both gaps
+        // must reconcile and converge either direction.
+        let anc = vec![
+            ev(1, 0, OpType::Create, "a", &[]),
+            ev(2, 0, OpType::Create, "b", &[]),
+            ev(3, 0, OpType::Create, "c", &[]),
+            ev(4, 0, OpType::Create, "d", &[]),
+            ev(5, 0, OpType::Create, "e", &[]),
+        ];
+        let reverted = vec![anc[0].clone(), anc[2].clone(), anc[4].clone()]; // b, d gone
+        let kept = vec![
+            anc[0].clone(),
+            anc[1].clone(),
+            anc[2].clone(),
+            anc[3].clone(),
+            anc[4].clone(),
+            ev(6, 0, OpType::Create, "f", &[]),
+        ];
+
+        let one = merged_task_ids(&anc, &reverted, &kept);
+        let two = merged_task_ids(&anc, &kept, &reverted);
+        assert_eq!(
+            one, two,
+            "two-gap revert must converge regardless of direction"
+        );
+        assert_eq!(
+            one,
+            vec![
+                "a".to_string(),
+                "c".to_string(),
+                "e".to_string(),
+                "f".to_string()
+            ],
+            "both reverted tasks gone, the rest present"
+        );
+    }
+
+    #[test]
+    fn revert_of_the_fork_event_converges() {
+        // Reverting the HIGHEST ancestor seq — the fork event itself — still
+        // converges, and the dropped top event stays gone.
+        let anc = vec![
+            ev(1, 0, OpType::Create, "a", &[]),
+            ev(2, 0, OpType::Create, "b", &[]),
+            ev(3, 0, OpType::Create, "c", &[]),
+        ];
+        let reverted = vec![anc[0].clone(), anc[1].clone()]; // c (the fork) removed
+        let kept = vec![
+            anc[0].clone(),
+            anc[1].clone(),
+            anc[2].clone(),
+            ev(4, 0, OpType::Create, "d", &[]),
+        ];
+
+        let one = merged_task_ids(&anc, &reverted, &kept);
+        let two = merged_task_ids(&anc, &kept, &reverted);
+        assert_eq!(one, two, "reverting the fork event must converge");
+        assert_eq!(
+            one,
+            vec!["a".to_string(), "b".to_string(), "d".to_string()],
+            "c (the reverted fork event) stays gone"
+        );
+    }
+
+    #[test]
+    fn merge_against_an_emptied_log_converges() {
+        // A branch that reverted its entire shared history has an empty log:
+        // `min(seq)` is None, so the watermark falls to 0 and every ancestor event
+        // is correctly seen as removed. Exercises the empty-branch / None path.
+        let anc = vec![
+            ev(1, 0, OpType::Create, "a", &[]),
+            ev(2, 0, OpType::Create, "b", &[]),
+        ];
+        let emptied: Vec<MutationEvent> = Vec::new();
+        let kept = vec![
+            anc[0].clone(),
+            anc[1].clone(),
+            ev(3, 0, OpType::Create, "c", &[]),
+        ];
+
+        let one = merged_task_ids(&anc, &emptied, &kept); // ours emptied
+        let two = merged_task_ids(&anc, &kept, &emptied); // theirs emptied
+        assert_eq!(one, two, "an emptied branch converges both ways");
+        assert_eq!(
+            one,
+            vec!["c".to_string()],
+            "a and b were reverted away; only the surviving branch's c remains"
+        );
+    }
+
+    #[test]
+    fn reverting_a_create_above_the_watermark_orphans_its_kept_updates() {
+        // x(seq1), then Create a(seq2) and Update a(seq3). One branch reverts only
+        // a's Create (seq2) while keeping x and a's Update. Because seq2 sits ABOVE
+        // the branch's min (x=seq1 remains), its removal IS detected — and the kept
+        // Update, now applying to no task, surfaces as an orphan on replay.
+        let anc = vec![
+            ev(1, 0, OpType::Create, "x", &[]),
+            ev(2, 0, OpType::Create, "a", &[("status", json!("open"))]),
+            ev(3, 0, OpType::Update, "a", &[("status", json!("done"))]),
+        ];
+        let reverted = vec![anc[0].clone(), anc[2].clone()]; // Create a (seq2) gone
+        let kept = [anc[0].clone(), anc[1].clone(), anc[2].clone()];
+
+        let removed = removed_seqs(&anc, &reverted);
+        assert!(
+            removed.contains(&2),
+            "the reverted Create sits above the watermark, so it is dropped"
+        );
+
+        // Reconstruct the merged log (ours = kept) and replay it for the orphan.
+        let fork = anc.iter().map(|e| e.seq).max().unwrap_or(0);
+        let shared: Vec<&MutationEvent> = kept
+            .iter()
+            .filter(|e| e.seq <= fork && !removed.contains(&e.seq))
+            .collect();
+        let oc: Vec<&MutationEvent> = Vec::new();
+        let tc: Vec<&MutationEvent> = Vec::new();
+        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
+        let merged = assemble(&shared, &oc, &tc, &plan, fork);
+
+        let (state, orphans) = Engine::materialize_report(Vec::new(), merged, "status", "closed");
+        assert!(
+            !state.contains_key("a"),
+            "task a does not materialize — its Create was reverted"
+        );
+        assert_eq!(orphans.len(), 1, "a's kept Update is reported as an orphan");
+    }
+
+    #[test]
+    fn revert_below_the_watermark_is_not_yet_detected() {
+        // KNOWN LIMITATION (tracked by task `merge-revert-compact-detector`).
+        // `removed_seqs` only inspects ancestor events ABOVE the branch's min-seq
+        // watermark, so a revert of the EARLIEST event — which raises that branch's
+        // min, the same shape that compaction-past-a-revert produces — is invisible.
+        // The event then resurrects and the merge DIVERGES by direction. This pins
+        // today's (incorrect) behavior; the detector task will flip this assertion.
+        let anc = vec![
+            ev(1, 0, OpType::Create, "a", &[]),
+            ev(2, 0, OpType::Create, "b", &[]),
+            ev(3, 0, OpType::Create, "c", &[]),
+        ];
+        // Drop the earliest event (a, seq1), keeping b, c — min becomes 2, so the
+        // watermark (1) hides seq1's removal.
+        let reverted = vec![anc[1].clone(), anc[2].clone()];
+        let kept = vec![anc[0].clone(), anc[1].clone(), anc[2].clone()];
+
+        assert!(
+            !removed_seqs(&anc, &reverted).contains(&1),
+            "today the watermark hides the below-min removal of seq1"
+        );
+
+        let into_kept = merged_task_ids(&anc, &kept, &reverted); // ours kept a
+        let into_reverted = merged_task_ids(&anc, &reverted, &kept); // ours dropped a
+        assert!(
+            into_kept.contains(&"a".to_string()),
+            "a resurrects when the side that kept it is `ours`"
+        );
+        assert!(
+            !into_reverted.contains(&"a".to_string()),
+            "a stays gone when the side that reverted it is `ours`"
+        );
+        assert_ne!(
+            into_kept, into_reverted,
+            "so the merge diverges by direction — the bug the detector will catch"
         );
     }
 

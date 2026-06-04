@@ -64,6 +64,10 @@ impl MutationEvent {
 
 /// Verify a log slice is strictly increasing by `seq`.
 ///
+/// Strictly increasing, *not* contiguous: a `git revert` that drops committed
+/// events leaves gaps in the sequence, and that is a normal, supported state —
+/// only an out-of-order or duplicate `seq` is corruption.
+///
 /// Every write path — append, compaction, and merge restack — produces
 /// strictly-ordered output, so a violation is never a normal state: it means the
 /// log was hand-edited, merged by the wrong tool, or corrupted. We surface it
