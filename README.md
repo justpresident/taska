@@ -190,7 +190,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 |---|---|
 | `ta init` | Create the store and register the git merge drivers (idempotent; run once per clone) |
 | `ta create <id> [field=value ...]` | Create a task with arbitrary fields |
-| `ta update <id> [--append] <field=value ...>` | Set fields on a task; with `--append`, append to text fields (one entry per line) instead of overwriting — concurrent appends merge conflict-free |
+| `ta update <id> <field=value \| field+=value ...>` | `=` sets a field; `+=` appends to a text field (one entry per line). Mix both in one command. Appends merge conflict-free (concurrent appends accumulate) |
 | `ta block <task> <depends_on>` | Add a dependency edge |
 | `ta unblock <task> <depends_on>` | Remove a dependency edge |
 | `ta delete <id>` | Delete a task |

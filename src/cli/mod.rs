@@ -45,14 +45,11 @@ enum Commands {
         /// Custom fields as `key=value` pairs (values parsed as JSON when possible)
         fields: Vec<String>,
     },
-    /// Update fields on an existing task: `ta update <id> <field=value ...>`
+    /// Update a task: `=` sets a field, `+=` appends (e.g. `status=done log+=note`)
     Update {
         id: String,
-        /// Append to the named text fields (one entry per line) instead of
-        /// overwriting — concurrent appends accumulate conflict-free on merge
-        #[arg(long)]
-        append: bool,
-        /// Custom fields as `key=value` pairs; at least one is required
+        /// `key=value` to set a field, `key+=value` to append to it (one entry per
+        /// line; concurrent appends merge conflict-free); at least one is required
         #[arg(required = true)]
         fields: Vec<String>,
     },
@@ -209,7 +206,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             let workflow = store.config().workflow.clone();
             cmd_create(store, &workflow, &id, &fields)
         }
-        Commands::Update { id, append, fields } => cmd_update(store, &id, &fields, append),
+        Commands::Update { id, fields } => cmd_update(store, &id, &fields),
         Commands::Block {
             task_id,
             depends_on,
@@ -333,26 +330,43 @@ fn inject_time(fields: &mut Map<String, Value>, name: &str, value: Option<DateTi
 /// or be silently swallowed by `_meta`, so we reject them up front.
 const RESERVED_FIELD_KEYS: &[&str] = &["seq", "timestamp", "op", "task_id", "_meta"];
 
-/// Parse `key=value` strings into a payload map.
+/// A parsed field list, split by operator: fields to **set** (`=`) and fields to
+/// **append** to (`+=`).
+pub(crate) type FieldOps = (Map<String, Value>, Map<String, Value>);
+
+/// Parse `key=value` / `key+=value` tokens into two payload maps: fields to
+/// **set** (`=`) and fields to **append** to (`+=`). One `update` can mix both,
+/// which the caller emits as an `Update` event plus an `Append` event.
 ///
-/// A bare value is parsed as JSON, falling back to a plain string when that fails
-/// (so `status=open` stays a string, `priority=3` becomes a number). A value of
-/// the form `@PATH` is read from that file, and `@-` from stdin — taken verbatim
-/// as a string with one trailing newline trimmed, *not* JSON-coerced. This is the
-/// way to pass long or shell-hostile text (notes, descriptions) without fighting
-/// argv quoting. `@@text` escapes to the literal value `@text`.
-pub(crate) fn parse_fields(fields: &[String]) -> Result<Map<String, Value>, DynError> {
-    let mut map = Map::new();
+/// Values follow the same rules either way: parsed as JSON, falling back to a
+/// plain string (so `status=open` stays a string, `priority=3` becomes a number);
+/// a value of `@PATH` is read from that file and `@-` from stdin (verbatim, one
+/// trailing newline trimmed) — the way to pass long or shell-hostile text without
+/// fighting argv quoting; `@@text` escapes to the literal `@text`.
+pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
+    let (mut set, mut append) = (Map::new(), Map::new());
     for raw in fields {
-        let (key, val) = raw
+        let (key_part, val) = raw
             .split_once('=')
-            .ok_or_else(|| format!("invalid field `{raw}` (expected key=value)"))?;
+            .ok_or_else(|| format!("invalid field `{raw}` (expected key=value or key+=value)"))?;
+        // `key+=value` appends; a trailing `+` on the key is the operator.
+        let (key, is_append) = key_part
+            .strip_suffix('+')
+            .map_or((key_part, false), |k| (k, true));
+        if key.is_empty() {
+            return Err(format!("invalid field `{raw}`: empty field name").into());
+        }
         if RESERVED_FIELD_KEYS.contains(&key) {
             return Err(format!("field name `{key}` is reserved and can't be used").into());
         }
-        map.insert(key.to_string(), field_value(key, val)?);
+        let value = field_value(key, val)?;
+        if is_append {
+            append.insert(key.to_string(), value);
+        } else {
+            set.insert(key.to_string(), value);
+        }
     }
-    Ok(map)
+    Ok((set, append))
 }
 
 /// Resolve one `key=value` value: `@file`/`@-` (file or stdin, verbatim string),
@@ -462,5 +476,33 @@ mod tests {
     #[test]
     fn field_value_missing_file_errors() {
         assert!(field_value("notes", "@/no/such/taska/file").is_err());
+    }
+
+    #[test]
+    fn parse_field_ops_splits_set_and_append() {
+        let (set, append) = parse_field_ops(&[
+            "status=open".into(),
+            "log+=first".into(),
+            "priority=3".into(),
+        ])
+        .unwrap();
+        assert_eq!(set["status"], serde_json::json!("open"));
+        assert_eq!(set["priority"], serde_json::json!(3));
+        assert_eq!(append["log"], serde_json::json!("first"));
+        assert!(
+            !set.contains_key("log") && !append.contains_key("status"),
+            "each token lands in exactly one map"
+        );
+    }
+
+    #[test]
+    fn parse_field_ops_rejects_reserved_empty_and_opless() {
+        assert!(parse_field_ops(&["seq=1".into()]).is_err(), "reserved set");
+        assert!(
+            parse_field_ops(&["seq+=1".into()]).is_err(),
+            "reserved append"
+        );
+        assert!(parse_field_ops(&["+=x".into()]).is_err(), "empty key");
+        assert!(parse_field_ops(&["noeq".into()]).is_err(), "no operator");
     }
 }

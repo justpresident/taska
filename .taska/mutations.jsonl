@@ -95,3 +95,6 @@
 {"seq":95,"timestamp":"2026-06-04T17:04:40.657934260Z","op":"Append","task_id":"append-mutations","worklog":"implemented Append op"}
 {"seq":96,"timestamp":"2026-06-04T17:04:40.666926442Z","op":"Append","task_id":"append-mutations","worklog":"merge: summarize skips it -> commutes"}
 {"seq":97,"timestamp":"2026-06-04T17:04:40.684372378Z","op":"Update","task_id":"append-mutations","status":"closed","worklog":"done; Append op + --append flag + conflict-free merge. See commit."}
+{"seq":98,"timestamp":"2026-06-04T17:12:29.801995353Z","op":"Update","task_id":"append-mutations","status":"closed"}
+{"seq":99,"timestamp":"2026-06-04T17:12:29.802001750Z","op":"Append","task_id":"append-mutations","worklog":"switched --append flag to field+=value"}
+{"seq":100,"timestamp":"2026-06-04T17:12:29.810350459Z","op":"Append","task_id":"append-mutations","worklog":"one update can mix = and += (two events)"}

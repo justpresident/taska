@@ -2018,13 +2018,38 @@ fn append_op_accumulates_a_text_log() {
     init_repo(&dir);
     ta(&dir, &["init"]);
     ta(&dir, &["create", "task"]);
-    ta(&dir, &["update", "task", "--append", "log=started"]);
-    ta(&dir, &["update", "task", "--append", "log=made progress"]);
+    ta(&dir, &["update", "task", "log+=started"]);
+    ta(&dir, &["update", "task", "log+=made progress"]);
     // The two entries accumulate, newline-joined, instead of overwriting.
     let json = ta(&dir, &["show", "task", "--format", "json"]);
     assert!(
         json.contains(r#""log":"started\nmade progress""#),
         "append accumulates a log: {json}"
+    );
+}
+
+#[test]
+fn update_mixes_set_and_append_in_one_command() {
+    let dir = fresh_dir("update-mixed");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "t", "status=open"]);
+    // One command: set `status` (=) and append to `log` (+=).
+    ta(
+        &dir,
+        &["update", "t", "status=closed", "log+=did the thing"],
+    );
+    let json = ta(&dir, &["show", "t", "--format", "json"]);
+    assert!(
+        json.contains(r#""status":"closed""#) && json.contains(r#""log":"did the thing""#),
+        "set and append in one update: {json}"
+    );
+    // A further append accumulates onto it.
+    ta(&dir, &["update", "t", "log+=and another"]);
+    assert!(
+        ta(&dir, &["show", "t", "--format", "json"])
+            .contains(r#""log":"did the thing\nand another""#),
+        "subsequent append accumulates"
     );
 }
 
@@ -2039,10 +2064,10 @@ fn concurrent_appends_merge_without_conflict() {
     git(&dir, &["branch", "feature"]);
 
     // Each branch appends to the SAME field since the fork.
-    ta(&dir, &["update", "log", "--append", "notes=from main"]);
+    ta(&dir, &["update", "log", "notes+=from main"]);
     git(&dir, &["commit", "-aqm", "main note"]);
     git(&dir, &["checkout", "-q", "feature"]);
-    ta(&dir, &["update", "log", "--append", "notes=from feature"]);
+    ta(&dir, &["update", "log", "notes+=from feature"]);
     git(&dir, &["commit", "-aqm", "feature note"]);
 
     // Default on_conflict=surface FAILS the merge on a real conflict — so a clean

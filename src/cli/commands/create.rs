@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::cli::parse_fields;
+use crate::cli::parse_field_ops;
 use crate::config::WorkflowConfig;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType};
@@ -14,7 +14,12 @@ pub fn cmd_create(
     id: &str,
     fields: &[String],
 ) -> Result<(), DynError> {
-    let mut payload = parse_fields(fields)?;
+    // On a new task the field is absent, so `+=` (append) is just the initial
+    // value — fold the append map into the Create payload.
+    let (mut payload, append) = parse_field_ops(fields)?;
+    for (k, v) in append {
+        payload.insert(k, v);
+    }
     // Stamp the configured default status unless the caller named the status
     // field themselves (even as JSON `null`, the explicit-unset convention) or
     // defaults are turned off with an empty `default_status`.
