@@ -24,8 +24,8 @@ use crate::storage::{EventStore, FileStore};
 
 mod commands;
 use commands::{
-    cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep, cmd_init, cmd_list, cmd_ready,
-    cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction,
+    cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep, cmd_dep_group, cmd_init, cmd_list,
+    cmd_ready, cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction, DepAction,
 };
 
 #[derive(Parser)]
@@ -59,6 +59,11 @@ enum Commands {
     Block { task_id: String, depends_on: String },
     /// Remove a block constraint: `ta unblock <task_id> <depends_on>`
     Unblock { task_id: String, depends_on: String },
+    /// Add/remove typed relationship edges: `ta dep add <task> <type>=<target> …`
+    Dep {
+        #[command(subcommand)]
+        action: DepAction,
+    },
     /// Delete a task: `ta delete <id>`
     Delete { id: String },
     /// List tasks, optionally filtered: `ta list status~open priority=3 --open`
@@ -217,6 +222,10 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             task_id,
             depends_on,
         } => cmd_dep(store, &task_id, &depends_on, OpType::RemoveDep),
+        Commands::Dep { action } => {
+            let types = store.config().relationships.types.clone();
+            cmd_dep_group(store, action, &types)
+        }
         Commands::Delete { id } => cmd_delete(store, &id),
         Commands::List {
             criteria,

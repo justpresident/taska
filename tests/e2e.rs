@@ -2087,6 +2087,46 @@ fn concurrent_appends_merge_without_conflict() {
 }
 
 #[test]
+fn dep_command_adds_and_removes_typed_edges() {
+    let dir = fresh_dir("dep-cmd");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a"]);
+    ta(&dir, &["create", "b"]);
+    ta(&dir, &["create", "c"]);
+
+    // Add a depends_on edge (shows in the deps column) and a typed relates_to edge.
+    ta(&dir, &["dep", "add", "a", "depends_on=b", "relates_to=c"]);
+    let json = ta(&dir, &["show", "a", "--format", "json"]);
+    assert!(
+        json.contains(r#""deps":["b"]"#),
+        "depends_on shows in deps: {json}"
+    );
+    // The relates_to edge is recorded as a typed AddDep event.
+    let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    assert!(
+        log.contains(r#""type":"relates_to""#) && log.contains(r#""dep":"c""#),
+        "typed relates_to edge in the log: {log}"
+    );
+
+    // Remove the depends_on edge.
+    ta(&dir, &["dep", "remove", "a", "depends_on=b"]);
+    assert!(
+        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":[]"#),
+        "depends_on edge removed"
+    );
+
+    // An undeclared relationship type is rejected with a helpful error.
+    let out = run(ta_bin(), &dir, &["dep", "add", "a", "bogus=b"]);
+    assert!(!out.status.success(), "undeclared type must be rejected");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("unknown relationship type"),
+        "error names the problem: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);

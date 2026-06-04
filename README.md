@@ -191,8 +191,10 @@ Because the times are folded into the baseline at compaction, they survive even 
 | `ta init` | Create the store and register the git merge drivers (idempotent; run once per clone) |
 | `ta create <id> [field=value ...]` | Create a task with arbitrary fields |
 | `ta update <id> <field=value \| field+=value ...>` | `=` sets a field; `+=` appends to a text field (one entry per line). Mix both in one command. Appends merge conflict-free (concurrent appends accumulate) |
-| `ta block <task> <depends_on>` | Add a dependency edge |
-| `ta unblock <task> <depends_on>` | Remove a dependency edge |
+| `ta block <task> <depends_on>` | Add a `depends_on` edge (untyped shorthand) |
+| `ta unblock <task> <depends_on>` | Remove a `depends_on` edge |
+| `ta dep add <task> <type>=<target> …` | Add typed relationship edge(s); each `type` must be declared in `[relationships]` (e.g. `ta dep add api depends_on=db relates_to=ui`) |
+| `ta dep remove <task> <type>=<target> …` | Remove typed edge(s) |
 | `ta delete <id>` | Delete a task |
 | `ta list [criteria...] [--open]` | List tasks, optionally filtered by AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`; `field` may be a task field, `id`, or `deps` (e.g. `ta list status~open priority=3`). `--open` limits to not-done tasks. With no criteria, lists everything |
 | `ta show <id>` | Show one task as a readable vertical record — every field, untruncated, one `field: value` line each (`--format json`/`jsonl` for machine output) |

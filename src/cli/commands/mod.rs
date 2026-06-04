@@ -23,7 +23,7 @@ pub use compact::cmd_compact;
 pub use config::{cmd_config, ConfigAction};
 pub use create::cmd_create;
 pub use delete::cmd_delete;
-pub use dep::cmd_dep;
+pub use dep::{cmd_dep, cmd_dep_group, DepAction};
 pub use init::cmd_init;
 pub use list::cmd_list;
 pub use ready::cmd_ready;
