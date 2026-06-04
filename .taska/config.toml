@@ -40,7 +40,7 @@ default_status = "todo"
 on_conflict = "surface"
 
 [display]
-# Columns shown by list/search/ready in human format — and the field set and
+# Columns shown by list/ready in human format — and the field set and
 # order used by `--format json`. "id" and "deps" are built-ins; any other name
 # is a task field (blank when a task lacks it). Override per command with
 # `--columns a,b,c` or `--full`.
@@ -48,7 +48,7 @@ columns = ["id", "title", "status", "deps"]
 # Truncate long human cell values to this many characters (0 = no limit). This
 # is the global fallback for any column not overridden below.
 max_width = 40
-# Default column to sort list/search/ready by (ascending; --sort overrides,
+# Default column to sort list/ready by (ascending; --sort overrides,
 # --reverse flips). Any field, "id", or "deps"; empty/unknown falls back to id.
 sort = "create_time"
 
@@ -63,7 +63,7 @@ title = 80
 # to disable that timestamp. create_time = the Create event's time; update_time
 # = the latest touching event's time; close_time = the most recent time status
 # reached done_status (cleared while the task is currently not done). They are
-# available to --columns/--full/show/search and as a --sort key.
+# available to --columns/--full/show and as a --sort key.
 create_time = "create_time"
 update_time = "update_time"
 close_time = "close_time"

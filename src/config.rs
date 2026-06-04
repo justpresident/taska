@@ -93,7 +93,7 @@ default_status = "{default_status}"
 on_conflict = "{on_conflict}"
 
 [display]
-# Columns shown by list/search/ready in human format — and the field set and
+# Columns shown by list/ready in human format — and the field set and
 # order used by `--format json`. "id" and "deps" are built-ins; any other name
 # is a task field (blank when a task lacks it). Override per command with
 # `--columns a,b,c` or `--full`.
@@ -101,7 +101,7 @@ columns = [{columns}]
 # Truncate long human cell values to this many characters (0 = no limit). This
 # is the global fallback for any column not overridden below.
 max_width = {max_width}
-# Default column to sort list/search/ready by (ascending; --sort overrides,
+# Default column to sort list/ready by (ascending; --sort overrides,
 # --reverse flips). Any field, "id", or "deps"; empty/unknown falls back to id.
 sort = "{sort}"
 
@@ -116,7 +116,7 @@ sort = "{sort}"
 # to disable that timestamp. create_time = the Create event's time; update_time
 # = the latest touching event's time; close_time = the most recent time status
 # reached done_status (cleared while the task is currently not done). They are
-# available to --columns/--full/show/search and as a --sort key.
+# available to --columns/--full/show and as a --sort key.
 create_time = "{create_time}"
 update_time = "{update_time}"
 close_time = "{close_time}"
@@ -228,7 +228,7 @@ impl OnConflict {
     }
 }
 
-/// How `list`/`search`/`ready` present tasks.
+/// How `list`/`ready` present tasks.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default)]
 pub struct DisplayConfig {
@@ -242,7 +242,7 @@ pub struct DisplayConfig {
     /// width instead of `max_width` (0 = no limit). `--full` ignores these. A
     /// `BTreeMap` so the rendered config is deterministically ordered.
     pub column_max_width: BTreeMap<String, usize>,
-    /// Default column to sort `list`/`search`/`ready` rows by (ascending). Any
+    /// Default column to sort `list`/`ready` rows by (ascending). Any
     /// field name, `id`, or `deps`; `--sort` overrides per command. An empty
     /// value (or an unknown column) falls back to ordering by `id`.
     pub sort: String,

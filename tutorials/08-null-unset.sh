@@ -2,7 +2,7 @@
 # 08-null-unset.sh — removing a field entirely with the null convention.
 #
 # 'ta update <id> field=null' UNSETS a field (vs. setting it to some value). The
-# field then disappears from list / show / search — it's gone, not blanked.
+# field then disappears from list / show — it's gone, not blanked.
 source "$(dirname "$0")/lib.sh"
 
 fresh_repo
@@ -12,8 +12,8 @@ run ta create ticket title="Investigate outage" status=open owner=alice
 run ta show ticket
 pause
 
-say "'ta search owner=alice' finds it while the field is set."
-run ta search owner=alice
+say "'ta list owner=alice' finds it while the field is set."
+run ta list owner=alice
 pause
 
 say "Unset the field with the null convention: 'ta update <id> owner=null'."
@@ -29,6 +29,6 @@ say "It's gone from 'ta list --full' too (no OWNER column, since no task has the
 run ta list --full
 pause
 
-say "And 'ta search owner=alice' now finds nothing — the field is truly unset, not blank."
-run ta search owner=alice
+say "And 'ta list owner=alice' now finds nothing — the field is truly unset, not blank."
+run ta list owner=alice
 say "field=null is how you delete a field; everything else replays as if it were never set."

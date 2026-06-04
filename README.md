@@ -11,7 +11,7 @@ A local-first, **git-native** task & dependency tracker for human and agent work
 
 ### Everything is configurable!
 
-No assumptions about your workflow. Only a bare minimum of fields is fixed — `id` and `deps`. Everything else is arbitrary `key=value` fields that you define yourself. Even the `status` field, which carries a lot of meaning for dependency tracking, can be renamed in the config. You can also configure the value that signals a task is finished — name it `closed`, `done`, or whatever you're used to; taska defines no fixed schema, so you grow your own conventions. That also keeps the search and manipulation commands simple and flexible: no dozens of custom flags pinned to a reserved field name.
+No assumptions about your workflow. Only a bare minimum of fields is fixed — `id` and `deps`. Everything else is arbitrary `key=value` fields that you define yourself. Even the `status` field, which carries a lot of meaning for dependency tracking, can be renamed in the config. You can also configure the value that signals a task is finished — name it `closed`, `done`, or whatever you're used to; taska defines no fixed schema, so you grow your own conventions. That also keeps the filtering and manipulation commands simple and flexible: no dozens of custom flags pinned to a reserved field name.
 
 TODO: task schema validation will be implemented soon. You'll be able to enforce a schema for your tasks. And of course it will be highly configurable — you'd be able to define a different schema per task type.
 
@@ -154,7 +154,7 @@ done_status = "closed"
 on_conflict = "surface"
 
 [display]
-# Columns for list/search/ready (and the field order used by --format json).
+# Columns for list/ready (and the field order used by --format json).
 # "id" and "deps" are built-ins; any other name is a task field. Override per
 # command with --columns id,status or --full. The all-fields views (--full and
 # `show`) use a canonical order: these configured columns first, then every
@@ -163,7 +163,7 @@ columns = ["id", "title", "status", "deps"]
 # Truncate long human cell values to this many characters (0 = no limit). The
 # global fallback for any column not overridden below.
 max_width = 40
-# Default column to sort list/search/ready by (ascending; --sort overrides,
+# Default column to sort list/ready by (ascending; --sort overrides,
 # --reverse flips). Any field, "id", or "deps"; empty/unknown falls back to id.
 sort = "create_time"
 
@@ -176,7 +176,7 @@ title = 80
 # Computed (never user-set) timestamp fields materialized onto every task from
 # the event log. These name the columns they surface under; "" disables one.
 # They behave like ordinary string fields — usable with --columns/--full/show,
-# search, and --sort.
+# list filtering, and --sort.
 create_time = "create_time"   # the Create event's time
 update_time = "update_time"   # the latest touching event's time
 close_time  = "close_time"    # most recent time status hit done_status (cleared on reopen)
@@ -194,8 +194,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 | `ta block <task> <depends_on>` | Add a dependency edge |
 | `ta unblock <task> <depends_on>` | Remove a dependency edge |
 | `ta delete <id>` | Delete a task |
-| `ta list` | List all tasks |
-| `ta search <criteria>...` | List tasks matching all AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`; `field` may be a task field, `id`, or `deps` (e.g. `ta search status~open priority=3`) |
+| `ta list [criteria...] [--open]` | List tasks, optionally filtered by AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`; `field` may be a task field, `id`, or `deps` (e.g. `ta list status~open priority=3`). `--open` limits to not-done tasks. With no criteria, lists everything |
 | `ta show <id>` | Show one task as a readable vertical record — every field, untruncated, one `field: value` line each (`--format json`/`jsonl` for machine output) |
 | `ta ready` | Not-done tasks whose dependencies are all done |
 | `ta status` | Summary counts: total, per-status (discovered from the data), blocked, ready, and closed (`--format json`/`jsonl` for a machine-readable object) |
@@ -206,7 +205,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 
 Field values are parsed as JSON when possible (`priority=3` is a number, `status=open` a string). A value of `@PATH` is read from that file and `@-` from stdin — taken verbatim as a string (one trailing newline trimmed); this is the way to pass long or shell-hostile text (notes, descriptions) without fighting argv quoting, e.g. `ta update api notes=@notes.md` or `… notes=@-`. Write a literal `@` with `@@` (`owner=@@alice`). The keys `seq`, `timestamp`, `op`, `task_id`, and `_meta` are reserved.
 
-`list`, `search`, `ready`, and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON — one object per line — for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, `--columns id,status,…` to pick the columns for one run, and `--sort <column>` / `--reverse` to order the rows (`list`/`search`/`ready`; default column from `[display].sort`). The defaults and `max_width` live in `[display]`.
+`list`, `ready`, and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON — one object per line — for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, `--columns id,status,…` to pick the columns for one run, and `--sort <column>` / `--reverse` to order the rows (`list`/`ready`; default column from `[display].sort`). The defaults and `max_width` live in `[display]`.
 
 ## Storage layout
 

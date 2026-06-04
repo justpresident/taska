@@ -25,7 +25,7 @@ use crate::storage::{EventStore, FileStore};
 mod commands;
 use commands::{
     cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep, cmd_init, cmd_list, cmd_ready,
-    cmd_resolve, cmd_search, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction,
+    cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction,
 };
 
 #[derive(Parser)]
@@ -58,18 +58,15 @@ enum Commands {
     Unblock { task_id: String, depends_on: String },
     /// Delete a task: `ta delete <id>`
     Delete { id: String },
-    /// List all tasks
+    /// List tasks, optionally filtered: `ta list status~open priority=3 --open`
     List {
-        #[command(flatten)]
-        display: DisplayArgs,
-    },
-    /// Search by AND-combined criteria: `ta search status~open priority=3`
-    Search {
-        /// One or more `field<op>value` criteria, all of which must match:
-        /// `=` exact, `~` regex, `!=` not-equal, `!~` regex-no-match. `field`
-        /// may be a task field, `id`, or `deps`.
-        #[arg(required = true)]
+        /// Filter criteria, all of which must match: `field=value` (exact),
+        /// `field~regex`, `field!=value`, `field!~regex`. `field` may be a task
+        /// field, `id`, or `deps`. With none given, lists every task.
         criteria: Vec<String>,
+        /// Only tasks that are not done (status is not the configured done value)
+        #[arg(long)]
+        open: bool,
         #[command(flatten)]
         display: DisplayArgs,
     },
@@ -218,9 +215,20 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             depends_on,
         } => cmd_dep(store, &task_id, &depends_on, OpType::RemoveDep),
         Commands::Delete { id } => cmd_delete(store, &id),
-        Commands::List { display } => cmd_list(store, &display, &store.config().display),
-        Commands::Search { criteria, display } => {
-            cmd_search(store, &criteria, &display, &store.config().display)
+        Commands::List {
+            criteria,
+            open,
+            display,
+        } => {
+            let workflow = store.config().workflow.clone();
+            cmd_list(
+                store,
+                &criteria,
+                open,
+                &workflow,
+                &display,
+                &store.config().display,
+            )
         }
         Commands::Show { id, display } => cmd_show(store, &id, &display, &store.config().display),
         Commands::Ready { display } => {
