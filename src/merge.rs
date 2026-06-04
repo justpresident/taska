@@ -247,7 +247,9 @@ pub fn execute_git_merge_baseline(
 #[derive(Default)]
 struct Delta {
     fields: HashMap<String, FieldWrite>,
-    deps: HashMap<String, DepWrite>,
+    /// Keyed by `(relationship type, target id)` — a `depends_on` edge and a
+    /// `relates_to` edge to the same task are distinct relationships.
+    deps: HashMap<(String, String), DepWrite>,
     deleted: Option<DateTime<Utc>>,
     last_change: Option<DateTime<Utc>>,
 }
@@ -294,8 +296,14 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
             OpType::Delete => delta.deleted = Some(event.timestamp),
             OpType::AddDep | OpType::RemoveDep => {
                 if let Some(dep) = event.payload.get("dep").and_then(|v| v.as_str()) {
+                    // Absent type = the legacy/default `depends_on`.
+                    let dep_type = event
+                        .payload
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("depends_on");
                     delta.deps.insert(
-                        dep.to_string(),
+                        (dep_type.to_string(), dep.to_string()),
                         DepWrite {
                             added: matches!(event.op, OpType::AddDep),
                             ts: event.timestamp,
@@ -617,15 +625,16 @@ fn resolve_fields(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: 
 }
 
 fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &mut Plan) {
-    let mut edges: Vec<&String> = od
+    let mut edges: Vec<&(String, String)> = od
         .deps
         .keys()
         .filter(|d| td.deps.contains_key(*d))
         .collect();
     edges.sort();
 
-    for dep in edges {
-        let (ow, tw) = (&od.deps[dep], &td.deps[dep]);
+    for edge in edges {
+        let (rel_type, target) = edge;
+        let (ow, tw) = (&od.deps[edge], &td.deps[edge]);
         if ow.added == tw.added {
             continue; // both added or both removed — no contradiction
         }
@@ -640,10 +649,21 @@ fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &m
             OpType::RemoveDep
         };
         let mut payload = Map::new();
-        payload.insert("dep".to_string(), Value::String(dep.clone()));
+        payload.insert("dep".to_string(), Value::String(target.clone()));
+        // Carry the type so the resolution reconstructs the right edge; omit it
+        // for `depends_on` to keep legacy-shaped events.
+        if rel_type != "depends_on" {
+            payload.insert("type".to_string(), Value::String(rel_type.clone()));
+        }
+        // Label the edge by type unless it's the default `depends_on`.
+        let label = if rel_type == "depends_on" {
+            target.clone()
+        } else {
+            format!("{rel_type}:{target}")
+        };
         let item = ResolvedItem {
             field: None,
-            dep: Some(dep.clone()),
+            dep: Some(label.clone()),
             task: None,
             ours: as_value(EdgeOutcome::of(ow.added)),
             theirs: as_value(EdgeOutcome::of(tw.added)),
@@ -659,7 +679,7 @@ fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &m
 
         plan.conflicts.push(Conflict {
             task_id: task.to_string(),
-            field: Some(format!("dep:{dep}")),
+            field: Some(format!("dep:{label}")),
             reason: "one branch added a dependency the other removed",
             ours: as_value(EdgeOutcome::of(ow.added)),
             theirs: as_value(EdgeOutcome::of(tw.added)),
@@ -1137,6 +1157,52 @@ mod tests {
         assert!(
             notes.contains("from-ours") && notes.contains("from-theirs"),
             "both concurrent appends survive: {notes}"
+        );
+    }
+
+    #[test]
+    fn typed_dep_edges_do_not_collide_across_types() {
+        // Concurrent: ours adds `X depends_on Y`; theirs adds `X relates_to Y`.
+        // Distinct typed edges to the same target — both survive, no conflict.
+        let anc = vec![ev(1, 0, OpType::Create, "X", &[])];
+        let ours = [
+            anc[0].clone(),
+            ev(2, 0, OpType::AddDep, "X", &[("dep", json!("Y"))]),
+        ];
+        let theirs = vec![
+            anc[0].clone(),
+            ev(
+                2,
+                0,
+                OpType::AddDep,
+                "X",
+                &[("dep", json!("Y")), ("type", json!("relates_to"))],
+            ),
+        ];
+        let fork = 1;
+        let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
+        let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
+        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
+        assert!(
+            plan.conflicts.is_empty(),
+            "distinct typed edges to the same task must not conflict"
+        );
+        let removed = removed_seqs(&anc, &theirs);
+        let shared: Vec<&MutationEvent> = ours
+            .iter()
+            .filter(|e| e.seq <= fork && !removed.contains(&e.seq))
+            .collect();
+        let merged = assemble(&shared, &oc, &tc, &plan, fork);
+        let state = Engine::materialize_state(Vec::new(), merged, "status", "closed");
+        assert_eq!(
+            state["X"].depends_on,
+            vec!["Y".to_string()],
+            "depends_on edge"
+        );
+        assert_eq!(
+            state["X"].relationships["relates_to"],
+            vec!["Y".to_string()],
+            "relates_to edge"
         );
     }
 
