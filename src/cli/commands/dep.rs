@@ -1,7 +1,7 @@
 //! `ta block`/`ta unblock` (legacy, untyped) and the `ta dep` command group —
 //! add or remove typed relationship edges.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use clap::Subcommand;
 use serde_json::{Map, Value};
@@ -35,6 +35,14 @@ pub enum DepAction {
         /// Tasks to list (default: every task)
         tasks: Vec<String>,
     },
+    /// ASCII dependency tree: `ta dep tree [<task> …]` (roots default to tasks
+    /// nothing depends on)
+    Tree {
+        /// Root tasks (default: every task nothing depends on)
+        tasks: Vec<String>,
+    },
+    /// Report dependency cycles in the `depends_on` graph: `ta dep cycles`
+    Cycles,
 }
 
 /// Add or remove typed dependency edges. Each `type=target` edge's type is
@@ -54,6 +62,8 @@ pub fn cmd_dep_group(
             dep_write(store, &task, &edges, &OpType::RemoveDep, "Removed", types)
         }
         DepAction::List { tasks } => dep_list(store, &tasks, types),
+        DepAction::Tree { tasks } => dep_tree(store, &tasks),
+        DepAction::Cycles => dep_cycles(store),
     }
 }
 
@@ -220,6 +230,107 @@ fn relationship_edges(
         }
     }
     display
+}
+
+/// `ta dep tree` — ASCII tree of the `depends_on` (blocker) graph, children
+/// nested under their dependents. Roots default to tasks nothing depends on (the
+/// top-level goals); if every task has a dependent (e.g. a pure cycle), all tasks
+/// are used as roots so nothing is hidden.
+fn dep_tree(store: &impl EventStore, tasks: &[String]) -> Result<(), DynError> {
+    let state = state_of(store)?;
+    let roots = if tasks.is_empty() {
+        let depended: BTreeSet<&str> = state
+            .values()
+            .flat_map(|t| t.depends_on.iter().map(String::as_str))
+            .collect();
+        let mut r: Vec<String> = state
+            .keys()
+            .filter(|id| !depended.contains(id.as_str()))
+            .cloned()
+            .collect();
+        if r.is_empty() {
+            r = state.keys().cloned().collect();
+        }
+        r.sort();
+        r
+    } else {
+        for t in tasks {
+            if !state.contains_key(t) {
+                return Err(format!("no task `{t}`").into());
+            }
+        }
+        tasks.to_vec()
+    };
+    if roots.is_empty() {
+        println!("(no tasks)");
+        return Ok(());
+    }
+    let mut out = String::new();
+    let mut expanded: HashSet<String> = HashSet::new();
+    for root in &roots {
+        out.push_str(root);
+        out.push('\n');
+        expanded.insert(root.clone());
+        let mut path = vec![root.clone()];
+        push_subtree(&state, root, "", &mut out, &mut path, &mut expanded);
+    }
+    print!("{out}");
+    Ok(())
+}
+
+/// Append `id`'s dependency children to `out` with box-drawing connectors.
+/// `path` (ancestors) breaks cycles; `expanded` collapses a node already shown in
+/// full elsewhere to `… ` so a shared DAG node isn't reprinted.
+fn push_subtree(
+    state: &HashMap<String, TaskState>,
+    id: &str,
+    prefix: &str,
+    out: &mut String,
+    path: &mut Vec<String>,
+    expanded: &mut HashSet<String>,
+) {
+    let Some(task) = state.get(id) else { return };
+    let children = &task.depends_on;
+    let n = children.len();
+    for (i, child) in children.iter().enumerate() {
+        let last = i + 1 == n;
+        out.push_str(prefix);
+        out.push_str(if last { "└─ " } else { "├─ " });
+        out.push_str(child);
+        if !state.contains_key(child) {
+            out.push_str(" (missing)\n");
+        } else if path.iter().any(|p| p == child) {
+            out.push_str(" (cycle)\n");
+        } else if expanded.contains(child) && !state[child].depends_on.is_empty() {
+            out.push_str(" …\n");
+        } else {
+            out.push('\n');
+            expanded.insert(child.clone());
+            path.push(child.clone());
+            let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
+            push_subtree(state, child, &child_prefix, out, path, expanded);
+            path.pop();
+        }
+    }
+}
+
+/// `ta dep cycles` — report any cycles in the `depends_on` graph.
+fn dep_cycles(store: &impl EventStore) -> Result<(), DynError> {
+    let state = state_of(store)?;
+    let cycles = crate::graph::dependency_cycles(&state);
+    if cycles.is_empty() {
+        println!("No dependency cycles.");
+        return Ok(());
+    }
+    println!("{} dependency cycle(s):", cycles.len());
+    for cycle in &cycles {
+        if cycle.len() == 1 {
+            println!("  {} (depends on itself)", cycle[0]);
+        } else {
+            println!("  {}", cycle.join(" ↔ "));
+        }
+    }
+    Ok(())
 }
 
 pub fn cmd_dep(

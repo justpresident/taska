@@ -2174,6 +2174,53 @@ fn dep_remove_by_inverse_name_drops_the_forward_edge() {
 }
 
 #[test]
+fn dep_tree_nests_dependencies_and_collapses_shared_nodes() {
+    let dir = fresh_dir("dep-tree");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    for id in ["a", "b", "c", "d", "e"] {
+        ta(&dir, &["create", id]);
+    }
+    // a → {b, c}; both b and c → d (a shared/diamond node); d → e.
+    ta(&dir, &["dep", "add", "a", "depends_on=b", "depends_on=c"]);
+    ta(&dir, &["dep", "add", "b", "depends_on=d"]);
+    ta(&dir, &["dep", "add", "c", "depends_on=d"]);
+    ta(&dir, &["dep", "add", "d", "depends_on=e"]);
+
+    let tree = ta(&dir, &["dep", "tree", "a"]);
+    assert!(tree.contains("├─ b"), "first child branch: {tree}");
+    assert!(tree.contains("└─ c"), "last child branch: {tree}");
+    assert!(tree.contains("└─ e"), "e nested under d: {tree}");
+    // d (with its e subtree) is reached again under c, but was already expanded
+    // under b — the second occurrence collapses rather than reprinting.
+    assert!(tree.contains("d …"), "shared node collapsed: {tree}");
+}
+
+#[test]
+fn dep_cycles_reports_circular_dependencies() {
+    let dir = fresh_dir("dep-cycles");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a"]);
+    ta(&dir, &["create", "b"]);
+
+    // No cycle yet.
+    assert!(ta(&dir, &["dep", "cycles"]).contains("No dependency cycles"));
+
+    // Close a → b → a into a cycle.
+    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
+    ta(&dir, &["dep", "add", "b", "depends_on=a"]);
+    let cycles = ta(&dir, &["dep", "cycles"]);
+    assert!(cycles.contains("a ↔ b"), "cycle members reported: {cycles}");
+
+    // The tree marks the back-edge rather than looping forever.
+    assert!(
+        ta(&dir, &["dep", "tree", "a"]).contains("(cycle)"),
+        "tree flags the cycle"
+    );
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);
