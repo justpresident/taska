@@ -2127,6 +2127,53 @@ fn dep_command_adds_and_removes_typed_edges() {
 }
 
 #[test]
+fn dep_list_shows_forward_and_inverse_edges() {
+    let dir = fresh_dir("dep-list");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a"]);
+    ta(&dir, &["create", "b"]);
+    ta(&dir, &["create", "c"]);
+
+    // `a depends_on b` (inverse `blocks`) and `a relates_to c` (self-inverse).
+    ta(&dir, &["dep", "add", "a", "depends_on=b", "relates_to=c"]);
+
+    // `a` lists its own forward edges.
+    let a = ta(&dir, &["dep", "list", "a"]);
+    assert!(a.contains("depends_on: b"), "a forward depends_on: {a}");
+    assert!(a.contains("relates_to: c"), "a forward relates_to: {a}");
+
+    // `b` never named `a`, but the inverse of `depends_on` surfaces as `blocks`.
+    let b = ta(&dir, &["dep", "list", "b"]);
+    assert!(b.contains("blocks: a"), "b inverse blocks: {b}");
+
+    // `relates_to` is self-inverse, so `c` shows the symmetric edge back to `a`.
+    let c = ta(&dir, &["dep", "list", "c"]);
+    assert!(c.contains("relates_to: a"), "c symmetric relates_to: {c}");
+}
+
+#[test]
+fn dep_remove_by_inverse_name_drops_the_forward_edge() {
+    let dir = fresh_dir("dep-remove-inverse");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a"]);
+    ta(&dir, &["create", "b"]);
+
+    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
+    assert!(ta(&dir, &["dep", "list", "b"]).contains("blocks: a"));
+
+    // Remove the relationship from b's side using the inverse name `blocks`.
+    ta(&dir, &["dep", "remove", "b", "blocks=a"]);
+    assert!(
+        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":[]"#),
+        "inverse removal dropped a's depends_on edge"
+    );
+    let b = ta(&dir, &["dep", "list", "b"]);
+    assert!(!b.contains("blocks: a"), "inverse edge gone from b: {b}");
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);
