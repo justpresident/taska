@@ -1,6 +1,6 @@
 //! `ta status` — total, per-status, blocked, ready, and closed counts.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde_json::Value;
 
@@ -32,6 +32,7 @@ struct StatusSummary {
 fn status_summary(
     state: &HashMap<String, TaskState>,
     workflow: &WorkflowConfig,
+    blockers: &BTreeSet<String>,
 ) -> Result<StatusSummary, DynError> {
     let (field, done) = (&workflow.status_field, &workflow.done_status);
     let mut by_status: BTreeMap<String, usize> = BTreeMap::new();
@@ -48,15 +49,15 @@ fn status_summary(
             None => no_status += 1,
         }
     }
-    let ready = graph::ready_tasks(state, field, done)?.len();
+    let ready = graph::ready_tasks(state, field, done, blockers)?.len();
     let closed = state.values().filter(|t| is_done(t, field, done)).count();
     let blocked = state
         .values()
         .filter(|t| {
             !is_done(t, field, done)
-                && t.depends_on
-                    .iter()
-                    .any(|d| state.get(d).is_some_and(|dep| !is_done(dep, field, done)))
+                && graph::blocker_edges(t, blockers)
+                    .into_iter()
+                    .any(|(d, _)| state.get(d).is_some_and(|dep| !is_done(dep, field, done)))
         })
         .count();
     Ok(StatusSummary {
@@ -75,7 +76,8 @@ pub fn cmd_status(
     format: OutputFormat,
 ) -> Result<(), DynError> {
     let state = state_of(store)?;
-    let summary = status_summary(&state, workflow)?;
+    let blockers = store.config().relationships.blocker_types();
+    let summary = status_summary(&state, workflow, &blockers)?;
     let out = match format {
         // The summary is a single object, so json and jsonl render identically.
         OutputFormat::Json | OutputFormat::Jsonl => render_status_json(&summary),
@@ -168,7 +170,8 @@ mod tests {
             task("e", &[], &[]),                                      // no status -> ready
         ];
         let st = state(&tasks);
-        let s = status_summary(&st, &workflow).unwrap();
+        let blockers = BTreeSet::from(["depends_on".to_string()]);
+        let s = status_summary(&st, &workflow, &blockers).unwrap();
 
         assert_eq!(s.total, 5);
         assert_eq!(s.by_status.get("todo"), Some(&3));

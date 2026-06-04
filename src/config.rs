@@ -385,6 +385,28 @@ pub struct RelationshipConfig {
     pub types: BTreeMap<String, RelationshipDef>,
 }
 
+impl RelationshipConfig {
+    /// Relationship-type names that gate readiness, cycle detection, and the
+    /// dependency tree.
+    ///
+    /// Every declared `blocker` type, plus the implicit `depends_on` when it
+    /// isn't declared at all (legacy stores without a `[relationships]` section
+    /// still treat `depends_on` as a blocker). A `depends_on` explicitly set to
+    /// `info` is honored and excluded.
+    pub fn blocker_types(&self) -> std::collections::BTreeSet<String> {
+        let mut set: std::collections::BTreeSet<String> = self
+            .types
+            .iter()
+            .filter(|(_, def)| def.kind == RelType::Blocker)
+            .map(|(name, _)| name.clone())
+            .collect();
+        if !self.types.contains_key("depends_on") {
+            set.insert("depends_on".to_string());
+        }
+        set
+    }
+}
+
 impl Default for RelationshipConfig {
     fn default() -> Self {
         let def = |kind, inverse: &str| RelationshipDef {

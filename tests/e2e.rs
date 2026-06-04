@@ -2221,6 +2221,68 @@ fn dep_cycles_reports_circular_dependencies() {
 }
 
 #[test]
+fn custom_blocker_relationship_gates_readiness() {
+    let dir = fresh_dir("blocker-type");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // Declare a second blocker-typed relationship beyond depends_on.
+    let cfg = dir.join(".taska/config.toml");
+    let mut text = fs::read_to_string(&cfg).unwrap();
+    text.push_str("\n[relationships.requires]\ntype = \"blocker\"\ninverse = \"required_by\"\n");
+    fs::write(&cfg, text).unwrap();
+
+    ta(&dir, &["create", "a", "status=open"]);
+    ta(&dir, &["create", "b", "status=open"]);
+    ta(&dir, &["dep", "add", "a", "requires=b"]);
+
+    // `requires` is a blocker, so `a` is gated by still-open `b`: only `b` ready.
+    let ready = ta(&dir, &["ready"]);
+    assert!(lists_task(&ready, "b"), "b ready: {ready}");
+    assert!(!lists_task(&ready, "a"), "a blocked by requires=b: {ready}");
+
+    // The tree walks the typed blocker edge and labels it.
+    let tree = ta(&dir, &["dep", "tree", "a"]);
+    assert!(
+        tree.contains("b [requires]"),
+        "typed blocker labelled: {tree}"
+    );
+
+    // A cycle through the custom blocker type is detected too.
+    ta(&dir, &["dep", "add", "b", "requires=a"]);
+    assert!(
+        ta(&dir, &["dep", "cycles"]).contains("a ↔ b"),
+        "custom-blocker cycle reported"
+    );
+    ta(&dir, &["dep", "remove", "b", "requires=a"]);
+
+    // Close `b`, and `a` unblocks.
+    ta(&dir, &["update", "b", "status=closed"]);
+    assert!(
+        lists_task(&ta(&dir, &["ready"]), "a"),
+        "a ready after requires-dep done"
+    );
+}
+
+#[test]
+fn informational_relationship_does_not_gate_readiness() {
+    let dir = fresh_dir("info-rel");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // `relates_to` is type=info in the default config.
+    ta(&dir, &["create", "x", "status=open"]);
+    ta(&dir, &["create", "y", "status=open"]);
+    ta(&dir, &["dep", "add", "x", "relates_to=y"]);
+
+    // An informational edge must not block: both are ready.
+    let ready = ta(&dir, &["ready"]);
+    assert!(
+        lists_task(&ready, "x"),
+        "x ready despite relates_to: {ready}"
+    );
+    assert!(lists_task(&ready, "y"), "y ready: {ready}");
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);

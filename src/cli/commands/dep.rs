@@ -232,16 +232,22 @@ fn relationship_edges(
     display
 }
 
-/// `ta dep tree` — ASCII tree of the `depends_on` (blocker) graph, children
-/// nested under their dependents. Roots default to tasks nothing depends on (the
-/// top-level goals); if every task has a dependent (e.g. a pure cycle), all tasks
-/// are used as roots so nothing is hidden.
+/// `ta dep tree` — ASCII tree of the blocker graph (the `depends_on` field plus
+/// any `type = "blocker"` relationship), children nested under their dependents.
+/// Roots default to tasks nothing depends on (the top-level goals); if every task
+/// has a dependent (e.g. a pure cycle), all tasks are used as roots so nothing is
+/// hidden. Non-`depends_on` blocker edges are labelled with their type.
 fn dep_tree(store: &impl EventStore, tasks: &[String]) -> Result<(), DynError> {
     let state = state_of(store)?;
+    let blockers = store.config().relationships.blocker_types();
     let roots = if tasks.is_empty() {
         let depended: BTreeSet<&str> = state
             .values()
-            .flat_map(|t| t.depends_on.iter().map(String::as_str))
+            .flat_map(|t| {
+                crate::graph::blocker_edges(t, &blockers)
+                    .into_iter()
+                    .map(|(target, _)| target)
+            })
             .collect();
         let mut r: Vec<String> = state
             .keys()
@@ -272,52 +278,71 @@ fn dep_tree(store: &impl EventStore, tasks: &[String]) -> Result<(), DynError> {
         out.push('\n');
         expanded.insert(root.clone());
         let mut path = vec![root.clone()];
-        push_subtree(&state, root, "", &mut out, &mut path, &mut expanded);
+        push_subtree(
+            &state,
+            root,
+            "",
+            &blockers,
+            &mut out,
+            &mut path,
+            &mut expanded,
+        );
     }
     print!("{out}");
     Ok(())
 }
 
-/// Append `id`'s dependency children to `out` with box-drawing connectors.
-/// `path` (ancestors) breaks cycles; `expanded` collapses a node already shown in
-/// full elsewhere to `… ` so a shared DAG node isn't reprinted.
+/// Append `id`'s blocker children to `out` with box-drawing connectors,
+/// labelling non-`depends_on` edges with their type. `path` (ancestors) breaks
+/// cycles; `expanded` collapses a node already shown in full elsewhere to `…` so
+/// a shared DAG node isn't reprinted.
 fn push_subtree(
     state: &HashMap<String, TaskState>,
     id: &str,
     prefix: &str,
+    blockers: &BTreeSet<String>,
     out: &mut String,
     path: &mut Vec<String>,
     expanded: &mut HashSet<String>,
 ) {
     let Some(task) = state.get(id) else { return };
-    let children = &task.depends_on;
+    let children = crate::graph::blocker_edges(task, blockers);
     let n = children.len();
-    for (i, child) in children.iter().enumerate() {
+    for (i, (child, kind)) in children.iter().enumerate() {
         let last = i + 1 == n;
         out.push_str(prefix);
         out.push_str(if last { "└─ " } else { "├─ " });
         out.push_str(child);
-        if !state.contains_key(child) {
+        if *kind != "depends_on" {
+            out.push_str(" [");
+            out.push_str(kind);
+            out.push(']');
+        }
+        let has_subtree = state
+            .get(*child)
+            .is_some_and(|t| !crate::graph::blocker_edges(t, blockers).is_empty());
+        if !state.contains_key(*child) {
             out.push_str(" (missing)\n");
         } else if path.iter().any(|p| p == child) {
             out.push_str(" (cycle)\n");
-        } else if expanded.contains(child) && !state[child].depends_on.is_empty() {
+        } else if expanded.contains(*child) && has_subtree {
             out.push_str(" …\n");
         } else {
             out.push('\n');
-            expanded.insert(child.clone());
-            path.push(child.clone());
+            expanded.insert((*child).to_string());
+            path.push((*child).to_string());
             let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
-            push_subtree(state, child, &child_prefix, out, path, expanded);
+            push_subtree(state, child, &child_prefix, blockers, out, path, expanded);
             path.pop();
         }
     }
 }
 
-/// `ta dep cycles` — report any cycles in the `depends_on` graph.
+/// `ta dep cycles` — report any cycles in the blocker graph.
 fn dep_cycles(store: &impl EventStore) -> Result<(), DynError> {
     let state = state_of(store)?;
-    let cycles = crate::graph::dependency_cycles(&state);
+    let blockers = store.config().relationships.blocker_types();
+    let cycles = crate::graph::dependency_cycles(&state, &blockers);
     if cycles.is_empty() {
         println!("No dependency cycles.");
         return Ok(());
