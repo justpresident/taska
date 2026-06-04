@@ -10,8 +10,9 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 fn ta_bin() -> &'static str {
     env!("CARGO_BIN_EXE_ta")
@@ -1943,4 +1944,64 @@ fn merge_warns_when_one_branch_reverts_a_shared_event() {
     for id in ["base", "on_feature"] {
         assert!(lists_task(&list, id), "missing {id}: {list}");
     }
+}
+
+#[test]
+fn field_value_from_file_and_stdin() {
+    let dir = fresh_dir("field-input");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+
+    // A value that's hostile to argv: quotes, backticks, a $(...) and newlines.
+    let note = "Title: \"big\" job\n\n- uses `ta` and $(whoami)\n- 'apostrophes' too";
+    let note_path = dir.join("note.md");
+    fs::write(&note_path, note).unwrap();
+
+    // `@file` reads the value verbatim — no shell expansion, no quoting needed.
+    ta(
+        &dir,
+        &["create", "t1", &format!("notes=@{}", note_path.display())],
+    );
+    let json = ta(&dir, &["show", "t1", "--format", "json"]);
+    for frag in ["whoami", "apostrophes"] {
+        assert!(json.contains(frag), "note fragment {frag} missing: {json}");
+    }
+    assert!(
+        json.contains("$(whoami)"),
+        "file content is literal, never shell-expanded: {json}"
+    );
+
+    // `@-` reads the value from stdin.
+    let mut child = Command::new(ta_bin())
+        .args(["update", "t1", "summary=@-"])
+        .current_dir(&dir)
+        .env("PATH", path_with_bin())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"summary piped from stdin\n")
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "stdin update failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        ta(&dir, &["show", "t1", "--format", "json"]).contains("summary piped from stdin"),
+        "stdin value (trailing newline trimmed) stored"
+    );
+
+    // `@@x` is a literal `@x`, not a file read.
+    ta(&dir, &["create", "t2", "owner=@@alice"]);
+    assert!(
+        ta(&dir, &["show", "t2", "--format", "json"]).contains(r#""owner":"@alice""#),
+        "double-@ escapes to a literal @ value"
+    );
 }

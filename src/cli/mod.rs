@@ -321,8 +321,14 @@ fn inject_time(fields: &mut Map<String, Value>, name: &str, value: Option<DateTi
 /// or be silently swallowed by `_meta`, so we reject them up front.
 const RESERVED_FIELD_KEYS: &[&str] = &["seq", "timestamp", "op", "task_id", "_meta"];
 
-/// Parse `key=value` strings; values are parsed as JSON, falling back to a
-/// plain string when that fails (so `status=open` stays a string).
+/// Parse `key=value` strings into a payload map.
+///
+/// A bare value is parsed as JSON, falling back to a plain string when that fails
+/// (so `status=open` stays a string, `priority=3` becomes a number). A value of
+/// the form `@PATH` is read from that file, and `@-` from stdin — taken verbatim
+/// as a string with one trailing newline trimmed, *not* JSON-coerced. This is the
+/// way to pass long or shell-hostile text (notes, descriptions) without fighting
+/// argv quoting. `@@text` escapes to the literal value `@text`.
 pub(crate) fn parse_fields(fields: &[String]) -> Result<Map<String, Value>, DynError> {
     let mut map = Map::new();
     for raw in fields {
@@ -332,11 +338,36 @@ pub(crate) fn parse_fields(fields: &[String]) -> Result<Map<String, Value>, DynE
         if RESERVED_FIELD_KEYS.contains(&key) {
             return Err(format!("field name `{key}` is reserved and can't be used").into());
         }
-        let value =
-            serde_json::from_str::<Value>(val).unwrap_or_else(|_| Value::String(val.to_string()));
-        map.insert(key.to_string(), value);
+        map.insert(key.to_string(), field_value(key, val)?);
     }
     Ok(map)
+}
+
+/// Resolve one `key=value` value: `@file`/`@-` (file or stdin, verbatim string),
+/// `@@x` (literal `@x`), or a JSON-or-string bare value.
+fn field_value(key: &str, val: &str) -> Result<Value, DynError> {
+    let Some(src) = val.strip_prefix('@') else {
+        return Ok(serde_json::from_str::<Value>(val).unwrap_or_else(|_| Value::String(val.into())));
+    };
+    if let Some(literal) = src.strip_prefix('@') {
+        // `@@foo` is the escape hatch for a literal value that starts with `@`.
+        return Ok(Value::String(format!("@{literal}")));
+    }
+    let mut content = if src == "-" {
+        std::io::read_to_string(std::io::stdin())?
+    } else {
+        std::fs::read_to_string(src)
+            .map_err(|e| format!("cannot read `{src}` for field `{key}`: {e}"))?
+    };
+    // Trim a single trailing newline (`\n` or `\r\n`) — files almost always have
+    // one and it's rarely wanted in a field value.
+    if content.ends_with('\n') {
+        content.pop();
+        if content.ends_with('\r') {
+            content.pop();
+        }
+    }
+    Ok(Value::String(content))
 }
 
 /// Ask the user to confirm a destructive action. `force` (from `--force`) skips
@@ -357,6 +388,7 @@ pub(crate) fn confirm(prompt: &str, force: bool) -> Result<bool, DynError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
 
@@ -382,5 +414,41 @@ mod tests {
         // `ta create <id>` with no fields remains valid.
         let parsed = Cli::try_parse_from(["ta", "create", "api"]);
         assert!(parsed.is_ok(), "create with no fields should still parse");
+    }
+
+    #[test]
+    fn field_value_coerces_bare_and_strings_fallback() {
+        assert_eq!(field_value("k", "open").unwrap(), serde_json::json!("open"));
+        assert_eq!(field_value("k", "3").unwrap(), serde_json::json!(3));
+    }
+
+    #[test]
+    fn field_value_double_at_escapes_to_literal_at() {
+        // `@@bob` is a literal `@bob`, not a file read.
+        assert_eq!(
+            field_value("owner", "@@bob").unwrap(),
+            serde_json::json!("@bob")
+        );
+    }
+
+    #[test]
+    fn field_value_at_path_reads_a_file_verbatim() {
+        // The whole point: a value full of quotes, backticks, and newlines that
+        // would be a nightmare to pass on argv.
+        let body = "Notes: \"quoted\", `backticked`,\nsecond line.\n";
+        let path = std::env::temp_dir().join("taska-field-value-unit-test.md");
+        std::fs::write(&path, body).unwrap();
+        let v = field_value("notes", &format!("@{}", path.display())).unwrap();
+        // Verbatim, with the single trailing newline trimmed and no JSON coercion.
+        assert_eq!(
+            v,
+            serde_json::json!("Notes: \"quoted\", `backticked`,\nsecond line.")
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn field_value_missing_file_errors() {
+        assert!(field_value("notes", "@/no/such/taska/file").is_err());
     }
 }
