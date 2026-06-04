@@ -42,14 +42,16 @@ enum Commands {
     /// Create a new schema-agnostic task: `ta create <id> [field=value ...]`
     Create {
         id: String,
-        /// Custom fields as `key=value` pairs (values parsed as JSON when possible)
+        /// Fields as `key=value` (parsed as JSON when possible). `key=@FILE` reads
+        /// the value from a file, `key=@-` from stdin; `key=@@x` is a literal `@x`.
         fields: Vec<String>,
     },
     /// Update a task: `=` sets a field, `+=` appends (e.g. `status=done log+=note`)
     Update {
         id: String,
-        /// `key=value` to set a field, `key+=value` to append to it (one entry per
-        /// line; concurrent appends merge conflict-free); at least one is required
+        /// `key=value` sets a field, `key+=value` appends (one entry per line;
+        /// concurrent appends merge conflict-free). Values parse as JSON-or-string;
+        /// `key=@FILE` / `key=@-` read from a file / stdin. At least one required.
         #[arg(required = true)]
         fields: Vec<String>,
     },
