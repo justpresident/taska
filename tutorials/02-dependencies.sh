@@ -10,13 +10,18 @@ run ta create deploy-api title="Deploy the API" status=open
 run ta create smoke-test title="Smoke-test prod" status=open
 pause
 
-say "'ta block <task> <depends_on>' adds a dependency edge."
-run ta block deploy-api migrate-db
-run ta block smoke-test deploy-api
+say "'ta dep add <task> depends_on=<target>' adds a dependency edge."
+run ta dep add deploy-api depends_on=migrate-db
+run ta dep add smoke-test depends_on=deploy-api
 pause
 
-say "Now 'ta list' shows the DEPS column wired up."
+say "Now 'ta list' shows the DEPS column wired up, and 'ta dep tree' draws the graph."
 run ta list
+run ta dep tree
+pause
+
+say "'ta dep list' shows both directions: deploy-api depends_on migrate-db, and (inverse) blocks smoke-test."
+run ta dep list deploy-api
 pause
 
 say "'ta ready' shows only NOT-done tasks whose dependencies are all done."

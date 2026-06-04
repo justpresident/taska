@@ -128,7 +128,7 @@ fn crud_search_and_ready_workflow() {
 
     ta(&dir, &["create", "db", "status=closed"]);
     ta(&dir, &["create", "api", "status=open", "priority=3"]);
-    ta(&dir, &["block", "api", "db"]);
+    ta(&dir, &["dep", "add", "api", "depends_on=db"]);
 
     // The human table lists ids; `--full --format json` exposes every field —
     // priority coerced to a JSON number, and deps as a JSON array.
@@ -230,7 +230,7 @@ fn show_displays_full_task_and_rejects_unknown_id() {
         &["create", "a", "title=Alpha", "status=open", "priority=3"],
     );
     ta(&dir, &["create", "dep"]);
-    ta(&dir, &["block", "a", "dep"]);
+    ta(&dir, &["dep", "add", "a", "depends_on=dep"]);
 
     // `show`'s human output is a vertical record: one `field: value` line each,
     // every field (even non-default columns like priority), plus deps.
@@ -322,7 +322,7 @@ fn full_view_uses_canonical_column_order_in_both_formats() {
     ta(&dir, &["create", "dep"]);
     // Custom fields supplied out of alphabetical order.
     ta(&dir, &["create", "a", "zeta=1", "status=open", "alpha=2"]);
-    ta(&dir, &["block", "a", "dep"]);
+    ta(&dir, &["dep", "add", "a", "depends_on=dep"]);
 
     // Human --full: configured columns first (id,status,deps), then the extra
     // custom fields alphabetically (alpha, zeta).
@@ -547,7 +547,7 @@ fn jsonl_output_across_commands_omits_absent_fields() {
     ta(&dir, &["init"]);
     ta(&dir, &["create", "api", "status=open", "priority=3"]);
     ta(&dir, &["create", "db", "status=closed"]);
-    ta(&dir, &["block", "api", "db"]);
+    ta(&dir, &["dep", "add", "api", "depends_on=db"]);
 
     // list/search/ready/show all speak jsonl: one bare object per line, no array
     // wrapper, and never a null for an absent field.
@@ -624,7 +624,7 @@ fn list_supports_regex_negation_and_combined_criteria() {
         &dir,
         &["create", "web", "status=open", "priority=2", "title=Web UI"],
     );
-    ta(&dir, &["block", "web", "api"]);
+    ta(&dir, &["dep", "add", "web", "depends_on=api"]);
 
     // Multiple criteria are AND-combined.
     let both = ta(&dir, &["list", "status=open", "priority=3"]);
@@ -732,7 +732,7 @@ fn status_summarizes_counts_blocked_and_ready() {
     ta(&dir, &["create", "db", "status=closed"]);
     ta(&dir, &["create", "web", "status=open"]);
     ta(&dir, &["create", "api", "status=open"]);
-    ta(&dir, &["block", "api", "web"]);
+    ta(&dir, &["dep", "add", "api", "depends_on=web"]);
 
     let human = ta(&dir, &["status"]);
     assert!(human.contains("Total"), "total line: {human}");
@@ -1235,7 +1235,7 @@ fn workflow_config_override_changes_ready_semantics() {
 
     ta(&dir, &["create", "db", "state=closed"]);
     ta(&dir, &["create", "api", "state=open"]);
-    ta(&dir, &["block", "api", "db"]);
+    ta(&dir, &["dep", "add", "api", "depends_on=db"]);
 
     // With the override, db counts as done, so api becomes ready.
     let ready = ta(&dir, &["ready"]);
@@ -1428,8 +1428,8 @@ fn init_from_subdirectory_reuses_existing_store() {
 }
 
 #[test]
-fn unblock_makes_a_blocked_task_ready() {
-    let dir = fresh_dir("unblock");
+fn dep_remove_makes_a_blocked_task_ready() {
+    let dir = fresh_dir("dep-remove-ready");
     init_repo(&dir);
     ta(&dir, &["init"]);
 
@@ -1437,7 +1437,7 @@ fn unblock_makes_a_blocked_task_ready() {
     // `db` itself is ready.
     ta(&dir, &["create", "db", "status=open"]);
     ta(&dir, &["create", "api", "status=open"]);
-    ta(&dir, &["block", "api", "db"]);
+    ta(&dir, &["dep", "add", "api", "depends_on=db"]);
     let before = ta(&dir, &["ready"]);
     assert!(lists_task(&before, "db"), "db ready: {before}");
     assert!(
@@ -1446,10 +1446,10 @@ fn unblock_makes_a_blocked_task_ready() {
     );
 
     // Removing the dependency lifts the block, so `api` becomes ready too.
-    let msg = ta(&dir, &["unblock", "api", "db"]);
+    let msg = ta(&dir, &["dep", "remove", "api", "depends_on=db"]);
     assert!(
-        msg.contains("no longer depends"),
-        "unblock should confirm: {msg}"
+        msg.contains("Removed 1 edge(s)"),
+        "dep remove should confirm: {msg}"
     );
     let after = ta(&dir, &["ready"]);
     assert!(
@@ -1472,8 +1472,8 @@ fn dependency_cycle_is_reported_by_ready() {
     // must refuse and name the cycle (it can't order a circular graph).
     ta(&dir, &["create", "a", "status=open"]);
     ta(&dir, &["create", "b", "status=open"]);
-    ta(&dir, &["block", "a", "b"]);
-    ta(&dir, &["block", "b", "a"]);
+    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
+    ta(&dir, &["dep", "add", "b", "depends_on=a"]);
 
     let out = run(ta_bin(), &dir, &["ready"]);
     assert!(

@@ -55,7 +55,7 @@ $ cargo install --path taska
 
 Run `ta init` once per clone (inside a git repository) to create the `.taska/` store and register the merge driver in your **local** git config.
 
-In the session below, only the lowercase verbs (`create`, `block`, `ready`, …) are literal taska syntax. Everything else is yours — task ids like `migrate-db` and fields like `status=open priority=3` are arbitrary, and taska defines none of them:
+In the session below, only the lowercase verbs (`create`, `dep`, `ready`, …) are literal taska syntax. Everything else is yours — task ids like `migrate-db` and fields like `status=open priority=3` are arbitrary, and taska defines none of them:
 
 ```console
 $ git init && ta init
@@ -65,7 +65,7 @@ $ ta create migrate-db title="Run DB migration" status=open
 $ ta create deploy-api title="Deploy the API" status=open
 
 # deploy-api shouldn't start until migrate-db is finished:
-$ ta block deploy-api migrate-db
+$ ta dep add deploy-api depends_on=migrate-db
 
 # Default output is an aligned table of configurable columns:
 $ ta list
@@ -191,10 +191,11 @@ Because the times are folded into the baseline at compaction, they survive even 
 | `ta init` | Create the store and register the git merge drivers (idempotent; run once per clone) |
 | `ta create <id> [field=value ...]` | Create a task with arbitrary fields |
 | `ta update <id> <field=value \| field+=value ...>` | `=` sets a field; `+=` appends to a text field (one entry per line). Mix both in one command. Appends merge conflict-free (concurrent appends accumulate) |
-| `ta block <task> <depends_on>` | Add a `depends_on` edge (untyped shorthand) |
-| `ta unblock <task> <depends_on>` | Remove a `depends_on` edge |
 | `ta dep add <task> <type>=<target> …` | Add typed relationship edge(s); each `type` must be declared in `[relationships]` (e.g. `ta dep add api depends_on=db relates_to=ui`) |
-| `ta dep remove <task> <type>=<target> …` | Remove typed edge(s) |
+| `ta dep remove <task> <type>=<target> …` | Remove typed edge(s); a type's configured `inverse` name works too (`ta dep remove db blocks=api` removes `api depends_on db`) |
+| `ta dep list [<task> …]` | List each task's edges — its own, plus inverse edges mirrored from other tasks (`a depends_on b` shows on `b` as `blocks: a`) |
+| `ta dep tree [<task> …]` | ASCII dependency tree (roots default to tasks nothing depends on; shared nodes collapse, cycles are flagged) |
+| `ta dep cycles` | Report any cycles in the `depends_on` graph |
 | `ta delete <id>` | Delete a task |
 | `ta list [criteria...] [--open]` | List tasks, optionally filtered by AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`; `field` may be a task field, `id`, or `deps` (e.g. `ta list status~open priority=3`). `--open` limits to not-done tasks. With no criteria, lists everything |
 | `ta show <id>` | Show one task as a readable vertical record — every field, untruncated, one `field: value` line each (`--format json`/`jsonl` for machine output) |

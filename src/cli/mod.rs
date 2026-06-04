@@ -19,13 +19,13 @@ use crate::engine::Engine;
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputFormat};
 use crate::merge;
-use crate::model::{MutationEvent, OpType, TaskState};
+use crate::model::{MutationEvent, TaskState};
 use crate::storage::{EventStore, FileStore};
 
 mod commands;
 use commands::{
-    cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep, cmd_dep_group, cmd_init, cmd_list,
-    cmd_ready, cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction, DepAction,
+    cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_init, cmd_list, cmd_ready,
+    cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction, DepAction,
 };
 
 #[derive(Parser)]
@@ -55,10 +55,6 @@ enum Commands {
         #[arg(required = true)]
         fields: Vec<String>,
     },
-    /// Bind a block constraint: `ta block <task_id> <depends_on>`
-    Block { task_id: String, depends_on: String },
-    /// Remove a block constraint: `ta unblock <task_id> <depends_on>`
-    Unblock { task_id: String, depends_on: String },
     /// Add/remove typed relationship edges: `ta dep add <task> <type>=<target> …`
     Dep {
         #[command(subcommand)]
@@ -214,14 +210,6 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             cmd_create(store, &workflow, &id, &fields)
         }
         Commands::Update { id, fields } => cmd_update(store, &id, &fields),
-        Commands::Block {
-            task_id,
-            depends_on,
-        } => cmd_dep(store, &task_id, &depends_on, OpType::AddDep),
-        Commands::Unblock {
-            task_id,
-            depends_on,
-        } => cmd_dep(store, &task_id, &depends_on, OpType::RemoveDep),
         Commands::Dep { action } => {
             let types = store.config().relationships.types.clone();
             cmd_dep_group(store, action, &types)
