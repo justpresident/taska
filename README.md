@@ -196,7 +196,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 | `ta delete <id>` | Delete a task |
 | `ta list` | List all tasks |
 | `ta search <criteria>...` | List tasks matching all AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`; `field` may be a task field, `id`, or `deps` (e.g. `ta search status~open priority=3`) |
-| `ta show <id>` | Show a single task with all of its fields |
+| `ta show <id>` | Show one task as a readable vertical record — every field, untruncated, one `field: value` line each (`--format json`/`jsonl` for machine output) |
 | `ta ready` | Not-done tasks whose dependencies are all done |
 | `ta status` | Summary counts: total, per-status (discovered from the data), blocked, ready, and closed (`--format json`/`jsonl` for a machine-readable object) |
 | `ta undo [--count N] [--remove] [--force]` | Reverse the last N events: truncate uncommitted ones, append compensating events for committed ones (`--remove` to force truncation) |

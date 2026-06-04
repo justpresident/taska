@@ -232,15 +232,27 @@ fn show_displays_full_task_and_rejects_unknown_id() {
     ta(&dir, &["create", "dep"]);
     ta(&dir, &["block", "a", "dep"]);
 
-    // `show` defaults to the FULL task: every field, even ones that are not
-    // default `list` columns (e.g. priority), plus deps.
+    // `show`'s human output is a vertical record: one `field: value` line each,
+    // every field (even non-default columns like priority), plus deps.
     let human = ta(&dir, &["show", "a"]);
     assert!(
-        lists_task(&human, "a"),
-        "show should list the task: {human}"
+        human
+            .lines()
+            .any(|l| l.starts_with("id:") && l.split_whitespace().last() == Some("a")),
+        "vertical id line: {human}"
     );
-    assert!(human.contains("Alpha"), "title field: {human}");
-    assert!(human.contains("PRIORITY"), "priority header shown: {human}");
+    assert!(
+        human
+            .lines()
+            .any(|l| l.starts_with("title:") && l.contains("Alpha")),
+        "title field: {human}"
+    );
+    assert!(
+        human
+            .lines()
+            .any(|l| l.starts_with("priority:") && l.contains('3')),
+        "priority field: {human}"
+    );
     assert!(human.contains("dep"), "deps shown: {human}");
 
     // json emits the same fields (a one-element array is fine, as for list).

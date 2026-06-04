@@ -252,6 +252,28 @@ fn render_human(tasks: &[&TaskState], columns: &[String], caps: &[usize]) -> Str
     lines.join("\n")
 }
 
+/// Render one task as a vertical record — a `field: value` line per column,
+/// values **untruncated**, and a multi-line value continued under its label.
+/// This is `show`'s human view: a single task across the aligned table
+/// degenerates into one unreadable row, especially for long fields like `notes`;
+/// the record reads like `git show`. JSON/JSONL output is unaffected.
+pub(crate) fn render_record(task: &TaskState, columns: &[String]) -> String {
+    let label_w = columns.iter().map(String::len).max().unwrap_or(0) + 1; // +1 for ':'
+    let indent = " ".repeat(label_w + 1);
+    let mut lines = Vec::new();
+    for col in columns {
+        let value = human_cell(task, col);
+        let label = format!("{col}:");
+        let mut parts = value.split('\n');
+        let first = parts.next().unwrap_or("");
+        lines.push(format!("{label:<label_w$} {first}").trim_end().to_string());
+        for cont in parts {
+            lines.push(format!("{indent}{cont}").trim_end().to_string());
+        }
+    }
+    lines.join("\n")
+}
+
 fn format_row(cells: &[String], widths: &[usize]) -> String {
     cells
         .iter()
@@ -680,5 +702,45 @@ mod tests {
             "(none)",
         );
         assert!(!full.contains('…'), "--full disables truncation: {full}");
+    }
+
+    #[test]
+    fn record_view_is_vertical_untruncated_and_keeps_multiline() {
+        let long = "a value that is definitely much longer than any default max width";
+        let t = task(
+            "api",
+            &["db"],
+            &[
+                ("status", serde_json::json!("open")),
+                ("notes", serde_json::json!("line one\nline two")),
+                ("blurb", serde_json::json!(long)),
+            ],
+        );
+        let cols = full_columns(&[&t], &DisplayConfig::default());
+        let out = render_record(&t, &cols);
+
+        // One field per line: `id` value is `api`, status its own line.
+        assert!(
+            out.lines()
+                .any(|l| l.starts_with("id:") && l.split_whitespace().last() == Some("api")),
+            "vertical id line: {out}"
+        );
+        assert!(
+            out.lines()
+                .any(|l| l.starts_with("status:") && l.ends_with("open")),
+            "status line: {out}"
+        );
+        // Long values are never truncated (the whole point of the record view).
+        assert!(
+            out.contains(long) && !out.contains('…'),
+            "untruncated: {out}"
+        );
+        // A multi-line value continues under its label, with no second `notes:`.
+        assert!(out.contains("line one"), "first notes line: {out}");
+        assert!(
+            out.lines()
+                .any(|l| l.trim() == "line two" && l.starts_with(' ')),
+            "continuation line indented: {out}"
+        );
     }
 }

@@ -3,12 +3,13 @@
 use crate::cli::state_of;
 use crate::config::DisplayConfig;
 use crate::error::DynError;
-use crate::format::{full_columns, render_rows, DisplayArgs};
+use crate::format::{full_columns, render_record, render_rows, DisplayArgs, OutputFormat};
 use crate::storage::EventStore;
 
 /// Show a single task by id, defaulting to ALL of its fields (unlike `list`,
-/// which uses the configured columns). An explicit `--columns` still restricts;
-/// it renders via the same human/json/jsonl path as `list`.
+/// which uses the configured columns). An explicit `--columns` still restricts.
+/// Human output is a readable vertical record (one `field: value` line each,
+/// untruncated); `--format json`/`jsonl` go through the same path as `list`.
 pub fn cmd_show(
     store: &impl EventStore,
     id: &str,
@@ -19,12 +20,17 @@ pub fn cmd_show(
     let task = state.get(id).ok_or_else(|| format!("no task `{id}`"))?;
     let tasks = [task];
     // Default to the full task: every field of this one task. An explicit
-    // `--columns` overrides; either way the shared `render_rows` dispatch prints.
+    // `--columns` overrides.
     let columns = display
         .columns
         .clone()
         .unwrap_or_else(|| full_columns(&tasks, cfg));
-    println!("{}", render_rows(&tasks, &columns, display, cfg));
+    let out = if display.format == OutputFormat::Human {
+        render_record(task, &columns)
+    } else {
+        render_rows(&tasks, &columns, display, cfg)
+    };
+    println!("{out}");
     Ok(())
 }
 
