@@ -33,3 +33,9 @@ petgraph = "0.6"
 regex = "1"
 fd-lock = "4.0"
 clap = { version = "4.4", features = ["derive"] }
+
+# Unix-only: reset SIGPIPE to default in `main` so `ta … | head` terminates
+# cleanly instead of panicking in the print macros (which ignore SIGPIPE).
+# Already in the dependency tree transitively; this only makes it direct.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

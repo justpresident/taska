@@ -2005,3 +2005,33 @@ fn field_value_from_file_and_stdin() {
         "double-@ escapes to a literal @ value"
     );
 }
+
+#[test]
+fn output_to_a_closed_pipe_does_not_panic() {
+    let dir = fresh_dir("broken-pipe");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // A field larger than the OS pipe buffer (64 KiB) so the write outlives a
+    // reader that closes after a few bytes.
+    let path = dir.join("big.txt");
+    fs::write(&path, "x".repeat(300_000)).unwrap();
+    ta(
+        &dir,
+        &["create", "big", &format!("notes=@{}", path.display())],
+    );
+
+    // `head -c 32` closes the pipe almost immediately; `ta` must terminate via
+    // SIGPIPE, not a Rust panic + backtrace.
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg("ta show big --format json | head -c 32 >/dev/null")
+        .current_dir(&dir)
+        .env("PATH", path_with_bin())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("panicked") && !stderr.contains("failed printing"),
+        "ta panicked writing to a closed pipe: {stderr}"
+    );
+}

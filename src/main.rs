@@ -24,6 +24,16 @@ use std::process::ExitCode;
 use taska::cli;
 
 fn main() -> ExitCode {
+    // Rust ignores SIGPIPE, so writing to a closed pipe (`ta list | head`) makes
+    // the print macros panic instead of the process terminating the usual way.
+    // Restore the default action so a broken pipe exits cleanly with a signal
+    // status rather than a panic + backtrace.
+    #[cfg(unix)]
+    unsafe {
+        // SAFETY: resetting a signal disposition to SIG_DFL is always sound.
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     match cli::run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
