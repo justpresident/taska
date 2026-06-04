@@ -101,7 +101,7 @@ Commit `.taska/` and `.gitattributes` along with your code — they travel with 
 
 ## How it works
 
-Every command appends an immutable event (`Create`, `Update`, `Delete`, `AddDep`, `RemoveDep`) to `.taska/mutations.jsonl`. The current state of every task is **materialized** by replaying that log in order; nothing is mutated in place.
+Every command appends an immutable event (`Create`, `Update`, `Append`, `Delete`, `AddDep`, `RemoveDep`) to `.taska/mutations.jsonl`. The current state of every task is **materialized** by replaying that log in order; nothing is mutated in place.
 
 Each event carries a store-minted, strictly increasing `seq`. That sequence — not the wall clock — is the authoritative order, which keeps replay deterministic even after branches with interleaved timestamps are merged.
 
@@ -190,7 +190,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 |---|---|
 | `ta init` | Create the store and register the git merge drivers (idempotent; run once per clone) |
 | `ta create <id> [field=value ...]` | Create a task with arbitrary fields |
-| `ta update <id> [field=value ...]` | Set fields on an existing task |
+| `ta update <id> [--append] <field=value ...>` | Set fields on a task; with `--append`, append to text fields (one entry per line) instead of overwriting — concurrent appends merge conflict-free |
 | `ta block <task> <depends_on>` | Add a dependency edge |
 | `ta unblock <task> <depends_on>` | Remove a dependency edge |
 | `ta delete <id>` | Delete a task |

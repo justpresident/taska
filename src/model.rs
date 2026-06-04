@@ -10,6 +10,11 @@ use serde_json::{Map, Value};
 pub enum OpType {
     Create,
     Update,
+    /// Append text to a field (one entry per line) instead of overwriting it.
+    /// Unlike `Update`, concurrent `Append`s to the same field commute — replay
+    /// concatenates them in `seq` order — so a running notes/comments log
+    /// accumulates conflict-free across branches.
+    Append,
     Delete,
     AddDep,
     RemoveDep,

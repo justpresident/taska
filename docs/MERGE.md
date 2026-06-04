@@ -7,7 +7,7 @@ How taska stores tasks and reconciles concurrent edits. For *why* an event log
 
 Tasks are not stored as state. They live as an **append-only log of changes** in
 `.taska/mutations.jsonl` — one JSON event per line. Each event records an
-operation (`create`, `update`, `delete`, `add-dep`, `remove-dep`) on a task id,
+operation (`create`, `update`, `append`, `delete`, `add-dep`, `remove-dep`) on a task id,
 plus a store-minted **`seq`** number. The state you see (`ta list`, `ta show`) is
 *replayed* from the log on demand; it is never written back.
 
@@ -140,6 +140,7 @@ not to happen.
 |-----------|--------------|
 | Disjoint concurrent edits | Merge cleanly; theirs' events restacked above `fork` |
 | Same field, both changed | Per-field conflict → `on_conflict` policy |
+| Concurrent appends to a field (`ta update --append`) | Accumulate in `seq` order — they commute, never a conflict |
 | Revert above the watermark | Removal-union drops it convergently; merge warns if one-sided |
 | Revert of an already-archived change | Rare — only when you merge a branch older than your `keep_events` window that still holds a change you reverted and archived. Worst case: that one change (a dep, field, or task) reappears or is dropped — no corruption |
 | Two branches compacted | Keep-ours baseline + reconciled log rebuild full state |

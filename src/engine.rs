@@ -7,10 +7,50 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
+use serde_json::{Map, Value};
 
 use crate::model::{is_done, MutationEvent, OpType, TaskState};
 
 pub struct Engine;
+
+/// A field value's text form for `Append`: a raw string for a JSON string, else
+/// its compact JSON — so appending to a non-string field still yields readable
+/// text rather than a quoted blob.
+fn append_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Apply a `Create`/`Update` payload: set each field, or remove it when the value
+/// is JSON `null` (the field-unset convention — null never reaches state).
+fn apply_set(fields: &mut Map<String, Value>, payload: Map<String, Value>) {
+    for (k, v) in payload {
+        if v.is_null() {
+            fields.remove(&k);
+        } else {
+            fields.insert(k, v);
+        }
+    }
+}
+
+/// Apply an `Append` payload: append each value's text to its field, one entry
+/// per line; a `null` value adds nothing, and the first write to an absent field
+/// simply sets it.
+fn apply_append(fields: &mut Map<String, Value>, payload: Map<String, Value>) {
+    for (k, v) in payload {
+        if v.is_null() {
+            continue;
+        }
+        let added = append_text(&v);
+        let combined = match fields.get(&k).map(append_text) {
+            Some(prev) if !prev.is_empty() => format!("{prev}\n{added}"),
+            _ => added,
+        };
+        fields.insert(k, Value::String(combined));
+    }
+}
 
 /// Update `close_time` to reflect a task's CURRENT closure: set it on a
 /// transition INTO done (`was_done` → `now_done`), clear it whenever the task is
@@ -88,15 +128,7 @@ impl Engine {
                                 close_time: None,
                             });
                     let was_done = is_done(entry, status_field, done_status);
-                    for (k, v) in event.payload {
-                        // A null value unsets the field (the field-unset convention),
-                        // so it never reaches state, output, search, or the baseline.
-                        if v.is_null() {
-                            entry.custom_fields.remove(&k);
-                        } else {
-                            entry.custom_fields.insert(k, v);
-                        }
-                    }
+                    apply_set(&mut entry.custom_fields, event.payload);
                     // First Create wins for create_time (a re-Create keeps it).
                     if entry.create_time.is_none() {
                         entry.create_time = Some(ts);
@@ -112,14 +144,7 @@ impl Engine {
                 OpType::Update => {
                     if let Some(task) = state_map.get_mut(&event.task_id) {
                         let was_done = is_done(task, status_field, done_status);
-                        for (k, v) in event.payload {
-                            // A null value unsets the field (see Create above).
-                            if v.is_null() {
-                                task.custom_fields.remove(&k);
-                            } else {
-                                task.custom_fields.insert(k, v);
-                            }
-                        }
+                        apply_set(&mut task.custom_fields, event.payload);
                         task.update_time = Some(ts);
                         refresh_close_time(
                             task,
@@ -127,6 +152,16 @@ impl Engine {
                             is_done(task, status_field, done_status),
                             ts,
                         );
+                    } else {
+                        orphans.push(event.seq);
+                    }
+                }
+                OpType::Append => {
+                    if let Some(task) = state_map.get_mut(&event.task_id) {
+                        apply_append(&mut task.custom_fields, event.payload);
+                        // Text accumulation touches the task but not its done
+                        // status, so no close_time recompute.
+                        task.update_time = Some(ts);
                     } else {
                         orphans.push(event.seq);
                     }
@@ -294,6 +329,25 @@ mod tests {
             "update overwrote create"
         );
         assert_eq!(state["b"].depends_on, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn append_accumulates_text_and_orphans_when_taskless() {
+        let mutations = vec![
+            ev(OpType::Create, "a", serde_json::Map::new()),
+            ev(OpType::Append, "a", fields(&[("log", json!("first"))])),
+            ev(OpType::Append, "a", fields(&[("log", json!("second"))])),
+            // An append to a non-existent task is an orphan, never an error.
+            ev(OpType::Append, "ghost", fields(&[("log", json!("x"))])),
+        ];
+        let (state, orphans) =
+            Engine::materialize_report(Vec::new(), mutations, "status", "closed");
+        assert_eq!(
+            state["a"].custom_fields["log"],
+            json!("first\nsecond"),
+            "appends accumulate one entry per line"
+        );
+        assert_eq!(orphans.len(), 1, "append to a missing task is orphaned");
     }
 
     #[test]

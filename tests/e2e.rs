@@ -2013,6 +2013,55 @@ fn field_value_from_file_and_stdin() {
 }
 
 #[test]
+fn append_op_accumulates_a_text_log() {
+    let dir = fresh_dir("append");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "task"]);
+    ta(&dir, &["update", "task", "--append", "log=started"]);
+    ta(&dir, &["update", "task", "--append", "log=made progress"]);
+    // The two entries accumulate, newline-joined, instead of overwriting.
+    let json = ta(&dir, &["show", "task", "--format", "json"]);
+    assert!(
+        json.contains(r#""log":"started\nmade progress""#),
+        "append accumulates a log: {json}"
+    );
+}
+
+#[test]
+fn concurrent_appends_merge_without_conflict() {
+    let dir = fresh_dir("append-merge");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "log"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "base"]);
+    git(&dir, &["branch", "feature"]);
+
+    // Each branch appends to the SAME field since the fork.
+    ta(&dir, &["update", "log", "--append", "notes=from main"]);
+    git(&dir, &["commit", "-aqm", "main note"]);
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["update", "log", "--append", "notes=from feature"]);
+    git(&dir, &["commit", "-aqm", "feature note"]);
+
+    // Default on_conflict=surface FAILS the merge on a real conflict — so a clean
+    // merge here proves appends commute. Both entries must survive.
+    git(&dir, &["checkout", "-q", "main"]);
+    let m = run("git", &dir, &["merge", "feature", "-m", "merge"]);
+    assert!(
+        m.status.success(),
+        "concurrent appends must merge cleanly: {}",
+        String::from_utf8_lossy(&m.stderr)
+    );
+    let json = ta(&dir, &["show", "log", "--format", "json"]);
+    assert!(
+        json.contains("from main") && json.contains("from feature"),
+        "both appends present after merge: {json}"
+    );
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);

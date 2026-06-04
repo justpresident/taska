@@ -283,6 +283,14 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
                 }
                 delta.last_change = Some(max_ts(delta.last_change, event.timestamp));
             }
+            OpType::Append => {
+                // Appends commute — two concurrent appends to the same field
+                // accumulate at replay rather than contending — so they are NOT
+                // recorded as field writes (which would flag a false conflict and
+                // let a resolution event overwrite the accumulated text). They
+                // still count as a change for the delete-vs-change check.
+                delta.last_change = Some(max_ts(delta.last_change, event.timestamp));
+            }
             OpType::Delete => delta.deleted = Some(event.timestamp),
             OpType::AddDep | OpType::RemoveDep => {
                 if let Some(dep) = event.payload.get("dep").and_then(|v| v.as_str()) {
@@ -1099,6 +1107,36 @@ mod tests {
         assert!(
             rewritten_shared_seqs(5, &ours, &theirs).is_empty(),
             "compaction to different depths must not be flagged as a revert"
+        );
+    }
+
+    #[test]
+    fn concurrent_appends_accumulate_without_conflict() {
+        // Both branches append to `notes` since the fork. Under `surface` — which
+        // FAILS on a genuine conflict — the merge still resolves and BOTH appends
+        // survive, because appends commute and are never summarized as field
+        // writes that could contend.
+        let anc = vec![ev(1, 0, OpType::Create, "X", &[("notes", json!("base"))])];
+        let ours = vec![
+            anc[0].clone(),
+            ev(2, 0, OpType::Append, "X", &[("notes", json!("from-ours"))]),
+        ];
+        let theirs = vec![
+            anc[0].clone(),
+            ev(
+                2,
+                0,
+                OpType::Append,
+                "X",
+                &[("notes", json!("from-theirs"))],
+            ),
+        ];
+        let fields = merge_to_fields(&anc, &ours, &theirs, OnConflict::Surface, "X");
+        let notes = fields["notes"].as_str().unwrap();
+        assert!(notes.contains("base"), "base preserved: {notes}");
+        assert!(
+            notes.contains("from-ours") && notes.contains("from-theirs"),
+            "both concurrent appends survive: {notes}"
         );
     }
 

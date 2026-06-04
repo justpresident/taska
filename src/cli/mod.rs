@@ -48,6 +48,10 @@ enum Commands {
     /// Update fields on an existing task: `ta update <id> <field=value ...>`
     Update {
         id: String,
+        /// Append to the named text fields (one entry per line) instead of
+        /// overwriting — concurrent appends accumulate conflict-free on merge
+        #[arg(long)]
+        append: bool,
         /// Custom fields as `key=value` pairs; at least one is required
         #[arg(required = true)]
         fields: Vec<String>,
@@ -205,7 +209,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             let workflow = store.config().workflow.clone();
             cmd_create(store, &workflow, &id, &fields)
         }
-        Commands::Update { id, fields } => cmd_update(store, &id, &fields),
+        Commands::Update { id, append, fields } => cmd_update(store, &id, &fields, append),
         Commands::Block {
             task_id,
             depends_on,
