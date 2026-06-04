@@ -112,12 +112,14 @@ pub fn execute_git_merge(
 /// i.e. reverted or hand-removed. Unioning both sides' removals makes a revert
 /// converge regardless of merge direction.
 ///
-/// LIMITATION: the watermark cannot distinguish a revert *below* it — a revert of
-/// the branch's earliest events, or one that compaction later folded past — from
-/// an ordinary baseline fold, so that removal is missed and the event can
-/// resurrect or the merge diverge by direction. Tracked by the
-/// `merge-revert-compact-detector` task; characterized by the
-/// `revert_below_the_watermark_is_not_yet_detected` test below.
+/// LIMITATION (accepted): the watermark cannot distinguish a revert *below* it — a
+/// revert of the branch's earliest events, or one that compaction later folded
+/// past — from an ordinary baseline fold, so that removal is missed and the event
+/// can resurrect or the merge diverge by direction. A log-only detector can't fix
+/// this: it can't tell the revert from a compaction fold without the baseline, and
+/// this driver is handed only the mutation logs (`%O %A %B`), never the baseline.
+/// Characterized by the `revert_below_the_watermark_is_a_known_limitation` test
+/// below; analysis in the closed `merge-revert-compact-detector` task.
 fn removed_seqs(anc: &[MutationEvent], branch: &[MutationEvent]) -> HashSet<u64> {
     let watermark = branch
         .iter()
@@ -961,13 +963,15 @@ mod tests {
     }
 
     #[test]
-    fn revert_below_the_watermark_is_not_yet_detected() {
-        // KNOWN LIMITATION (tracked by task `merge-revert-compact-detector`).
+    fn revert_below_the_watermark_is_a_known_limitation() {
+        // ACCEPTED LIMITATION (see the closed `merge-revert-compact-detector` task).
         // `removed_seqs` only inspects ancestor events ABOVE the branch's min-seq
         // watermark, so a revert of the EARLIEST event — which raises that branch's
         // min, the same shape that compaction-past-a-revert produces — is invisible.
-        // The event then resurrects and the merge DIVERGES by direction. This pins
-        // today's (incorrect) behavior; the detector task will flip this assertion.
+        // The event then resurrects and the merge DIVERGES by direction. A log-only
+        // detector can't fix this — it can't tell the revert from a compaction fold
+        // without the baseline, which the merge driver isn't given — so this test
+        // pins the behavior to keep the tradeoff visible.
         let anc = vec![
             ev(1, 0, OpType::Create, "a", &[]),
             ev(2, 0, OpType::Create, "b", &[]),
@@ -995,7 +999,7 @@ mod tests {
         );
         assert_ne!(
             into_kept, into_reverted,
-            "so the merge diverges by direction — the bug the detector will catch"
+            "so the merge diverges by direction — the accepted limitation"
         );
     }
 
