@@ -14,12 +14,12 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use serde_json::{Map, Value};
 
-use crate::config::{Config, RelationshipDef};
+use crate::config::{Config, RelationshipDef, WorkflowConfig};
 use crate::engine::Engine;
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs};
 use crate::merge;
-use crate::model::{MutationEvent, TaskState, DEPENDS_ON};
+use crate::model::{MutationEvent, OpType, TaskState, DEPENDS_ON, DEP_KEY, DEP_TYPE_KEY};
 use crate::storage::{EventStore, FileStore};
 
 mod commands;
@@ -431,6 +431,129 @@ pub(crate) fn relationship_edges(
 /// user field shadow one of these would either collide with the event envelope
 /// or be silently swallowed by `_meta`, so we reject them up front.
 const RESERVED_FIELD_KEYS: &[&str] = &["seq", "timestamp", "op", "task_id", "_meta"];
+
+/// Validate a batch of draft events against the current `state` and drop the
+/// redundant ones, returning exactly the events worth appending.
+///
+/// Meant to run inside the store's write lock (via `EventStore::append_checked`),
+/// so the verify-then-write is atomic and can't race a concurrent writer. Rules:
+/// - `Create` of an existing id — or any other op whose target task is absent —
+///   is **rejected** (a hard error; nothing is written).
+/// - An `Update` keeps only the fields that actually change (a value already
+///   equal, or a `null`-unset of an already-absent field, is dropped); an
+///   `Update` left with no fields is dropped entirely.
+/// - `AddDep` of an existing edge, `RemoveDep` of an absent one, and `Delete` of
+///   an absent task are dropped as no-ops.
+/// - `Append` (`+=`) never lands on a no-op, but is rejected on the single-valued
+///   status field (reserved keys are already blocked at parse). This is where
+///   per-field type-schema checks will plug in later.
+pub(crate) fn vet_events(
+    drafts: &[MutationEvent],
+    state: &HashMap<String, TaskState>,
+    workflow: &WorkflowConfig,
+) -> Result<Vec<MutationEvent>, DynError> {
+    let mut out = Vec::new();
+    for draft in drafts {
+        let id = draft.task_id.as_str();
+        match draft.op {
+            OpType::Create => {
+                if state.contains_key(id) {
+                    return Err(format!(
+                        "task `{id}` already exists (use `ta update {id} …` to change it)"
+                    )
+                    .into());
+                }
+                out.push(draft.clone());
+            }
+            OpType::Update => {
+                let task = require_existing(state, id)?;
+                let mut payload = Map::new();
+                for (key, value) in &draft.payload {
+                    if changes_field(task, key, value) {
+                        payload.insert(key.clone(), value.clone());
+                    }
+                }
+                if !payload.is_empty() {
+                    let mut event = draft.clone();
+                    event.payload = payload;
+                    out.push(event);
+                }
+            }
+            OpType::Append => {
+                require_existing(state, id)?;
+                if let Some(bad) = draft.payload.keys().find(|k| *k == &workflow.status_field) {
+                    return Err(format!(
+                        "can't append (`+=`) to `{bad}`: it holds a single status value, not a log"
+                    )
+                    .into());
+                }
+                out.push(draft.clone()); // appends accumulate — never a no-op
+            }
+            OpType::AddDep => {
+                let task = require_existing(state, id)?;
+                if draft.payload.get(DEP_KEY).and_then(Value::as_str) == Some(id) {
+                    return Err(format!("a task can't reference itself (`{id}`)").into());
+                }
+                if !dep_edge_exists(task, &draft.payload) {
+                    out.push(draft.clone());
+                }
+            }
+            OpType::RemoveDep => {
+                let task = require_existing(state, id)?;
+                if dep_edge_exists(task, &draft.payload) {
+                    out.push(draft.clone());
+                }
+            }
+            OpType::Delete => {
+                if state.contains_key(id) {
+                    out.push(draft.clone());
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The task `id` in `state`, or an error if it doesn't exist — so a mutation
+/// against a typo'd/absent task is rejected at write time rather than becoming a
+/// silent orphan. (Replay still tolerates orphans from merges/reverts.)
+fn require_existing<'a>(
+    state: &'a HashMap<String, TaskState>,
+    id: &str,
+) -> Result<&'a TaskState, DynError> {
+    state
+        .get(id)
+        .ok_or_else(|| format!("no task `{id}`").into())
+}
+
+/// Whether setting `key` = `value` would change `task`. A `null` value is the
+/// unset convention: it changes only a field that is currently present.
+fn changes_field(task: &TaskState, key: &str, value: &Value) -> bool {
+    if value.is_null() {
+        task.custom_fields.contains_key(key)
+    } else {
+        task.custom_fields.get(key) != Some(value)
+    }
+}
+
+/// Whether `task` already has the edge described by an `AddDep`/`RemoveDep`
+/// payload (`dep` target, optional `type`; absent type = [`DEPENDS_ON`]).
+fn dep_edge_exists(task: &TaskState, payload: &Map<String, Value>) -> bool {
+    let Some(target) = payload.get(DEP_KEY).and_then(Value::as_str) else {
+        return false;
+    };
+    let rel_type = payload
+        .get(DEP_TYPE_KEY)
+        .and_then(Value::as_str)
+        .unwrap_or(DEPENDS_ON);
+    if rel_type == DEPENDS_ON {
+        task.depends_on.iter().any(|d| d == target)
+    } else {
+        task.relationships
+            .get(rel_type)
+            .is_some_and(|targets| targets.iter().any(|d| d == target))
+    }
+}
 
 /// A parsed field list, split by operator: fields to **set** (`=`) and fields to
 /// **append** to (`+=`).

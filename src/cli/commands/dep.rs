@@ -7,8 +7,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use clap::Subcommand;
 use serde_json::{Map, Value};
 
-use crate::cli::state_of;
+use crate::cli::{state_of, vet_events};
 use crate::config::RelationshipDef;
+use crate::engine::Engine;
 use crate::error::DynError;
 use crate::format::OutputArgs;
 use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, DEP_KEY, DEP_TYPE_KEY};
@@ -121,21 +122,43 @@ fn dep_write(
             .ok_or_else(|| format!("invalid edge `{edge}` (expected type=target)"))?;
         resolved.extend(resolve_edge(name, task, target, types, removing)?);
     }
-    if !removing {
-        validate_blocker_additions(store, &resolved)?;
-    }
-    let mut events = Vec::with_capacity(resolved.len());
-    for (owner, rel_type, dep) in resolved {
-        let mut payload = Map::new();
-        payload.insert(DEP_KEY.to_string(), Value::String(dep));
-        // `depends_on` omits the type to stay legacy-shaped.
-        if rel_type != DEPENDS_ON {
-            payload.insert(DEP_TYPE_KEY.to_string(), Value::String(rel_type));
+    let events: Vec<MutationEvent> = resolved
+        .iter()
+        .map(|(owner, rel_type, dep)| {
+            let mut payload = Map::new();
+            payload.insert(DEP_KEY.to_string(), Value::String(dep.clone()));
+            // `depends_on` omits the type to stay legacy-shaped.
+            if rel_type != DEPENDS_ON {
+                payload.insert(DEP_TYPE_KEY.to_string(), Value::String(rel_type.clone()));
+            }
+            MutationEvent::new(op.clone(), owner.clone(), payload)
+        })
+        .collect();
+
+    // Verify-then-append under the store lock: the structural blocker checks (one
+    // blocker per pair, one parent), the existence/self-reference checks, and the
+    // no-op drop (edge already present / already absent) all run against the
+    // freshly-read state, so none of them can race a concurrent writer.
+    let blockers = store.config().relationships.blocker_types();
+    let hierarchy = store.config().relationships.hierarchy_types();
+    let workflow = store.config().workflow.clone();
+    let written = store.append_checked(&|baseline, log| {
+        let state = Engine::materialize_state(
+            baseline.to_vec(),
+            log.to_vec(),
+            &workflow.status_field,
+            &workflow.done_status,
+        );
+        if !removing {
+            validate_blocker_additions(&resolved, &state, &blockers, &hierarchy)?;
         }
-        events.push(MutationEvent::new(op.clone(), owner, payload));
+        vet_events(&events, &state, &workflow)
+    })?;
+    if written.is_empty() {
+        println!("no changes on `{task}`");
+    } else {
+        println!("{verb} {} edge(s) on `{task}`", written.len());
     }
-    store.append_events(&events)?;
-    println!("{verb} {} edge(s) on `{task}`", edges.len());
     Ok(())
 }
 
@@ -145,31 +168,30 @@ fn dep_write(
 /// against the current state *plus* the edges added earlier in this command, so a
 /// pre-existing violation elsewhere never blocks an unrelated add.
 fn validate_blocker_additions(
-    store: &impl EventStore,
     resolved: &[(String, String, String)],
+    state: &HashMap<String, TaskState>,
+    blockers: &BTreeSet<String>,
+    hierarchy: &BTreeSet<String>,
 ) -> Result<(), DynError> {
-    let blockers = store.config().relationships.blocker_types();
     if !resolved
         .iter()
         .any(|(_, t, _)| blockers.contains(t.as_str()))
     {
         return Ok(());
     }
-    let hierarchy = store.config().relationships.hierarchy_types();
-    let state = state_of(store)?;
 
     // Seed the would-be view from current state: each owner's blocker target→type,
     // and each child's parent.
     let mut blocker_to: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut parent_of: HashMap<String, String> = HashMap::new();
-    for (id, task) in &state {
-        for (target, kind) in crate::graph::blocker_edges(task, &blockers) {
+    for (id, task) in state {
+        for (target, kind) in crate::graph::blocker_edges(task, blockers) {
             blocker_to
                 .entry(id.clone())
                 .or_default()
                 .insert(target.to_string(), kind.to_string());
         }
-        for htype in &hierarchy {
+        for htype in hierarchy {
             for child in task.relationships.get(htype).into_iter().flatten() {
                 parent_of.insert(child.clone(), id.clone());
             }

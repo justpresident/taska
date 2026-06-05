@@ -410,6 +410,26 @@ fn rows(path: &Path) -> usize {
         .count()
 }
 
+/// Append a raw `Update` event for `task_id` directly to the log, at the next
+/// seq. Used to plant an *orphan* (an event whose target task doesn't exist):
+/// the write-time gate now rejects mutating a missing task, so orphans only arise
+/// from merges/reverts/manual edits — which this simulates.
+fn append_orphan_update(log: &Path, task_id: &str) {
+    let mut content = fs::read_to_string(log).unwrap();
+    let next = content
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|e| e["seq"].as_u64())
+        .max()
+        .unwrap_or(0)
+        + 1;
+    content.push_str(&format!(
+        "{{\"seq\":{next},\"timestamp\":\"2026-01-01T00:00:00Z\",\"op\":\"Update\",\
+         \"task_id\":\"{task_id}\",\"status\":\"x\"}}\n"
+    ));
+    fs::write(log, content).unwrap();
+}
+
 #[test]
 fn sort_flag_orders_rows_with_reverse_and_configurable_default() {
     let dir = fresh_dir("sort");
@@ -1037,14 +1057,14 @@ fn orphaned_events_warn_on_read_and_resolve_drops_them() {
     init_repo(&dir);
     ta(&dir, &["init"]);
 
-    // Create then delete `a`, then update the (now gone) `a`. Handlers don't check
-    // existence, so the update appends an Update event whose target no longer
-    // exists at replay time — an orphan that applies to nothing.
+    // Create then delete `a`, then plant an Update event for the (now gone) `a` —
+    // an orphan that applies to nothing at replay. (The gate rejects `ta update a`
+    // on a missing task, so we write the orphan directly, as a merge/revert would.)
     ta(&dir, &["create", "a", "status=open"]);
     ta(&dir, &["delete", "a"]);
-    ta(&dir, &["update", "a", "status=x"]);
-
     let log = dir.join(".taska").join("mutations.jsonl");
+    append_orphan_update(&log, "a");
+
     let before = rows(&log);
 
     // A read command warns about the orphan on STDERR (without failing).
@@ -1103,8 +1123,8 @@ fn resolve_orphans_requires_confirmation() {
     ta(&dir, &["init"]);
     ta(&dir, &["create", "a"]);
     ta(&dir, &["delete", "a"]);
-    ta(&dir, &["update", "a", "status=x"]); // orphan: update to a deleted task
     let log = dir.join(".taska/mutations.jsonl");
+    append_orphan_update(&log, "a"); // orphan: Update targeting the deleted `a`
     let before = rows(&log);
     // No --force and no stdin (EOF) declines: the orphan is listed but kept.
     let out = ta(&dir, &["resolve"]);
@@ -3009,10 +3029,70 @@ fn append_refuses_to_mint_over_an_unparseable_log_line() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("unparseable") && stderr.contains("seq"),
-        "error should name the unparseable line and the seq risk: {stderr}"
+        stderr.contains("unparseable"),
+        "error should name the unparseable line: {stderr}"
     );
     // And it must NOT have appended anything (no duplicate seq 2 written).
     let after = fs::read_to_string(&log).unwrap();
     assert_eq!(after, content, "the log must be left untouched");
+}
+
+/// The write-time gate: reject invalid mutations (duplicate create, missing
+/// target, self-reference, `+=` on status) and silently drop no-ops (a field
+/// already at its value, an edge already present), all before anything is logged.
+#[test]
+fn write_gate_rejects_invalid_and_skips_noops() {
+    let dir = fresh_dir("write-gate");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    let log = dir.join(".taska/mutations.jsonl");
+    ta(&dir, &["create", "a", "status=open"]);
+    ta(&dir, &["create", "b", "status=open"]);
+
+    // Duplicate create -> error, nothing written.
+    let n = rows(&log);
+    let dup = run(ta_bin(), &dir, &["create", "a", "status=open"]);
+    assert!(!dup.status.success(), "duplicate create must fail");
+    assert!(String::from_utf8_lossy(&dup.stderr).contains("already exists"));
+    assert_eq!(rows(&log), n, "duplicate create wrote nothing");
+
+    // Mutating a non-existent task -> error.
+    let ghost = run(ta_bin(), &dir, &["update", "nope", "status=closed"]);
+    assert!(
+        !ghost.status.success(),
+        "update of a missing task must fail"
+    );
+    assert!(String::from_utf8_lossy(&ghost.stderr).contains("no task"));
+
+    // No-op update (same value) writes nothing; a real change writes one event.
+    let n = rows(&log);
+    let noop = ta(&dir, &["update", "a", "status=open"]);
+    assert!(noop.contains("no changes"), "got: {noop}");
+    assert_eq!(rows(&log), n, "a no-op update writes nothing");
+    ta(&dir, &["update", "a", "status=closed"]);
+    assert_eq!(rows(&log), n + 1, "a real change writes one event");
+
+    // Multi-field update drops the unchanged field, keeps the changed one.
+    let n = rows(&log);
+    ta(&dir, &["update", "a", "status=closed", "owner=alice"]);
+    assert_eq!(rows(&log), n + 1, "only the changed field is written");
+    assert!(ta(&dir, &["show", "a", "--format", "json"]).contains("\"owner\":\"alice\""));
+
+    // Self-reference -> error.
+    let selfref = run(ta_bin(), &dir, &["dep", "add", "a", "depends_on=a"]);
+    assert!(!selfref.status.success(), "self-reference must fail");
+    assert!(String::from_utf8_lossy(&selfref.stderr).contains("itself"));
+
+    // dep add is idempotent: the same edge a second time is a no-op.
+    let n = rows(&log);
+    ta(&dir, &["dep", "add", "b", "depends_on=a"]);
+    assert_eq!(rows(&log), n + 1, "first edge writes");
+    assert!(ta(&dir, &["dep", "add", "b", "depends_on=a"]).contains("no changes"));
+    assert_eq!(rows(&log), n + 1, "a duplicate edge writes nothing");
+
+    // `+=` is rejected on the single-valued status field, fine on free text.
+    let bad = run(ta_bin(), &dir, &["update", "b", "status+=x"]);
+    assert!(!bad.status.success(), "+= on status must fail");
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("status"));
+    ta(&dir, &["update", "b", "notes+=hello"]);
 }

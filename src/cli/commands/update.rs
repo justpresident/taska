@@ -1,6 +1,7 @@
 //! `ta update` — set (`=`) and/or append to (`+=`) fields on a task.
 
-use crate::cli::parse_field_ops;
+use crate::cli::{parse_field_ops, vet_events};
+use crate::engine::Engine;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType};
 use crate::storage::EventStore;
@@ -18,7 +19,23 @@ pub fn cmd_update(store: &impl EventStore, id: &str, fields: &[String]) -> Resul
     if !append.is_empty() {
         events.push(MutationEvent::new(OpType::Append, id, append));
     }
-    store.append_events(&events)?;
-    println!("Updated task `{id}`");
+    // Verify-then-append under the store lock: errors if the task doesn't exist,
+    // and drops fields already at their target value (so re-asserting the same
+    // value writes nothing rather than bloating the log).
+    let workflow = store.config().workflow.clone();
+    let written = store.append_checked(&|baseline, log| {
+        let state = Engine::materialize_state(
+            baseline.to_vec(),
+            log.to_vec(),
+            &workflow.status_field,
+            &workflow.done_status,
+        );
+        vet_events(&events, &state, &workflow)
+    })?;
+    if written.is_empty() {
+        println!("`{id}` already up to date — no changes");
+    } else {
+        println!("Updated task `{id}`");
+    }
     Ok(())
 }

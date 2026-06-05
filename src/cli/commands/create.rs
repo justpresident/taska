@@ -2,8 +2,9 @@
 
 use serde_json::Value;
 
-use crate::cli::parse_field_ops;
+use crate::cli::{parse_field_ops, vet_events};
 use crate::config::WorkflowConfig;
+use crate::engine::Engine;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType};
 use crate::storage::EventStore;
@@ -29,7 +30,19 @@ pub fn cmd_create(
             Value::String(workflow.default_status.clone()),
         );
     }
-    store.append_events(&[MutationEvent::new(OpType::Create, id, payload)])?;
+    // Verify-then-append under the store lock: rejects a duplicate `create`
+    // (the task already exists) atomically, so two concurrent creates can't both
+    // win. A create is never a no-op, so on success it always wrote.
+    let draft = MutationEvent::new(OpType::Create, id, payload);
+    store.append_checked(&|baseline, log| {
+        let state = Engine::materialize_state(
+            baseline.to_vec(),
+            log.to_vec(),
+            &workflow.status_field,
+            &workflow.done_status,
+        );
+        vet_events(std::slice::from_ref(&draft), &state, workflow)
+    })?;
     println!("Created task `{id}`");
     Ok(())
 }

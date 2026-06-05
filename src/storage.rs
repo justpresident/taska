@@ -16,6 +16,15 @@ use crate::config::Config;
 use crate::error::DynError;
 use crate::model::{MutationEvent, TaskState};
 
+/// Turns the current store state (`baseline`, `log`) into the events to append.
+///
+/// It materializes, validates each draft, and drops no-ops. Returning an error
+/// rejects the whole batch (nothing is written); an empty `Vec` means "nothing
+/// to do". Run by [`EventStore::append_checked`] so the read→verify→write is one
+/// step. See [`crate::cli::vet_events`].
+pub type EventBuilder<'a> =
+    dyn Fn(&[TaskState], &[MutationEvent]) -> Result<Vec<MutationEvent>, DynError> + 'a;
+
 /// The persistence operations the application relies on.
 pub trait EventStore {
     /// The store's loaded configuration. On the trait so command handlers can
@@ -28,6 +37,20 @@ pub trait EventStore {
     fn load_mutations(&self) -> Result<Vec<MutationEvent>, DynError>;
     /// Append events to the end of the log without rewriting existing lines.
     fn append_events(&self, new_events: &[MutationEvent]) -> Result<(), DynError>;
+    /// Atomically append a **verified** batch: read the current state, let
+    /// `build` validate it and produce the events to write, then append them
+    /// (minting seqs). [`FileStore`] runs the whole sequence under the write
+    /// lock, so the check can't race a concurrent writer (a TOCTOU that could,
+    /// e.g., create the same task twice). This default is a non-atomic
+    /// read→build→append, fine for single-threaded in-memory stores. Returns the
+    /// events written (empty = nothing to do).
+    fn append_checked(&self, build: &EventBuilder) -> Result<Vec<MutationEvent>, DynError> {
+        let baseline = self.load_baseline()?;
+        let log = self.load_mutations()?;
+        let events = build(&baseline, &log)?;
+        self.append_events(&events)?;
+        Ok(events)
+    }
     /// Replace the baseline with `baseline` and rewrite the log to contain
     /// exactly `retained` (the recent events kept for merge reconciliation).
     fn compact(&self, baseline: &[TaskState], retained: &[MutationEvent]) -> Result<(), DynError>;
@@ -173,6 +196,38 @@ impl EventStore for FileStore {
         Ok(())
     }
 
+    /// Atomic verify-then-append: the write lock is held across reading the log,
+    /// running `build`, and appending its result, so the validation can't race a
+    /// concurrent writer. The log is read **strictly** (an unparseable line is an
+    /// error, never skipped) for the same reason [`max_seq`] is — minting over a
+    /// log we can't fully read risks a duplicate seq. The baseline is read under
+    /// the same lock; it is stable because [`FileStore::compact`] also holds this
+    /// lock across its baseline swap.
+    fn append_checked(&self, build: &EventBuilder) -> Result<Vec<MutationEvent>, DynError> {
+        let file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open(self.mutations_path())?;
+        let mut lock = RwLock::new(file);
+        let mut locked_file = lock.write()?;
+
+        let log = read_log_strict(&mut locked_file)?;
+        let baseline = self.load_baseline()?;
+        let events = build(&baseline, &log)?;
+        if events.is_empty() {
+            return Ok(events);
+        }
+        let start = log.iter().map(|e| e.seq).max().map_or(1, |m| m + 1);
+        for (seq, draft) in (start..).zip(&events) {
+            let mut event = draft.clone();
+            event.seq = seq;
+            writeln!(locked_file, "{}", serde_json::to_string(&event)?)?;
+        }
+        locked_file.flush()?;
+        Ok(events)
+    }
+
     /// Unlike normal writes this *does* rewrite the log — that is the whole
     /// point of compaction. The mutation log is held under the exclusive lock
     /// across the baseline swap so a concurrent `append_events` can't slip an
@@ -250,6 +305,31 @@ fn read_events(path: &Path) -> Result<Vec<MutationEvent>, DynError> {
     // `seq` is the authoritative order, and every write path keeps the file in
     // that order. Verify rather than sort: an out-of-order log is corruption we
     // must surface, not silently repair.
+    crate::model::verify_seq_order(&out)?;
+    Ok(out)
+}
+
+/// Read every event from the open log, **strictly** — an unparseable line is an
+/// error (cf. [`read_events`], which tolerates one). Used by the verify-then-write
+/// path, which must see the whole log before minting a seq or vetting a draft.
+fn read_log_strict(file: &mut File) -> Result<Vec<MutationEvent>, DynError> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut out = Vec::new();
+    for (idx, line) in BufReader::new(&mut *file).lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: MutationEvent = serde_json::from_str(&line).map_err(|e| {
+            format!(
+                "mutation log line {} is unparseable ({e}); refusing to read for a write. \
+                 Often a stale `ta` binary that predates a newer event type — rebuild/update \
+                 `ta`, or run `ta resolve` to rewrite the log, then retry.",
+                idx + 1
+            )
+        })?;
+        out.push(event);
+    }
     crate::model::verify_seq_order(&out)?;
     Ok(out)
 }
