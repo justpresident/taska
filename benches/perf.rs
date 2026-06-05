@@ -7,7 +7,7 @@
 //! reports on-disk log sizes, shows what compaction does to size, and times a
 //! merge of two diverged branches.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -530,6 +530,99 @@ fn bench_relationships() {
         "| reachability_counts | {} | {} |",
         commas(small.len()),
         fmt_dur(reach),
+    );
+
+    bench_dep_type_id(&state, &blockers);
+}
+
+/// DepTypeId prototype: would interning relationship-type names to integers help?
+/// The hot graph ops discard the edge type; the only per-task type work is the
+/// blocker-membership filter inside `blocker_edges`. Compare three ways to do that
+/// filter over every task's edges: the current `BTreeSet<String>` membership; a
+/// `DepTypeId` that still maps each type *string* → id (because the materialized
+/// `relationships` map is string-keyed); and a "ceiling" where edges are already
+/// stored as `(DepTypeId, target)` so the filter is integer-only.
+fn bench_dep_type_id(state: &HashMap<String, TaskState>, blockers: &BTreeSet<String>) {
+    let all_types = ["depends_on", "relates_to", "blocks", "duplicates"];
+    let type_to_id: HashMap<&str, u32> = all_types
+        .iter()
+        .enumerate()
+        .map(|(i, &t)| (t, i as u32))
+        .collect();
+    let blocker_mask: Vec<bool> = all_types.iter().map(|t| blockers.contains(*t)).collect();
+    let dep_id = type_to_id["depends_on"] as usize;
+
+    // (1) Current: BTreeSet<String> membership, once per type per task.
+    let string_filter = time_op(20, || {
+        state
+            .values()
+            .map(|t| edge_iter(t, blockers).count())
+            .sum::<usize>()
+    });
+
+    // (2) DepTypeId, realistic: the relationships map is string-keyed, so each type
+    // must still be hashed to look up its id before the integer mask check.
+    let int_filter = time_op(20, || {
+        let mut total = 0usize;
+        for t in state.values() {
+            if blocker_mask[dep_id] {
+                total += t.depends_on.len();
+            }
+            for (rel, targets) in &t.relationships {
+                if type_to_id
+                    .get(rel.as_str())
+                    .is_some_and(|&id| blocker_mask[id as usize])
+                {
+                    total += targets.len();
+                }
+            }
+        }
+        total
+    });
+
+    // (3) Ceiling: edges pre-interned to (DepTypeId, target) once, as id-keyed
+    // in-memory storage would hold them; the filter is then integer-only.
+    let interned: Vec<Vec<(u32, &str)>> = state
+        .values()
+        .map(|t| {
+            let mut v: Vec<(u32, &str)> = t
+                .depends_on
+                .iter()
+                .map(|d| (dep_id as u32, d.as_str()))
+                .collect();
+            for (rel, targets) in &t.relationships {
+                if let Some(&id) = type_to_id.get(rel.as_str()) {
+                    v.extend(targets.iter().map(|x| (id, x.as_str())));
+                }
+            }
+            v
+        })
+        .collect();
+    let int_only = time_op(20, || {
+        interned
+            .iter()
+            .flatten()
+            .filter(|(id, _)| blocker_mask[*id as usize])
+            .count()
+    });
+
+    println!("\nDepTypeId — blocker-membership filter over every task's edges:\n");
+    println!("| filter | tasks | median |");
+    println!("|---|---|---|");
+    println!(
+        "| BTreeSet<String> (current) | {} | {} |",
+        commas(state.len()),
+        fmt_dur(string_filter),
+    );
+    println!(
+        "| DepTypeId (string→id lookup + mask) | {} | {} |",
+        commas(state.len()),
+        fmt_dur(int_filter),
+    );
+    println!(
+        "| pre-interned ids (ceiling, no string work) | {} | {} |",
+        commas(state.len()),
+        fmt_dur(int_only),
     );
 }
 
