@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 use crate::cli::state_of;
 use crate::config::RelationshipDef;
 use crate::error::DynError;
-use crate::model::{MutationEvent, OpType, TaskState};
+use crate::model::{is_done, MutationEvent, OpType, TaskState};
 use crate::storage::EventStore;
 
 /// `ta dep` subcommands. Edges are `type=target` tokens; `type` must be declared
@@ -43,6 +43,12 @@ pub enum DepAction {
     },
     /// Report dependency cycles in the `depends_on` graph: `ta dep cycles`
     Cycles,
+    /// Ordered remaining prerequisites of a goal: `ta dep plan <goal> …`
+    Plan {
+        /// Goal task(s) to plan toward
+        #[arg(required = true)]
+        goals: Vec<String>,
+    },
 }
 
 /// Add or remove typed dependency edges. Each `type=target` edge's type is
@@ -64,6 +70,7 @@ pub fn cmd_dep_group(
         DepAction::List { tasks } => dep_list(store, &tasks, types),
         DepAction::Tree { tasks } => dep_tree(store, &tasks),
         DepAction::Cycles => dep_cycles(store),
+        DepAction::Plan { goals } => dep_plan(store, &goals),
     }
 }
 
@@ -355,5 +362,71 @@ fn dep_cycles(store: &impl EventStore) -> Result<(), DynError> {
             println!("  {}", cycle.join(" ↔ "));
         }
     }
+    Ok(())
+}
+
+/// `ta dep plan <goal> …` — the not-done transitive prerequisites of the goal(s)
+/// (the goals included), in dependency order: do exactly these, in this order.
+/// Prerequisites are the blocker edges (the `depends_on` field plus any
+/// `blocker`-typed relationship); already-done ones are dropped as satisfied.
+fn dep_plan(store: &impl EventStore, goals: &[String]) -> Result<(), DynError> {
+    let state = state_of(store)?;
+    for g in goals {
+        if !state.contains_key(g) {
+            return Err(format!("no task `{g}`").into());
+        }
+    }
+    let blockers = store.config().relationships.blocker_types();
+
+    // Transitive prerequisite closure, the goals included.
+    let mut want: BTreeSet<String> = BTreeSet::new();
+    let mut stack: Vec<String> = goals.to_vec();
+    while let Some(id) = stack.pop() {
+        if !want.insert(id.clone()) {
+            continue;
+        }
+        if let Some(task) = state.get(&id) {
+            for (dep, _) in crate::graph::blocker_edges(task, &blockers) {
+                if state.contains_key(dep) {
+                    stack.push(dep.to_string());
+                }
+            }
+        }
+    }
+
+    // Order just that subgraph (prerequisites before dependents); a cycle within
+    // it is surfaced as an error, like `ta ready`.
+    let sub: HashMap<String, TaskState> = want
+        .iter()
+        .filter_map(|id| state.get(id).map(|t| (id.clone(), t.clone())))
+        .collect();
+    let order = crate::graph::validate_and_sort_dependencies(&sub, &blockers)?;
+
+    let wf = store.config().workflow.clone();
+    let remaining: Vec<&String> = order
+        .iter()
+        .filter(|id| {
+            sub.get(id.as_str())
+                .is_some_and(|t| !is_done(t, &wf.status_field, &wf.done_status))
+        })
+        .collect();
+    if remaining.is_empty() {
+        println!("Nothing to do — every prerequisite is already done.");
+        return Ok(());
+    }
+
+    let width = remaining.iter().map(|id| id.len()).max().unwrap_or(0);
+    for (i, id) in remaining.iter().enumerate() {
+        let status = sub
+            .get(id.as_str())
+            .and_then(|t| t.custom_fields.get(&wf.status_field))
+            .map(|v| match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .unwrap_or_default();
+        println!("{:>2}. {id:<width$}  {status}", i + 1);
+    }
+    println!("({} task(s) remaining, in order)", remaining.len());
     Ok(())
 }

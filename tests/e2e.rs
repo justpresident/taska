@@ -2345,6 +2345,49 @@ fn config_validate_flags_a_blocker_cycle_and_set_runs_the_same_check() {
 }
 
 #[test]
+fn dep_plan_lists_remaining_prerequisites_in_order() {
+    let dir = fresh_dir("dep-plan");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    for id in ["build", "test", "ship"] {
+        ta(&dir, &["create", id, "status=open"]);
+    }
+    // ship depends_on test depends_on build.
+    ta(&dir, &["dep", "add", "ship", "depends_on=test"]);
+    ta(&dir, &["dep", "add", "test", "depends_on=build"]);
+
+    let plan = ta(&dir, &["dep", "plan", "ship"]);
+    let (pb, pt, ps) = (
+        plan.find("build").unwrap(),
+        plan.find("test").unwrap(),
+        plan.find("ship").unwrap(),
+    );
+    assert!(
+        pb < pt && pt < ps,
+        "prerequisites before dependents: {plan}"
+    );
+    assert!(plan.contains("3 task(s) remaining"), "count: {plan}");
+
+    // A done prerequisite drops out of the plan as satisfied.
+    ta(&dir, &["update", "build", "status=closed"]);
+    let plan = ta(&dir, &["dep", "plan", "ship"]);
+    assert!(!plan.contains("build"), "done prereq dropped: {plan}");
+    assert!(plan.contains("2 task(s) remaining"), "count: {plan}");
+
+    // With everything done there's nothing left to do.
+    ta(&dir, &["update", "test", "status=closed"]);
+    ta(&dir, &["update", "ship", "status=closed"]);
+    assert!(
+        ta(&dir, &["dep", "plan", "ship"]).contains("Nothing to do"),
+        "all done -> nothing to do"
+    );
+
+    // An unknown goal is an error.
+    let out = run(ta_bin(), &dir, &["dep", "plan", "nope"]);
+    assert!(!out.status.success(), "unknown goal must fail");
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);

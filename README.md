@@ -196,6 +196,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 | `ta dep list [<task> …]` | List each task's edges — its own, plus inverse edges mirrored from other tasks (`a depends_on b` shows on `b` as `blocks: a`) |
 | `ta dep tree [<task> …]` | ASCII dependency tree (roots default to tasks nothing depends on; shared nodes collapse, cycles are flagged) |
 | `ta dep cycles` | Report any cycles in the `depends_on` graph |
+| `ta dep plan <goal> …` | A goal's not-done transitive prerequisites in dependency order — "do exactly these, in this order" |
 | `ta delete <id>` | Delete a task |
 | `ta list [criteria...] [--open]` | List tasks, optionally filtered by AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`; `field` may be a task field, `id`, or `deps` (e.g. `ta list status~open priority=3`). `--open` limits to not-done tasks. With no criteria, lists everything |
 | `ta show <id>` | Show one task as a readable vertical record — every field, untruncated, one `field: value` line each (`--format json`/`jsonl` for machine output) |
