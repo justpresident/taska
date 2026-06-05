@@ -3096,3 +3096,58 @@ fn write_gate_rejects_invalid_and_skips_noops() {
     assert!(String::from_utf8_lossy(&bad.stderr).contains("status"));
     ta(&dir, &["update", "b", "notes+=hello"]);
 }
+
+/// More gate rules: a dependency on a missing task, a reserved/computed field
+/// name (`deps`/`dep`/`id`/timestamp/graph/relationship columns), and deleting a
+/// task that doesn't exist are all rejected up front.
+#[test]
+fn gate_rejects_dangling_targets_reserved_fields_and_missing_delete() {
+    let dir = fresh_dir("gate-more");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a", "status=open"]);
+
+    // A dependency on a non-existent task is rejected (no dangling edge).
+    let dangling = run(ta_bin(), &dir, &["dep", "add", "a", "depends_on=ghost"]);
+    assert!(
+        !dangling.status.success(),
+        "dep on a missing task must fail"
+    );
+    assert!(String::from_utf8_lossy(&dangling.stderr).contains("ghost"));
+
+    // Reserved/computed field names can't be set — they'd be silently shadowed.
+    // `create_time` is a timestamp column, `unblocks` a graph column, `blocks` a
+    // relationship inverse, `deps`/`id` structural.
+    for field in [
+        "deps=x",
+        "dep=x",
+        "id=x",
+        "create_time=x",
+        "unblocks=x",
+        "blocks=x",
+    ] {
+        let out = run(ta_bin(), &dir, &["update", "a", field]);
+        assert!(!out.status.success(), "setting `{field}` must fail");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("reserved or computed"),
+            "{field}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    assert!(
+        !run(ta_bin(), &dir, &["create", "z", "deps=x"])
+            .status
+            .success(),
+        "create with a reserved field must fail"
+    );
+    // A normal field still works.
+    ta(&dir, &["update", "a", "owner=bob"]);
+
+    // Deleting a missing task errors rather than writing a no-op Delete.
+    let baddelete = run(ta_bin(), &dir, &["delete", "ghost"]);
+    assert!(
+        !baddelete.status.success(),
+        "delete of a missing task must fail"
+    );
+    assert!(String::from_utf8_lossy(&baddelete.stderr).contains("no task"));
+}

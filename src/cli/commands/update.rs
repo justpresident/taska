@@ -22,15 +22,15 @@ pub fn cmd_update(store: &impl EventStore, id: &str, fields: &[String]) -> Resul
     // Verify-then-append under the store lock: errors if the task doesn't exist,
     // and drops fields already at their target value (so re-asserting the same
     // value writes nothing rather than bloating the log).
-    let workflow = store.config().workflow.clone();
+    let config = store.config().clone();
     let written = store.append_checked(&|baseline, log| {
         let state = Engine::materialize_state(
             baseline.to_vec(),
             log.to_vec(),
-            &workflow.status_field,
-            &workflow.done_status,
+            &config.workflow.status_field,
+            &config.workflow.done_status,
         );
-        vet_events(&events, &state, &workflow)
+        vet_events(&events, &state, &config)
     })?;
     if written.is_empty() {
         println!("`{id}` already up to date — no changes");

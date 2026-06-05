@@ -34,14 +34,15 @@ pub fn cmd_create(
     // (the task already exists) atomically, so two concurrent creates can't both
     // win. A create is never a no-op, so on success it always wrote.
     let draft = MutationEvent::new(OpType::Create, id, payload);
+    let config = store.config().clone();
     store.append_checked(&|baseline, log| {
         let state = Engine::materialize_state(
             baseline.to_vec(),
             log.to_vec(),
-            &workflow.status_field,
-            &workflow.done_status,
+            &config.workflow.status_field,
+            &config.workflow.done_status,
         );
-        vet_events(std::slice::from_ref(&draft), &state, workflow)
+        vet_events(std::slice::from_ref(&draft), &state, &config)
     })?;
     println!("Created task `{id}`");
     Ok(())

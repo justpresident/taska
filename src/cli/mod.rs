@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use serde_json::{Map, Value};
 
-use crate::config::{Config, RelationshipDef, WorkflowConfig};
+use crate::config::{Config, RelationshipDef};
 use crate::engine::Engine;
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs};
@@ -450,11 +450,23 @@ const RESERVED_FIELD_KEYS: &[&str] = &["seq", "timestamp", "op", "task_id", "_me
 pub(crate) fn vet_events(
     drafts: &[MutationEvent],
     state: &HashMap<String, TaskState>,
-    workflow: &WorkflowConfig,
+    config: &Config,
 ) -> Result<Vec<MutationEvent>, DynError> {
+    let reserved = reserved_field_names(config);
     let mut out = Vec::new();
     for draft in drafts {
         let id = draft.task_id.as_str();
+        // A field whose value is computed/injected (id, deps, the timestamp and
+        // graph columns, relationship names) can't be set directly — a user value
+        // of the same name is silently shadowed. Applies to ops carrying fields.
+        if matches!(draft.op, OpType::Create | OpType::Update | OpType::Append) {
+            if let Some(bad) = draft.payload.keys().find(|k| reserved.contains(k.as_str())) {
+                return Err(format!(
+                    "`{bad}` is a reserved or computed field and can't be set directly"
+                )
+                .into());
+            }
+        }
         match draft.op {
             OpType::Create => {
                 if state.contains_key(id) {
@@ -481,7 +493,11 @@ pub(crate) fn vet_events(
             }
             OpType::Append => {
                 require_existing(state, id)?;
-                if let Some(bad) = draft.payload.keys().find(|k| *k == &workflow.status_field) {
+                if let Some(bad) = draft
+                    .payload
+                    .keys()
+                    .find(|k| *k == &config.workflow.status_field)
+                {
                     return Err(format!(
                         "can't append (`+=`) to `{bad}`: it holds a single status value, not a log"
                     )
@@ -491,8 +507,14 @@ pub(crate) fn vet_events(
             }
             OpType::AddDep => {
                 let task = require_existing(state, id)?;
-                if draft.payload.get(DEP_KEY).and_then(Value::as_str) == Some(id) {
+                let target = draft.payload.get(DEP_KEY).and_then(Value::as_str);
+                if target == Some(id) {
                     return Err(format!("a task can't reference itself (`{id}`)").into());
+                }
+                if let Some(t) = target {
+                    if !state.contains_key(t) {
+                        return Err(format!("no task `{t}` to reference").into());
+                    }
                 }
                 if !dep_edge_exists(task, &draft.payload) {
                     out.push(draft.clone());
@@ -505,13 +527,45 @@ pub(crate) fn vet_events(
                 }
             }
             OpType::Delete => {
-                if state.contains_key(id) {
-                    out.push(draft.clone());
-                }
+                // Deleting a missing task is a typo, like any other mutation on it.
+                require_existing(state, id)?;
+                out.push(draft.clone());
             }
         }
     }
     Ok(out)
+}
+
+/// Field names that can't be set directly because their value is computed or
+/// injected — a user field of the same name is silently shadowed (so meaningless
+/// and invisible). The envelope keys plus: the structural columns `id`/`deps`
+/// (and `dep`, which reads like a dependency — use `ta dep add`), the computed
+/// graph columns, the configured timestamp columns, and the relationship type
+/// names + inverses (which `show` surfaces and `ta dep` edits).
+fn reserved_field_names(config: &Config) -> BTreeSet<String> {
+    let mut names: BTreeSet<String> = RESERVED_FIELD_KEYS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    for s in ["id", "deps", "dep", "unblocks", "blocked_by", "subtasks"] {
+        names.insert(s.to_string());
+    }
+    for name in [
+        &config.timestamps.create_time,
+        &config.timestamps.update_time,
+        &config.timestamps.close_time,
+    ] {
+        if !name.is_empty() {
+            names.insert(name.clone());
+        }
+    }
+    for (name, def) in &config.relationships.types {
+        names.insert(name.clone());
+        if !def.inverse.is_empty() {
+            names.insert(def.inverse.clone());
+        }
+    }
+    names
 }
 
 /// The task `id` in `state`, or an error if it doesn't exist — so a mutation

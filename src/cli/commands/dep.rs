@@ -141,18 +141,18 @@ fn dep_write(
     // freshly-read state, so none of them can race a concurrent writer.
     let blockers = store.config().relationships.blocker_types();
     let hierarchy = store.config().relationships.hierarchy_types();
-    let workflow = store.config().workflow.clone();
+    let config = store.config().clone();
     let written = store.append_checked(&|baseline, log| {
         let state = Engine::materialize_state(
             baseline.to_vec(),
             log.to_vec(),
-            &workflow.status_field,
-            &workflow.done_status,
+            &config.workflow.status_field,
+            &config.workflow.done_status,
         );
         if !removing {
             validate_blocker_additions(&resolved, &state, &blockers, &hierarchy)?;
         }
-        vet_events(&events, &state, &workflow)
+        vet_events(&events, &state, &config)
     })?;
     if written.is_empty() {
         println!("no changes on `{task}`");
