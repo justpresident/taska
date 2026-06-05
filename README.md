@@ -194,7 +194,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 | `ta dep add <task> <type>=<target> …` | Add typed relationship edge(s); each `type` must be declared in `[relationships]` (e.g. `ta dep add api depends_on=db relates_to=ui`). A `hierarchy` type like `has_subtask` makes a parent/child edge that gates like a blocker but renders distinctly. Rejects a second blocking edge between the same pair, or a second parent for a task |
 | `ta dep remove <task> <type>=<target> …` | Remove typed edge(s); a type's configured `inverse` name works too (`ta dep remove db blocks=api` removes `api depends_on db`) |
 | `ta dep list [<task> …]` | List each task's edges — its own, plus inverse edges mirrored from other tasks (`a depends_on b` shows on `b` as `blocks: a`) |
-| `ta dep tree [<task> …]` | ASCII dependency tree (roots default to tasks nothing depends on; shared nodes collapse, cycles are flagged). Subtasks are tagged `[subtask]` and a parent rolls up its child completion as `[subtasks done/total]` |
+| `ta dep tree [<task> …]` | ASCII dependency tree with a shortened title per node, colored on a TTY (done tasks dimmed + `✓`). Shows the exact graph by default — never spliced; `--open` prunes fully-resolved branches. `--sort`/`--reverse` order siblings. Subtasks are tagged `[subtask]`, a parent rolls up `[subtasks done/total]`, shared nodes collapse, cycles are flagged |
 | `ta dep cycles` | Report any cycles in the `depends_on` graph |
 | `ta dep plan <goal> …` | A goal's not-done transitive prerequisites in dependency order — "do exactly these, in this order". `--critical` narrows to the longest single chain (the critical path) |
 | `ta delete <id>` | Delete a task |

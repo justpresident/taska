@@ -18,8 +18,8 @@ use crate::model::TaskState;
 
 /// Wrap `text` in an ANSI SGR sequence when `on`, else return it unchanged. Uses
 /// the terminal's NAMED 16-color palette (which the user's theme remaps for
-/// light/dark), never hardcoded 24-bit RGB.
-fn sgr(text: &str, code: &str, on: bool) -> String {
+/// light/dark), never hardcoded 24-bit RGB. Shared with `dep tree` coloring.
+pub(crate) fn sgr(text: &str, code: &str, on: bool) -> String {
     if on {
         format!("\x1b[{code}m{text}\x1b[0m")
     } else {
@@ -42,8 +42,8 @@ fn column_sgr(column: &str) -> Option<&'static str> {
 /// Whether human output should be colored: not `--no-color`, `NO_COLOR` unset,
 /// and stdout is a TTY (so pipes, redirects, and `--format json`/`jsonl` stay
 /// clean). The json/jsonl renderers never color regardless.
-pub(crate) fn resolve_color(display: &DisplayArgs) -> bool {
-    !display.no_color && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+pub(crate) fn want_color(no_color: bool) -> bool {
+    !no_color && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
 }
 
 /// Output format for the listing commands. `--format` changes only *how* tasks
@@ -123,7 +123,7 @@ pub(crate) fn render_rows(
             tasks,
             columns,
             &truncation_caps(columns, display, cfg),
-            resolve_color(display),
+            want_color(display.no_color),
         ),
     }
 }
@@ -135,18 +135,24 @@ pub(crate) fn render_rows(
 /// an empty or unknown column leaves only the `id` tiebreak, i.e. orders by id.
 fn sort_tasks(tasks: &mut [&TaskState], display: &DisplayArgs, cfg: &DisplayConfig) {
     let column = display.sort.as_deref().unwrap_or(cfg.sort.as_str());
-    tasks.sort_by(|a, b| {
-        let ord = match (cell_value(a, column), cell_value(b, column)) {
-            (Some(x), Some(y)) => cmp_json(&x, &y),
-            (Some(_), None) => Ordering::Less, // a present value sorts before a missing one
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => Ordering::Equal,
-        };
-        ord.then_with(|| a.id.cmp(&b.id))
-    });
+    tasks.sort_by(|a, b| task_cmp(a, b, column));
     if display.reverse {
         tasks.reverse();
     }
+}
+
+/// Compare two tasks by one column, ascending, with `id` as the stable
+/// tiebreaker — a present value sorts before a missing one. The shared ordering
+/// behind `list`'s `--sort` and `dep tree`'s sibling sort. `--reverse` flips the
+/// result at the call site.
+pub(crate) fn task_cmp(a: &TaskState, b: &TaskState, column: &str) -> Ordering {
+    let ord = match (cell_value(a, column), cell_value(b, column)) {
+        (Some(x), Some(y)) => cmp_json(&x, &y),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    };
+    ord.then_with(|| a.id.cmp(&b.id))
 }
 
 /// The value of `column` for a task as a JSON `Value` — the single source of
@@ -423,7 +429,9 @@ fn human_display(value: &Value) -> String {
     }
 }
 
-fn truncate(s: &str, max_width: usize) -> String {
+/// Truncate `s` to `max_width` characters (0 = no limit), with a trailing `…`
+/// when cut. Shared by the human table and `dep tree`'s title column.
+pub(crate) fn truncate(s: &str, max_width: usize) -> String {
     if max_width == 0 || s.chars().count() <= max_width {
         return s.to_string();
     }

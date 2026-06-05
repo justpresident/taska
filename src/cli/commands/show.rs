@@ -42,7 +42,7 @@ pub fn cmd_show(
         .clone()
         .unwrap_or_else(|| full_columns(&tasks, cfg));
     let out = if display.format == OutputFormat::Human {
-        render_record(&task, &columns, crate::format::resolve_color(display))
+        render_record(&task, &columns, crate::format::want_color(display.no_color))
     } else {
         render_rows(&tasks, &columns, display, cfg)
     };

@@ -2595,6 +2595,72 @@ fn dep_tree_marks_subtasks_and_rolls_up_progress() {
 }
 
 #[test]
+fn dep_tree_exact_by_default_titles_done_marks_and_open_prune() {
+    let dir = fresh_dir("tree-output");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "epic", "title=Epic goal", "status=open"]);
+    ta(
+        &dir,
+        &["create", "open-sub", "title=Still open", "status=open"],
+    );
+    ta(
+        &dir,
+        &["create", "done-sub", "title=Finished", "status=open"],
+    );
+    ta(&dir, &["create", "done-mid", "status=open"]);
+    ta(&dir, &["create", "deep-open", "status=open"]);
+    ta(&dir, &["dep", "add", "epic", "has_subtask=open-sub"]);
+    ta(&dir, &["dep", "add", "epic", "has_subtask=done-sub"]);
+    ta(&dir, &["dep", "add", "epic", "depends_on=done-mid"]);
+    ta(&dir, &["dep", "add", "done-mid", "depends_on=deep-open"]); // done node leads to open work
+    ta(&dir, &["update", "done-sub", "status=closed"]);
+    ta(&dir, &["update", "done-mid", "status=closed"]);
+
+    // Default: the exact graph — titles shown, done tasks marked `✓`, and a done
+    // mid-chain node is kept (never spliced), with its open descendant beneath it.
+    let tree = ta(&dir, &["dep", "tree", "epic"]);
+    assert!(tree.contains("Epic goal"), "title shown: {tree}");
+    assert!(
+        tree.contains("✓ done-sub"),
+        "done subtask check-marked: {tree}"
+    );
+    assert!(
+        tree.contains("✓ done-mid"),
+        "done mid-chain kept + marked: {tree}"
+    );
+    assert!(
+        tree.contains("deep-open"),
+        "open descendant under done node: {tree}"
+    );
+
+    // --open: prune fully-resolved branches (the done-sub leaf), but keep the done
+    // mid-chain node because it still leads to open work.
+    let open = ta(&dir, &["dep", "tree", "epic", "--open"]);
+    assert!(
+        !open.contains("done-sub"),
+        "fully-resolved leaf pruned: {open}"
+    );
+    assert!(
+        open.contains("done-mid") && open.contains("deep-open"),
+        "done->open kept: {open}"
+    );
+    assert!(open.contains("open-sub"), "open subtask kept: {open}");
+
+    // --sort id orders siblings ascending; --reverse flips them.
+    let asc = ta(&dir, &["dep", "tree", "epic", "--sort", "id"]);
+    assert!(
+        asc.find("done-mid").unwrap() < asc.find("open-sub").unwrap(),
+        "ascending id: {asc}"
+    );
+    let desc = ta(&dir, &["dep", "tree", "epic", "--sort", "id", "--reverse"]);
+    assert!(
+        desc.find("open-sub").unwrap() < desc.find("done-mid").unwrap(),
+        "reversed id: {desc}"
+    );
+}
+
+#[test]
 fn list_subtasks_column_shows_parent_progress() {
     let dir = fresh_dir("subtask-col");
     init_repo(&dir);
@@ -2733,6 +2799,7 @@ fn human_output_is_uncolored_when_not_a_tty() {
         vec!["list", "--format", "json"],
         vec!["show", "a"],
         vec!["show", "a", "--format", "jsonl"],
+        vec!["dep", "tree"],
     ] {
         let out = ta(&dir, &args);
         assert!(
