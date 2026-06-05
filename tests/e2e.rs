@@ -2982,3 +2982,37 @@ fn output_to_a_closed_pipe_does_not_panic() {
         "ta panicked writing to a closed pipe: {stderr}"
     );
 }
+
+/// A new write must REFUSE to mint a `seq` when the log holds a line it can't
+/// parse — otherwise `max_seq` would under-count and hand out a duplicate seq,
+/// corrupting the append-only order. The classic trigger is a stale binary that
+/// predates a newer `OpType`; here we simulate it with an unknown-op line that
+/// already carries `seq` 2, so a tolerant (skip-and-mint) writer would re-mint 2.
+#[test]
+fn append_refuses_to_mint_over_an_unparseable_log_line() {
+    let dir = fresh_dir("append-corrupt-log");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a", "title=A"]); // seq 1
+
+    let log = dir.join(".taska").join("mutations.jsonl");
+    let mut content = fs::read_to_string(&log).unwrap();
+    content.push_str(
+        "{\"seq\":2,\"timestamp\":\"2026-01-01T00:00:00Z\",\"op\":\"FutureOp\",\"task_id\":\"b\"}\n",
+    );
+    fs::write(&log, &content).unwrap();
+
+    let out = run(ta_bin(), &dir, &["create", "c", "title=C"]);
+    assert!(
+        !out.status.success(),
+        "create must fail rather than mint a duplicate seq over an unparseable line"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unparseable") && stderr.contains("seq"),
+        "error should name the unparseable line and the seq risk: {stderr}"
+    );
+    // And it must NOT have appended anything (no duplicate seq 2 written).
+    let after = fs::read_to_string(&log).unwrap();
+    assert_eq!(after, content, "the log must be left untouched");
+}

@@ -254,20 +254,36 @@ fn read_events(path: &Path) -> Result<Vec<MutationEvent>, DynError> {
     Ok(out)
 }
 
-/// Largest `seq` in the open log, or `None` when it holds no events. Seeks to the
-/// start to scan; with the file opened `append(true)`, later writes still land at
-/// EOF regardless of where this leaves the read cursor.
+/// Largest `seq` in the open log, or `None` when it holds no events.
+///
+/// Seeks to the start to scan; with the file opened `append(true)`, later writes
+/// still land at EOF regardless of where this leaves the read cursor.
+///
+/// Unlike [`read_events`], which tolerates a corrupt line on *read*, this is
+/// **strict**: a line it can't parse is a hard error. Minting `max(seq) + 1` over
+/// a log we can only partially read would under-count the max and hand out a
+/// **duplicate `seq`** — corrupting the append-only order. The classic trigger is
+/// a stale binary that predates a newer `OpType` (e.g. `Append`): it can't
+/// deserialize that event, so silently skipping it would mint a seq that already
+/// exists. Better to refuse the write and surface the problem.
 fn max_seq(file: &mut File) -> Result<Option<u64>, DynError> {
     file.seek(SeekFrom::Start(0))?;
     let mut max: Option<u64> = None;
-    for line in BufReader::new(&mut *file).lines() {
+    for (idx, line) in BufReader::new(&mut *file).lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        if let Ok(event) = serde_json::from_str::<MutationEvent>(&line) {
-            max = Some(max.map_or(event.seq, |m| m.max(event.seq)));
-        }
+        let event: MutationEvent = serde_json::from_str(&line).map_err(|e| {
+            format!(
+                "refusing to mint a sequence number: mutation log line {} is unparseable \
+                 ({e}). This can hand out a duplicate seq and corrupt the log — often a stale \
+                 `ta` binary that predates a newer event type. Rebuild/update `ta`, or run \
+                 `ta resolve` to rewrite the log, then retry.",
+                idx + 1
+            )
+        })?;
+        max = Some(max.map_or(event.seq, |m| m.max(event.seq)));
     }
     Ok(max)
 }
