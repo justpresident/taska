@@ -2518,6 +2518,56 @@ fn list_unblocks_and_blocked_by_columns() {
 }
 
 #[test]
+fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
+    let dir = fresh_dir("subtask");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    for id in ["epic", "build-form", "wire-auth"] {
+        ta(&dir, &["create", id, "status=open"]);
+    }
+    // Add from the parent side, and from the child side via the inverse — both
+    // land as `has_subtask` edges on the parent.
+    ta(&dir, &["dep", "add", "epic", "has_subtask=build-form"]);
+    ta(&dir, &["dep", "add", "wire-auth", "subtask_of=epic"]);
+
+    let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    assert!(
+        log.contains(r#""type":"has_subtask""#) && log.contains(r#""dep":"wire-auth""#),
+        "inverse add stored as has_subtask on epic: {log}"
+    );
+
+    // dep list shows both directions: parent -> has_subtask, child -> subtask_of.
+    let e = ta(&dir, &["dep", "list", "epic"]);
+    assert!(
+        e.contains("has_subtask:") && e.contains("build-form") && e.contains("wire-auth"),
+        "epic lists its subtasks: {e}"
+    );
+    assert!(
+        ta(&dir, &["dep", "list", "build-form"]).contains("subtask_of: epic"),
+        "child mirrors the parent"
+    );
+
+    // Hierarchy gates like a blocker: the parent isn't ready until its subtasks are.
+    let ready = ta(&dir, &["list", "--ready"]);
+    assert!(
+        lists_task(&ready, "build-form") && lists_task(&ready, "wire-auth"),
+        "subtasks are ready: {ready}"
+    );
+    assert!(
+        !lists_task(&ready, "epic"),
+        "epic blocked by subtasks: {ready}"
+    );
+
+    // Close both subtasks -> the parent becomes ready.
+    ta(&dir, &["update", "build-form", "status=closed"]);
+    ta(&dir, &["update", "wire-auth", "status=closed"]);
+    assert!(
+        lists_task(&ta(&dir, &["list", "--ready"]), "epic"),
+        "epic ready once its subtasks are done"
+    );
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);

@@ -117,9 +117,11 @@ close_time = "{close_time}"
 
 # Relationship types. `ta dep <a> <type>=<b>` adds an edge; an undeclared type is
 # rejected. type = "blocker" makes the target a prerequisite (feeds `ta list
-# --ready` and cycle detection); "info" is informational. inverse names the reverse direction
-# and is OPTIONAL — omit it for a one-way type; the type's own name makes it
-# symmetric (`a relates_to b` reads both ways); else it labels the inverse.
+# --ready` and cycle detection); "hierarchy" is a parent/child (subtask) edge
+# that gates like a blocker but renders distinctly; "info" is informational.
+# inverse names the reverse direction and is OPTIONAL — omit it for a one-way
+# type; the type's own name makes it symmetric (`a relates_to b` reads both
+# ways); else it labels the inverse.
 {relationships_toml}
 "#,
         min_keep = MIN_KEEP_EVENTS,
@@ -343,6 +345,11 @@ pub enum RelType {
     /// `A <type> B` makes `B` a prerequisite of `A`: `A` is ready only once `B`
     /// is done. Feeds `ta list --ready` and cycle detection (the dependency DAG).
     Blocker,
+    /// A parent/child containment edge: `A <type> B` makes `B` a subtask of `A`.
+    /// Gates the graph exactly like a `blocker` (the parent isn't done until its
+    /// children are), but is rendered distinctly as a hierarchy, not a plain
+    /// dependency.
+    Hierarchy,
     /// No effect on readiness or cycles — purely informational.
     #[default]
     Info,
@@ -352,6 +359,7 @@ impl RelType {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Blocker => "blocker",
+            Self::Hierarchy => "hierarchy",
             Self::Info => "info",
         }
     }
@@ -390,21 +398,32 @@ impl RelationshipConfig {
     /// Relationship-type names that gate readiness, cycle detection, and the
     /// dependency tree.
     ///
-    /// Every declared `blocker` type, plus the implicit `depends_on` when it
-    /// isn't declared at all (legacy stores without a `[relationships]` section
-    /// still treat `depends_on` as a blocker). A `depends_on` explicitly set to
-    /// `info` is honored and excluded.
+    /// Every declared `blocker` *or* `hierarchy` type (both gate), plus the
+    /// implicit `depends_on` when it isn't declared at all (legacy stores without
+    /// a `[relationships]` section still treat `depends_on` as a blocker). A
+    /// `depends_on` explicitly set to `info` is honored and excluded.
     pub fn blocker_types(&self) -> BTreeSet<String> {
         let mut set: BTreeSet<String> = self
             .types
             .iter()
-            .filter(|(_, def)| def.kind == RelType::Blocker)
+            .filter(|(_, def)| matches!(def.kind, RelType::Blocker | RelType::Hierarchy))
             .map(|(name, _)| name.clone())
             .collect();
         if !self.types.contains_key("depends_on") {
             set.insert("depends_on".to_string());
         }
         set
+    }
+
+    /// Relationship-type names whose edges are parent→child containment
+    /// (`type = "hierarchy"`). These gate like blockers but render distinctly as
+    /// subtasks, and a parent rolls up completion over them.
+    pub fn hierarchy_types(&self) -> BTreeSet<String> {
+        self.types
+            .iter()
+            .filter(|(_, def)| def.kind == RelType::Hierarchy)
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 }
 
@@ -415,10 +434,15 @@ impl Default for RelationshipConfig {
             inverse: inverse.to_string(),
         };
         Self {
-            // `depends_on` blocks (reverse `blocks`); `relates_to` is symmetric
-            // (self-inverse); `duplicates` is one-way (no inverse surfaced).
+            // `depends_on` blocks (reverse `blocks`); `has_subtask` is a hierarchy
+            // (reverse `subtask_of`); `relates_to` is symmetric (self-inverse);
+            // `duplicates` is one-way (no inverse surfaced).
             types: [
                 ("depends_on".to_string(), def(RelType::Blocker, "blocks")),
+                (
+                    "has_subtask".to_string(),
+                    def(RelType::Hierarchy, "subtask_of"),
+                ),
                 ("relates_to".to_string(), def(RelType::Info, "relates_to")),
                 ("duplicates".to_string(), def(RelType::Info, "")),
             ]
