@@ -7,6 +7,7 @@
 //! reports on-disk log sizes, shows what compaction does to size, and times a
 //! merge of two diverged branches.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -16,8 +17,12 @@ use serde_json::{json, Map};
 
 use taska::config::OnConflict;
 use taska::engine::Engine;
+use taska::graph;
 use taska::merge::execute_git_merge;
 use taska::model::{MutationEvent, OpType, TaskState};
+
+/// Typed relationship kinds used to populate the per-task `relationships` map.
+const REL_TYPES: [&str; 3] = ["relates_to", "blocks", "duplicates"];
 
 const STATUS_FIELD: &str = "status";
 const DONE_STATUS: &str = "closed";
@@ -310,8 +315,154 @@ fn bench_merge() {
     );
 }
 
+/// Like `gen_log`, but every dependency-add is spread across `depends_on` and
+/// the three [`REL_TYPES`], so the per-task `relationships` BTreeMap is heavily
+/// populated — the storage this measurement targets. Edges always point to a
+/// lower-indexed task, so the graph stays acyclic and the toposort/ready paths
+/// run in full rather than bailing on a cycle.
+fn gen_rel_log(n: usize) -> Vec<MutationEvent> {
+    let tasks = (n / 4).max(1);
+    let base = Utc.timestamp_opt(1_700_000_000, 0).single().expect("ts");
+    let mut rng = Rng(0x9E37_C0DE ^ (n as u64));
+    (0..n)
+        .map(|i| {
+            let src = i % tasks;
+            let task_id = format!("t{src}");
+            let mut payload = Map::new();
+            let op = if i < tasks {
+                payload.insert("status".into(), json!("open"));
+                payload.insert("title".into(), json!(format!("Task {i}")));
+                OpType::Create
+            } else if src == 0 {
+                // Task 0 has nothing lower to point at; emit a plain update.
+                payload.insert("priority".into(), json!(i % 5));
+                OpType::Update
+            } else {
+                payload.insert("dep".into(), json!(format!("t{}", rng.below(src))));
+                // 1-in-4 stays a plain depends_on; the rest become typed edges.
+                let k = rng.below(REL_TYPES.len() + 1);
+                if k < REL_TYPES.len() {
+                    payload.insert("type".into(), json!(REL_TYPES[k]));
+                }
+                OpType::AddDep
+            };
+            MutationEvent {
+                seq: (i + 1) as u64,
+                timestamp: base + ChronoDuration::seconds(i as i64),
+                op,
+                task_id,
+                meta: None,
+                payload,
+            }
+        })
+        .collect()
+}
+
+/// Median wall time of `f` over `iters` runs; the result is black-boxed so the
+/// optimizer can't elide the work.
+fn time_op<R>(iters: usize, mut f: impl FnMut() -> R) -> Duration {
+    let times = (0..iters)
+        .map(|_| {
+            let start = Instant::now();
+            let r = f();
+            let elapsed = start.elapsed();
+            std::hint::black_box(r);
+            elapsed
+        })
+        .collect();
+    median(times)
+}
+
+fn bench_relationships() {
+    let blockers: BTreeSet<String> = ["depends_on", "blocks", "duplicates"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+    // Resident heap of the per-task relationship storage at 100k events.
+    let state =
+        Engine::materialize_state(Vec::new(), gen_rel_log(100_000), STATUS_FIELD, DONE_STATUS);
+    let word = std::mem::size_of::<String>();
+    let (mut content, mut typename_bytes) = (0usize, 0usize);
+    let (mut maps, mut vecs, mut rel_edges, mut dep_edges) = (0usize, 0usize, 0usize, 0usize);
+    for (key, t) in &state {
+        content += key.len() + t.id.len();
+        dep_edges += t.depends_on.len();
+        content +=
+            t.depends_on.capacity() * word + t.depends_on.iter().map(String::len).sum::<usize>();
+        if !t.relationships.is_empty() {
+            maps += 1;
+        }
+        for (rel_type, targets) in &t.relationships {
+            vecs += 1;
+            rel_edges += targets.len();
+            typename_bytes += rel_type.len();
+            content += rel_type.len()
+                + targets.capacity() * word
+                + targets.iter().map(String::len).sum::<usize>();
+        }
+    }
+
+    println!(
+        "\nRelationship storage — materialized state of 100,000 events ({} tasks):\n",
+        commas(state.len())
+    );
+    println!("| metric | value |");
+    println!("|---|---|");
+    println!("| depends_on edges | {} |", commas(dep_edges));
+    println!(
+        "| typed relationship edges | {} (in {} per-task maps / {} per-type vecs) |",
+        commas(rel_edges),
+        commas(maps),
+        commas(vecs),
+    );
+    println!(
+        "| heap content (ids + dep/rel targets + type names) | {} |",
+        fmt_bytes(content),
+    );
+    println!(
+        "| of which duplicated type-name strings | {} ({}%) |",
+        fmt_bytes(typename_bytes),
+        pct(typename_bytes, content),
+    );
+
+    // Graph traversal. toposort/ready are O(V+E) — cheap even at 25k tasks;
+    // reachability is O(V·(V+E)), so it runs over a smaller store.
+    let order = time_op(ITERS, || {
+        graph::validate_and_sort_dependencies(&state, &blockers)
+    });
+    let ready = time_op(ITERS, || {
+        graph::ready_tasks(&state, STATUS_FIELD, DONE_STATUS, &blockers)
+    });
+    let small =
+        Engine::materialize_state(Vec::new(), gen_rel_log(8_000), STATUS_FIELD, DONE_STATUS);
+    let reach = time_op(3, || {
+        graph::reachability_counts(&small, &blockers, STATUS_FIELD, DONE_STATUS)
+    });
+
+    println!("\nGraph traversal (blocker edges = depends_on + 2 typed kinds):\n");
+    println!("| operation | tasks | median |");
+    println!("|---|---|---|");
+    println!(
+        "| validate + toposort | {} | {} |",
+        commas(state.len()),
+        fmt_dur(order),
+    );
+    println!(
+        "| ready_tasks | {} | {} |",
+        commas(state.len()),
+        fmt_dur(ready)
+    );
+    println!(
+        "| reachability_counts | {} | {} |",
+        commas(small.len()),
+        fmt_dur(reach),
+    );
+}
+
 fn main() {
     bench_replay();
     bench_compaction();
     bench_merge();
+    bench_relationships();
 }
