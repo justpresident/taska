@@ -88,11 +88,18 @@ pub fn state(tasks: &[TaskState]) -> HashMap<String, TaskState> {
 }
 
 /// Build [`DisplayArgs`] with the non-format flags at their defaults.
+///
+/// `no_color` is forced **on** so rendering is deterministic: the human path
+/// resolves color through `want_color`, which ANDs in `stdout().is_terminal()`,
+/// so a helper that left color enabled would make every content assertion below
+/// TTY-dependent (passing under `cargo test`'s piped output, failing in an
+/// interactive terminal). Color wrapping itself is covered separately by calling
+/// `render_human`/`render_record` with an explicit `color` bool.
 pub fn display(format: OutputFormat, full: bool, columns: Option<&[&str]>) -> DisplayArgs {
     DisplayArgs {
         output: OutputArgs {
             format,
-            no_color: false,
+            no_color: true,
         },
         full,
         columns: columns.map(|c| c.iter().map(|s| (*s).to_string()).collect()),
