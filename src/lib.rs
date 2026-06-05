@@ -1,4 +1,4 @@
-//! `taska` — local-first, git-native task & dependency engine.
+//! `taska` — local-first, git-native task & dependency tracker.
 //!
 //! The core (model, engine, storage, merge, graph, config, error) plus the CLI
 //! surface live in this library crate; the `ta` binary is a thin wrapper that

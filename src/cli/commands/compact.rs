@@ -72,7 +72,7 @@ mod tests {
             "one event retained"
         );
         assert_eq!(store.load_baseline().unwrap().len(), 1, "the rest folded");
-        // Appends still work and overlay the baseline post-compaction.
+        // A later Create still appends to the log and overlays the baseline post-compaction.
         cmd_create(&store, &WorkflowConfig::default(), "c", &[]).unwrap();
         assert_eq!(state_of(&store).unwrap().len(), 3);
     }

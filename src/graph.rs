@@ -126,7 +126,7 @@ pub fn validate_and_sort_dependencies<S: BuildHasher>(
     Ok(sorted)
 }
 
-/// Find dependency cycles in the `depends_on` graph.
+/// Find dependency cycles in the blocker graph.
 ///
 /// Returns one entry per cycle: a multi-task strongly-connected component, or a
 /// single task that depends on itself. Members are sorted, and the list is
@@ -165,7 +165,7 @@ pub fn dependency_cycles<S: BuildHasher>(
 }
 
 /// Tasks that are not yet done and whose every existing dependency is done.
-/// Returned in topological order so `ta ready` lists work in a sane sequence.
+/// Returned in topological order so `ta list --ready` lists work in a sane sequence.
 ///
 /// `status_field`/`done_status` come from `[workflow]` config, so projects can
 /// rename the convention (e.g. `state`/`closed`).

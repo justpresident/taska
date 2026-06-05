@@ -27,7 +27,7 @@ pub(crate) enum OutputFormat {
     Jsonl,
 }
 
-/// Display flags shared by `list`, `search`, `ready`, and `show`.
+/// Display flags shared by `list` and `show`.
 #[derive(Args, Clone)]
 pub(crate) struct DisplayArgs {
     /// Output format: human (aligned table), json (array), or jsonl (NDJSON)
@@ -48,8 +48,8 @@ pub(crate) struct DisplayArgs {
 }
 
 /// Sort a collected task set by the display args and print it, with `empty` as
-/// the human placeholder for no rows. The shared tail of `list`/`search`/`ready`,
-/// each of which differs only in how it gathers the tasks.
+/// the human placeholder for no rows. The shared print tail of `list` (plain,
+/// `--open`, or `--ready`), which differs only in how it gathers the tasks.
 pub(crate) fn print_tasks(
     mut tasks: Vec<&TaskState>,
     display: &DisplayArgs,
@@ -180,7 +180,7 @@ fn truncation_caps(columns: &[String], display: &DisplayArgs, cfg: &DisplayConfi
 /// The column names this display will *reference* — the sort key plus the
 /// columns it will show (explicit `--columns`, else the configured default).
 /// `--full` is excluded because it shows only fields already on the task; a
-/// caller uses this to inject a computed column (e.g. `impact`/`blocked_by`) only
+/// caller uses this to inject a computed column (e.g. `unblocks`/`blocked_by`) only
 /// when it's actually needed, leaving default/`--full`/json output untouched.
 pub(crate) fn referenced_columns(display: &DisplayArgs, cfg: &DisplayConfig) -> Vec<String> {
     let mut refs = vec![display.sort.clone().unwrap_or_else(|| cfg.sort.clone())];

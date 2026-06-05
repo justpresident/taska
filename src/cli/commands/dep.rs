@@ -41,7 +41,7 @@ pub enum DepAction {
         /// Root tasks (default: every task nothing depends on)
         tasks: Vec<String>,
     },
-    /// Report dependency cycles in the `depends_on` graph: `ta dep cycles`
+    /// Report dependency cycles in the blocker graph: `ta dep cycles`
     Cycles,
     /// Ordered remaining prerequisites of a goal: `ta dep plan <goal> …`
     Plan {
@@ -57,7 +57,7 @@ pub enum DepAction {
 /// Add or remove typed dependency edges. Each `type=target` edge's type is
 /// validated against the declared relationship types; an `AddDep`/`RemoveDep`
 /// event is appended per edge (the `depends_on` type omits an explicit `type` to
-/// stay legacy-shaped, so `ta dep add x depends_on=y` matches `ta block x y`).
+/// stay legacy-shaped on disk — it's stored in the dedicated `depends_on` field).
 pub fn cmd_dep_group(
     store: &impl EventStore,
     action: DepAction,
@@ -400,7 +400,7 @@ fn dep_plan(store: &impl EventStore, goals: &[String], critical: bool) -> Result
     }
 
     // Order just that subgraph (prerequisites before dependents); a cycle within
-    // it is surfaced as an error, like `ta ready`.
+    // it is surfaced as an error, like `ta list --ready`.
     let sub: HashMap<String, TaskState> = want
         .iter()
         .filter_map(|id| state.get(id).map(|t| (id.clone(), t.clone())))

@@ -18,7 +18,7 @@ use crate::storage::EventStore;
 /// from the data rather than hardcoded — `done_status` is simply the bucket that
 /// also feeds the `closed` count. `blocked` and `ready` are COMPUTED from the
 /// dependency graph, never read from a status value: `ready` reuses the same set
-/// as `ta ready`, and among not-done tasks the two partition the set (a not-done
+/// as `ta list --ready`, and among not-done tasks the two partition the set (a not-done
 /// task is blocked iff an existing dependency isn't done, else ready).
 struct StatusSummary {
     total: usize,

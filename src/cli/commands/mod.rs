@@ -3,7 +3,7 @@
 //! Each handler depends on the [`EventStore`](crate::storage::EventStore)
 //! abstraction (not the concrete `FileStore`, except the few that need git or
 //! filesystem paths), and reaches shared plumbing — `state_of`, `replay`,
-//! `parse_fields`, `confirm` — through the parent [`crate::cli`] module.
+//! `parse_field_ops`, `confirm` — through the parent [`crate::cli`] module.
 
 pub mod compact;
 pub mod config;

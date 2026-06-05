@@ -3,7 +3,7 @@
 //! This module owns the clap definitions and `run()`/dispatch. Each subcommand's
 //! handler lives in [`commands`]; the cross-cutting helpers handlers reach for —
 //! materializing state ([`state_of`]/[`replay`]), parsing `key=value` fields
-//! ([`parse_fields`]), and confirming destructive actions ([`confirm`]) — live
+//! ([`parse_field_ops`]), and confirming destructive actions ([`confirm`]) — live
 //! here so the handlers stay thin. Handlers depend on the [`EventStore`]
 //! abstraction rather than the concrete [`FileStore`], so they can be exercised
 //! against any store.
@@ -29,7 +29,7 @@ use commands::{
 };
 
 #[derive(Parser)]
-#[command(name = "ta", version = "0.1.0", about = "Taska Event Log Engine")]
+#[command(name = "ta", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -295,7 +295,7 @@ pub(crate) fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskSt
         );
     }
     // Surface the computed timestamps as ordinary (RFC 3339 string) fields under
-    // their configured names, so list/search/show/--sort treat them like any
+    // their configured names, so list/show/--sort treat them like any
     // other column. This is display-only: the raw Option<DateTime> stays on
     // TaskState (and in the baseline); injection never reaches the stored log.
     let ts = &store.config().timestamps;
@@ -325,7 +325,8 @@ fn inject_time(fields: &mut Map<String, Value>, name: &str, value: Option<DateTi
 /// `--full`, and json output stay unchanged unless asked. They are graph-derived
 /// (counts of transitive not-done dependents / prerequisites over the blocker
 /// edges) and surfaced as ordinary numeric fields, so `cell_value`/`--sort`/
-/// `--columns` handle them with no special-casing. Shared by `list` and `ready`.
+/// `--columns` handle them with no special-casing. Used by `list` (including
+/// `--ready`).
 pub(crate) fn inject_reachability_columns(
     store: &impl EventStore,
     state: &mut HashMap<String, TaskState>,
