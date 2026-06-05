@@ -51,6 +51,10 @@ max_width = 40
 # Default column to sort list/ready by (ascending; --sort overrides,
 # --reverse flips). Any field, "id", or "deps"; empty/unknown falls back to id.
 sort = "create_time"
+# Default human layout per command: "table" (aligned columns, one task per row)
+# or "list" (a vertical `field: value` record per task). `--layout` overrides.
+list_layout = "table"
+show_layout = "list"
 
 # Per-column truncation overrides. A column listed here is truncated to its own
 # width instead of max_width (0 = no limit). `--full` ignores these entirely.

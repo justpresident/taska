@@ -95,6 +95,7 @@ pub fn display(format: OutputFormat, full: bool, columns: Option<&[&str]>) -> Di
         columns: columns.map(|c| c.iter().map(|s| (*s).to_string()).collect()),
         sort: None,
         reverse: false,
+        layout: None,
         no_color: false,
     }
 }

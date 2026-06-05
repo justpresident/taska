@@ -13,7 +13,7 @@ use std::io::IsTerminal;
 use clap::{Args, ValueEnum};
 use serde_json::Value;
 
-use crate::config::DisplayConfig;
+use crate::config::{DisplayConfig, Layout};
 use crate::model::TaskState;
 
 /// Wrap `text` in an ANSI SGR sequence when `on`, else return it unchanged. Uses
@@ -67,7 +67,9 @@ pub(crate) struct DisplayArgs {
     /// Show every field, not just the configured columns
     #[arg(long)]
     pub(crate) full: bool,
-    /// Comma-separated columns to show, overriding config (e.g. --columns id,status)
+    /// Columns to show, overriding config. Built-ins `id`, `deps`; computed
+    /// `create_time`/`update_time`/`close_time`, `unblocks`, `blocked_by`,
+    /// `subtasks`; plus any task field. E.g. --columns id,status,unblocks
     #[arg(long, value_delimiter = ',')]
     pub(crate) columns: Option<Vec<String>>,
     /// Sort rows by this column (id, deps, or any field), overriding config
@@ -76,6 +78,10 @@ pub(crate) struct DisplayArgs {
     /// Reverse the sort order (descending)
     #[arg(long)]
     pub(crate) reverse: bool,
+    /// Human layout: `table` (aligned columns) or `list` (vertical record); the
+    /// per-command default lives in `[display]` (`list_layout`/`show_layout`)
+    #[arg(long, value_enum)]
+    pub(crate) layout: Option<Layout>,
     /// Disable ANSI color (also auto-disabled when stdout is not a TTY)
     #[arg(long)]
     pub(crate) no_color: bool,
@@ -119,13 +125,29 @@ pub(crate) fn render_rows(
     match display.format {
         OutputFormat::Json => render_json(tasks, columns),
         OutputFormat::Jsonl => render_jsonl(tasks, columns),
-        OutputFormat::Human => render_human(
-            tasks,
-            columns,
-            &truncation_caps(columns, display, cfg),
-            want_color(display.no_color),
-        ),
+        OutputFormat::Human => {
+            let color = want_color(display.no_color);
+            match display.layout.unwrap_or(Layout::Table) {
+                Layout::Table => render_human(
+                    tasks,
+                    columns,
+                    &truncation_caps(columns, display, cfg),
+                    color,
+                ),
+                Layout::List => render_records(tasks, columns, color),
+            }
+        }
     }
+}
+
+/// A vertical record per task (the `list` layout), records separated by a blank
+/// line. Each record is the same view `show` produces, so the two share a format.
+fn render_records(tasks: &[&TaskState], columns: &[String], color: bool) -> String {
+    tasks
+        .iter()
+        .map(|t| render_record(t, columns, color))
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Sort `tasks` in place by the effective sort column (`--sort`, else the
@@ -480,6 +502,8 @@ mod tests {
             max_width: 0,
             column_max_width: BTreeMap::new(),
             sort: String::new(),
+            list_layout: Layout::Table,
+            show_layout: Layout::List,
         };
         let t = task(
             "api",
@@ -533,6 +557,7 @@ mod tests {
             columns: None,
             sort: Some(sort.to_string()),
             reverse,
+            layout: None,
             no_color: false,
         };
         let ids =
@@ -752,6 +777,8 @@ mod tests {
             max_width: 20,
             column_max_width: BTreeMap::new(),
             sort: String::new(),
+            list_layout: Layout::Table,
+            show_layout: Layout::List,
         };
 
         // --full: the full value survives, no ellipsis.
@@ -801,6 +828,8 @@ mod tests {
             max_width: 10,
             column_max_width: std::iter::once(("notes".to_string(), 60)).collect(),
             sort: String::new(),
+            list_layout: Layout::Table,
+            show_layout: Layout::List,
         };
         let out = render(
             &[&t],

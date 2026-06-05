@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DynError;
@@ -98,6 +99,10 @@ max_width = {max_width}
 # Default column to sort list/ready by (ascending; --sort overrides,
 # --reverse flips). Any field, "id", or "deps"; empty/unknown falls back to id.
 sort = "{sort}"
+# Default human layout per command: "table" (aligned columns, one task per row)
+# or "list" (a vertical `field: value` record per task). `--layout` overrides.
+list_layout = "{list_layout}"
+show_layout = "{show_layout}"
 
 # Per-column truncation overrides. A column listed here is truncated to its own
 # width instead of max_width (0 = no limit). `--full` ignores these entirely.
@@ -134,6 +139,8 @@ close_time = "{close_time}"
         columns = columns,
         max_width = display.max_width,
         sort = display.sort,
+        list_layout = display.list_layout.as_str(),
+        show_layout = display.show_layout.as_str(),
         column_max_width = column_max_width,
         create_time = timestamps.create_time,
         update_time = timestamps.update_time,
@@ -272,6 +279,28 @@ impl OnConflict {
     }
 }
 
+/// Presentation for human `list`/`show` output: a columns table or a vertical
+/// per-task record.
+///
+/// SERIALIZATION CONTRACT: the lowercase names are config values users write.
+#[derive(Serialize, Deserialize, ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Layout {
+    /// Aligned columns, one task per row (the classic `list` view).
+    Table,
+    /// A vertical `field: value` record per task (the classic `show` view).
+    List,
+}
+
+impl Layout {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Table => "table",
+            Self::List => "list",
+        }
+    }
+}
+
 /// How `list` (including `--ready`) presents tasks.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default)]
@@ -282,6 +311,10 @@ pub struct DisplayConfig {
     /// Truncate human cell values to this many characters (0 = no limit). The
     /// global fallback for any column not listed in `column_max_width`.
     pub max_width: usize,
+    /// Default layout for `ta list` (`table` or `list`); `--layout` overrides.
+    pub list_layout: Layout,
+    /// Default layout for `ta show` (`table` or `list`); `--layout` overrides.
+    pub show_layout: Layout,
     /// Per-column truncation overrides: a column named here truncates to its own
     /// width instead of `max_width` (0 = no limit). `--full` ignores these. A
     /// `BTreeMap` so the rendered config is deterministically ordered.
@@ -300,6 +333,10 @@ impl Default for DisplayConfig {
                 .map(|s| (*s).to_string())
                 .collect(),
             max_width: 40,
+            // A table scans best for many tasks; a single `show` reads best as a
+            // vertical record.
+            list_layout: Layout::Table,
+            show_layout: Layout::List,
             // Titles are usually the longest field, so give them more room than
             // the global default out of the box.
             column_max_width: std::iter::once(("title".to_string(), 80)).collect(),

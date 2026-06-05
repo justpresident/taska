@@ -5,13 +5,14 @@ use serde_json::Value;
 use crate::cli::{relationship_edges, state_of};
 use crate::config::DisplayConfig;
 use crate::error::DynError;
-use crate::format::{full_columns, render_record, render_rows, DisplayArgs, OutputFormat};
+use crate::format::{full_columns, render_rows, DisplayArgs};
 use crate::storage::EventStore;
 
 /// Show a single task by id, defaulting to ALL of its fields (unlike `list`,
 /// which uses the configured columns). An explicit `--columns` still restricts.
-/// Human output is a readable vertical record (one `field: value` line each,
-/// untruncated); `--format json`/`jsonl` go through the same path as `list`.
+/// Human output defaults to a readable vertical record (`[display].show_layout`,
+/// overridable with `--layout`); `--format json`/`jsonl` go through the same path
+/// as `list`.
 pub fn cmd_show(
     store: &impl EventStore,
     id: &str,
@@ -41,12 +42,11 @@ pub fn cmd_show(
         .columns
         .clone()
         .unwrap_or_else(|| full_columns(&tasks, cfg));
-    let out = if display.format == OutputFormat::Human {
-        render_record(&task, &columns, crate::format::want_color(display.no_color))
-    } else {
-        render_rows(&tasks, &columns, display, cfg)
-    };
-    println!("{out}");
+    // Resolve the effective layout (flag, else `[display].show_layout`); json/jsonl
+    // ignore it. The same `render_rows` path serves `list` and `show`.
+    let mut display = display.clone();
+    display.layout = Some(display.layout.unwrap_or(cfg.show_layout));
+    println!("{}", render_rows(&tasks, &columns, &display, cfg));
     Ok(())
 }
 

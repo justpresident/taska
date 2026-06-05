@@ -60,7 +60,10 @@ pub fn cmd_list(
     } else {
         "(no matches)"
     };
-    print_tasks(tasks, display, cfg, empty);
+    // Resolve the effective layout (flag, else `[display].list_layout`).
+    let mut display = display.clone();
+    display.layout = Some(display.layout.unwrap_or(cfg.list_layout));
+    print_tasks(tasks, &display, cfg, empty);
     Ok(())
 }
 

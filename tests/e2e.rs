@@ -2813,6 +2813,64 @@ fn human_output_is_uncolored_when_not_a_tty() {
 }
 
 #[test]
+fn layout_flag_and_config_switch_table_and_record() {
+    let dir = fresh_dir("layout");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a", "title=Alpha", "status=open"]);
+    ta(&dir, &["create", "b", "title=Beta", "status=open"]);
+
+    // `list` defaults to the aligned table (uppercase headers, no record labels).
+    let table = ta(&dir, &["list"]);
+    assert!(
+        table.contains("ID") && table.contains("STATUS"),
+        "table header: {table}"
+    );
+    assert!(!table.contains("id:"), "not records: {table}");
+
+    // `--layout list` switches to vertical records (one per task).
+    let recs = ta(&dir, &["list", "--layout", "list"]);
+    assert!(
+        recs.lines().any(|l| l.starts_with("id:")),
+        "record labels: {recs}"
+    );
+    assert!(
+        !recs.contains("STATUS"),
+        "no table header in records: {recs}"
+    );
+
+    // `show` defaults to a record; `--layout table` switches to a table.
+    assert!(
+        ta(&dir, &["show", "a"])
+            .lines()
+            .any(|l| l.starts_with("id:")),
+        "show defaults to record"
+    );
+    assert!(
+        ta(&dir, &["show", "a", "--layout", "table"]).contains("ID"),
+        "show --layout table"
+    );
+
+    // The per-command default is configurable: flip list to records.
+    ta(&dir, &["config", "set", "display.list_layout", "list"]);
+    assert!(
+        ta(&dir, &["list"]).lines().any(|l| l.starts_with("id:")),
+        "config list_layout=list makes `list` render records"
+    );
+    // An invalid layout value is rejected.
+    assert!(
+        !run(
+            ta_bin(),
+            &dir,
+            &["config", "set", "display.show_layout", "bogus"]
+        )
+        .status
+        .success(),
+        "invalid layout rejected"
+    );
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);
