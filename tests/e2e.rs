@@ -2130,8 +2130,8 @@ fn dep_command_adds_and_removes_typed_edges() {
 }
 
 #[test]
-fn dep_list_shows_forward_and_inverse_edges() {
-    let dir = fresh_dir("dep-list");
+fn show_lists_forward_inverse_and_symmetric_relationships() {
+    let dir = fresh_dir("show-rels-mirror");
     init_repo(&dir);
     ta(&dir, &["init"]);
     ta(&dir, &["create", "a"]);
@@ -2141,18 +2141,23 @@ fn dep_list_shows_forward_and_inverse_edges() {
     // `a depends_on b` (inverse `blocks`) and `a relates_to c` (self-inverse).
     ta(&dir, &["dep", "add", "a", "depends_on=b", "relates_to=c"]);
 
-    // `a` lists its own forward edges.
-    let a = ta(&dir, &["dep", "list", "a"]);
-    assert!(a.contains("depends_on: b"), "a forward depends_on: {a}");
-    assert!(a.contains("relates_to: c"), "a forward relates_to: {a}");
+    // `a` shows its own forward `relates_to` (depends_on is the `deps` built-in).
+    assert!(
+        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""relates_to":["c"]"#),
+        "a forward relates_to"
+    );
 
     // `b` never named `a`, but the inverse of `depends_on` surfaces as `blocks`.
-    let b = ta(&dir, &["dep", "list", "b"]);
-    assert!(b.contains("blocks: a"), "b inverse blocks: {b}");
+    assert!(
+        ta(&dir, &["show", "b", "--format", "json"]).contains(r#""blocks":["a"]"#),
+        "b inverse blocks"
+    );
 
     // `relates_to` is self-inverse, so `c` shows the symmetric edge back to `a`.
-    let c = ta(&dir, &["dep", "list", "c"]);
-    assert!(c.contains("relates_to: a"), "c symmetric relates_to: {c}");
+    assert!(
+        ta(&dir, &["show", "c", "--format", "json"]).contains(r#""relates_to":["a"]"#),
+        "c symmetric relates_to"
+    );
 }
 
 #[test]
@@ -2164,7 +2169,7 @@ fn dep_remove_by_inverse_name_drops_the_forward_edge() {
     ta(&dir, &["create", "b"]);
 
     ta(&dir, &["dep", "add", "a", "depends_on=b"]);
-    assert!(ta(&dir, &["dep", "list", "b"]).contains("blocks: a"));
+    assert!(ta(&dir, &["show", "b", "--format", "json"]).contains(r#""blocks":["a"]"#));
 
     // Remove the relationship from b's side using the inverse name `blocks`.
     ta(&dir, &["dep", "remove", "b", "blocks=a"]);
@@ -2172,8 +2177,8 @@ fn dep_remove_by_inverse_name_drops_the_forward_edge() {
         ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":[]"#),
         "inverse removal dropped a's depends_on edge"
     );
-    let b = ta(&dir, &["dep", "list", "b"]);
-    assert!(!b.contains("blocks: a"), "inverse edge gone from b: {b}");
+    let b = ta(&dir, &["show", "b", "--format", "json"]);
+    assert!(!b.contains("blocks"), "inverse edge gone from b: {b}");
 }
 
 #[test]
@@ -2536,14 +2541,14 @@ fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
         "inverse add stored as has_subtask on epic: {log}"
     );
 
-    // dep list shows both directions: parent -> has_subtask, child -> subtask_of.
-    let e = ta(&dir, &["dep", "list", "epic"]);
+    // show surfaces both directions: parent -> has_subtask, child -> subtask_of.
+    let e = ta(&dir, &["show", "epic", "--format", "json"]);
     assert!(
-        e.contains("has_subtask:") && e.contains("build-form") && e.contains("wire-auth"),
-        "epic lists its subtasks: {e}"
+        e.contains(r#""has_subtask":["build-form","wire-auth"]"#),
+        "epic shows its subtasks: {e}"
     );
     assert!(
-        ta(&dir, &["dep", "list", "build-form"]).contains("subtask_of: epic"),
+        ta(&dir, &["show", "build-form", "--format", "json"]).contains(r#""subtask_of":["epic"]"#),
         "child mirrors the parent"
     );
 

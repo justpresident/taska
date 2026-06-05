@@ -379,8 +379,8 @@ pub(crate) fn inject_computed_columns(
 /// A task's relationship edges for display: its forward edges (the `depends_on`
 /// field + the typed map) plus inverse edges — for every OTHER task with an edge
 /// pointing here, that edge's configured `inverse` name (an empty inverse is
-/// one-way and not surfaced). Keyed by display name → sorted target ids. Shared by
-/// `dep list` and `show`.
+/// one-way and not surfaced). Keyed by display name → sorted target ids. Used by
+/// `show` to surface a task's relationships.
 pub(crate) fn relationship_edges(
     state: &HashMap<String, TaskState>,
     id: &str,

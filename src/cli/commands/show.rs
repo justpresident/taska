@@ -24,8 +24,8 @@ pub fn cmd_show(
         .get(id)
         .cloned()
         .ok_or_else(|| format!("no task `{id}`"))?;
-    // Surface the task's typed relationships (forward + inverse-mirrored, like
-    // `dep list`) as ordinary array fields, so the record and json both show them.
+    // Surface the task's typed relationships (forward + inverse-mirrored) as
+    // ordinary array fields, so the record and json both show them.
     // Skip `depends_on` — the `deps` built-in already shows it.
     let types = store.config().relationships.types.clone();
     for (name, targets) in relationship_edges(&state, id, &types) {

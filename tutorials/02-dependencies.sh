@@ -20,8 +20,8 @@ run ta list
 run ta dep tree
 pause
 
-say "'ta dep list' shows both directions: deploy-api depends_on migrate-db, and (inverse) blocks smoke-test."
-run ta dep list deploy-api
+say "'ta show' surfaces a task's relationships both ways: deploy-api depends on migrate-db, and (inverse) blocks smoke-test."
+run ta show deploy-api
 pause
 
 say "'ta list --ready' shows only NOT-done tasks whose dependencies are all done."

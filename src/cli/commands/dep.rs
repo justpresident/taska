@@ -31,11 +31,6 @@ pub enum DepAction {
         #[arg(required = true)]
         edges: Vec<String>,
     },
-    /// List a task's edges, forward and inverse: `ta dep list [<task> …]`
-    List {
-        /// Tasks to list (default: every task)
-        tasks: Vec<String>,
-    },
     /// ASCII dependency tree: `ta dep tree [<task> …]` (roots default to tasks
     /// nothing depends on)
     Tree {
@@ -84,7 +79,6 @@ pub fn cmd_dep_group(
         DepAction::Remove { task, edges } => {
             dep_write(store, &task, &edges, &OpType::RemoveDep, "Removed", types)
         }
-        DepAction::List { tasks } => dep_list(store, &tasks, types),
         DepAction::Tree {
             tasks,
             open,
@@ -254,40 +248,6 @@ fn resolve_edge(
         .into());
     }
     Ok(edges)
-}
-
-/// `ta dep list` — each task's edges, forward (its own) and inverse (other tasks'
-/// edges pointing here, shown under the configured `inverse` name).
-fn dep_list(
-    store: &impl EventStore,
-    tasks: &[String],
-    types: &BTreeMap<String, RelationshipDef>,
-) -> Result<(), DynError> {
-    let state = state_of(store)?;
-    let mut ids: Vec<&String> = if tasks.is_empty() {
-        state.keys().collect()
-    } else {
-        for t in tasks {
-            if !state.contains_key(t) {
-                return Err(format!("no task `{t}`").into());
-            }
-        }
-        tasks.iter().collect()
-    };
-    ids.sort();
-    for id in ids {
-        let edges = crate::cli::relationship_edges(&state, id, types);
-        if edges.is_empty() {
-            println!("{id}: (no relationships)");
-        } else {
-            println!("{id}:");
-            for (rel, targets) in &edges {
-                let joined: Vec<&str> = targets.iter().map(String::as_str).collect();
-                println!("  {rel}: {}", joined.join(", "));
-            }
-        }
-    }
-    Ok(())
 }
 
 /// A shortened title is truncated to this many characters in the tree.
