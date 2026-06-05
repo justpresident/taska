@@ -8,12 +8,43 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
+use std::io::IsTerminal;
 
 use clap::{Args, ValueEnum};
 use serde_json::Value;
 
 use crate::config::DisplayConfig;
 use crate::model::TaskState;
+
+/// Wrap `text` in an ANSI SGR sequence when `on`, else return it unchanged. Uses
+/// the terminal's NAMED 16-color palette (which the user's theme remaps for
+/// light/dark), never hardcoded 24-bit RGB.
+fn sgr(text: &str, code: &str, on: bool) -> String {
+    if on {
+        format!("\x1b[{code}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
+}
+
+/// The SGR code a value column is painted with in human output: the built-ins
+/// `id` (cyan) and `deps` (bold), plus a `status` field (green). Everything else
+/// is left plain (headers/labels are bolded separately).
+fn column_sgr(column: &str) -> Option<&'static str> {
+    match column {
+        "id" => Some("36"),     // cyan
+        "status" => Some("32"), // green
+        "deps" => Some("1"),    // bold
+        _ => None,
+    }
+}
+
+/// Whether human output should be colored: not `--no-color`, `NO_COLOR` unset,
+/// and stdout is a TTY (so pipes, redirects, and `--format json`/`jsonl` stay
+/// clean). The json/jsonl renderers never color regardless.
+pub(crate) fn resolve_color(display: &DisplayArgs) -> bool {
+    !display.no_color && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+}
 
 /// Output format for the listing commands. `--format` changes only *how* tasks
 /// are rendered, never *which* fields show — that is `--columns`/`--full`/config.
@@ -45,6 +76,9 @@ pub(crate) struct DisplayArgs {
     /// Reverse the sort order (descending)
     #[arg(long)]
     pub(crate) reverse: bool,
+    /// Disable ANSI color (also auto-disabled when stdout is not a TTY)
+    #[arg(long)]
+    pub(crate) no_color: bool,
 }
 
 /// Sort a collected task set by the display args and print it, with `empty` as
@@ -85,9 +119,12 @@ pub(crate) fn render_rows(
     match display.format {
         OutputFormat::Json => render_json(tasks, columns),
         OutputFormat::Jsonl => render_jsonl(tasks, columns),
-        OutputFormat::Human => {
-            render_human(tasks, columns, &truncation_caps(columns, display, cfg))
-        }
+        OutputFormat::Human => render_human(
+            tasks,
+            columns,
+            &truncation_caps(columns, display, cfg),
+            resolve_color(display),
+        ),
     }
 }
 
@@ -243,7 +280,9 @@ pub(crate) fn full_columns(tasks: &[&TaskState], cfg: &DisplayConfig) -> Vec<Str
 
 /// Render the aligned human table. `caps[i]` is the truncation width for column
 /// `i` (0 = no limit); the caller derives it from config/`--full` per column.
-fn render_human(tasks: &[&TaskState], columns: &[String], caps: &[usize]) -> String {
+/// When `color`, headers are bolded and id/status/deps cells get their palette
+/// colors (widths are computed on plain text first, so alignment is exact).
+fn render_human(tasks: &[&TaskState], columns: &[String], caps: &[usize], color: bool) -> String {
     let headers: Vec<String> = columns.iter().map(|c| c.to_uppercase()).collect();
     let rows: Vec<Vec<String>> = tasks
         .iter()
@@ -262,8 +301,11 @@ fn render_human(tasks: &[&TaskState], columns: &[String], caps: &[usize]) -> Str
             header.max(body)
         })
         .collect();
-    let mut lines = vec![format_row(&headers, &widths)];
-    lines.extend(rows.iter().map(|r| format_row(r, &widths)));
+    let mut lines = vec![emit_row(&headers, &widths, color, |_| Some("1"))];
+    lines.extend(
+        rows.iter()
+            .map(|r| emit_row(r, &widths, color, |i| column_sgr(columns[i].as_str()))),
+    );
     lines.join("\n")
 }
 
@@ -272,16 +314,20 @@ fn render_human(tasks: &[&TaskState], columns: &[String], caps: &[usize]) -> Str
 /// This is `show`'s human view: a single task across the aligned table
 /// degenerates into one unreadable row, especially for long fields like `notes`;
 /// the record reads like `git show`. JSON/JSONL output is unaffected.
-pub(crate) fn render_record(task: &TaskState, columns: &[String]) -> String {
+pub(crate) fn render_record(task: &TaskState, columns: &[String], color: bool) -> String {
     let label_w = columns.iter().map(String::len).max().unwrap_or(0) + 1; // +1 for ':'
     let indent = " ".repeat(label_w + 1);
     let mut lines = Vec::new();
     for col in columns {
         let value = human_cell(task, col);
-        let label = format!("{col}:");
+        let label = sgr(&format!("{:<label_w$}", format!("{col}:")), "1", color);
         let mut parts = value.split('\n');
         let first = parts.next().unwrap_or("");
-        lines.push(format!("{label:<label_w$} {first}").trim_end().to_string());
+        let first = match column_sgr(col) {
+            Some(code) if color && !first.is_empty() => sgr(first, code, true),
+            _ => first.to_string(),
+        };
+        lines.push(format!("{label} {first}").trim_end().to_string());
         for cont in parts {
             lines.push(format!("{indent}{cont}").trim_end().to_string());
         }
@@ -289,11 +335,26 @@ pub(crate) fn render_record(task: &TaskState, columns: &[String]) -> String {
     lines.join("\n")
 }
 
-fn format_row(cells: &[String], widths: &[usize]) -> String {
+/// Pad each cell to its column width (on plain text, so alignment is exact) and,
+/// when `color`, wrap it in the SGR code `code_for(i)` returns. Cells are joined
+/// with two spaces and the trailing padding is trimmed.
+fn emit_row(
+    cells: &[String],
+    widths: &[usize],
+    color: bool,
+    code_for: impl Fn(usize) -> Option<&'static str>,
+) -> String {
     cells
         .iter()
         .zip(widths)
-        .map(|(c, w)| format!("{c:<w$}"))
+        .enumerate()
+        .map(|(i, (c, w))| {
+            let padded = format!("{c:<w$}");
+            match code_for(i) {
+                Some(code) if color => sgr(&padded, code, true),
+                _ => padded,
+            }
+        })
         .collect::<Vec<_>>()
         .join("  ")
         .trim_end()
@@ -430,7 +491,7 @@ mod tests {
 
         // The human header tokens are exactly the columns, in order.
         let full = display(OutputFormat::Human, true, None);
-        let human = render_human(&[&t], &cols, &truncation_caps(&cols, &full, &cfg));
+        let human = render_human(&[&t], &cols, &truncation_caps(&cols, &full, &cfg), false);
         let header: Vec<String> = human
             .lines()
             .next()
@@ -464,6 +525,7 @@ mod tests {
             columns: None,
             sort: Some(sort.to_string()),
             reverse,
+            no_color: false,
         };
         let ids =
             |tasks: &[&TaskState]| -> Vec<String> { tasks.iter().map(|t| t.id.clone()).collect() };
@@ -547,6 +609,42 @@ mod tests {
             "unquoted: {out}"
         );
         assert!(out.contains("db"), "deps: {out}");
+    }
+
+    #[test]
+    fn color_wraps_human_output_only_when_enabled() {
+        let t = task("api", &["db"], &[("status", serde_json::json!("open"))]);
+        let cols = vec!["id".to_string(), "status".to_string(), "deps".to_string()];
+        let caps = [0, 0, 0];
+
+        // color=true: id cyan (36), status green (32), headers/deps bold (1), reset.
+        let colored = render_human(&[&t], &cols, &caps, true);
+        assert!(colored.contains("\x1b[36m"), "id cyan: {colored:?}");
+        assert!(colored.contains("\x1b[32m"), "status green: {colored:?}");
+        assert!(
+            colored.contains("\x1b[1m"),
+            "bold headers/deps: {colored:?}"
+        );
+        assert!(colored.contains("\x1b[0m"), "reset: {colored:?}");
+        // The values themselves survive (color only wraps, never replaces).
+        assert!(colored.contains("api") && colored.contains("open"));
+
+        // color=false: not a single escape byte.
+        let plain = render_human(&[&t], &cols, &caps, false);
+        assert!(!plain.contains('\x1b'), "no escapes when off: {plain:?}");
+
+        // The record view colors too, and stays clean when off.
+        assert!(render_record(&t, &cols, true).contains('\x1b'));
+        assert!(!render_record(&t, &cols, false).contains('\x1b'));
+
+        // JSON is never colored, even via the shared render path.
+        let json = render(
+            &[&t],
+            &display(OutputFormat::Json, false, Some(&["id", "status"])),
+            &DisplayConfig::default(),
+            "(none)",
+        );
+        assert!(!json.contains('\x1b'), "json never colored: {json:?}");
     }
 
     #[test]
@@ -732,7 +830,7 @@ mod tests {
             ],
         );
         let cols = full_columns(&[&t], &DisplayConfig::default());
-        let out = render_record(&t, &cols);
+        let out = render_record(&t, &cols, false);
 
         // One field per line: `id` value is `api`, status its own line.
         assert!(

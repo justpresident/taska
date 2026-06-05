@@ -2720,6 +2720,32 @@ fn dep_add_enforces_single_blocker_and_single_parent() {
 }
 
 #[test]
+fn human_output_is_uncolored_when_not_a_tty() {
+    let dir = fresh_dir("no-color-pipe");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a", "status=open"]);
+
+    // The test harness captures stdout (a pipe, not a TTY), so color auto-disables
+    // — no ANSI escape bytes leak into output that might be piped or grepped.
+    for args in [
+        vec!["list"],
+        vec!["list", "--format", "json"],
+        vec!["show", "a"],
+        vec!["show", "a", "--format", "jsonl"],
+    ] {
+        let out = ta(&dir, &args);
+        assert!(
+            !out.contains('\x1b'),
+            "`ta {}` must not emit ANSI escapes off-TTY: {out:?}",
+            args.join(" ")
+        );
+    }
+    // `--no-color` is accepted (and a no-op here since already uncolored).
+    assert!(!ta(&dir, &["list", "--no-color"]).contains('\x1b'));
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);
