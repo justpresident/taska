@@ -177,7 +177,7 @@ fn dep_list(
     };
     ids.sort();
     for id in ids {
-        let edges = relationship_edges(&state, id, types);
+        let edges = crate::cli::relationship_edges(&state, id, types);
         if edges.is_empty() {
             println!("{id}: (no relationships)");
         } else {
@@ -189,57 +189,6 @@ fn dep_list(
         }
     }
     Ok(())
-}
-
-/// A task's relationship edges for display: its forward edges (the `depends_on`
-/// field + the typed map) plus inverse edges — for every OTHER task with an edge
-/// pointing here, that edge's configured `inverse` name (an empty inverse is
-/// one-way and not surfaced). Keyed by display name → sorted target ids.
-fn relationship_edges(
-    state: &HashMap<String, TaskState>,
-    id: &str,
-    types: &BTreeMap<String, RelationshipDef>,
-) -> BTreeMap<String, BTreeSet<String>> {
-    let mut display: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    if let Some(task) = state.get(id) {
-        if !task.depends_on.is_empty() {
-            display
-                .entry("depends_on".to_string())
-                .or_default()
-                .extend(task.depends_on.iter().cloned());
-        }
-        for (rel, targets) in &task.relationships {
-            display
-                .entry(rel.clone())
-                .or_default()
-                .extend(targets.iter().cloned());
-        }
-    }
-    for (other_id, other) in state {
-        if other_id == id {
-            continue;
-        }
-        let mut hit_types: Vec<&str> = Vec::new();
-        if other.depends_on.iter().any(|t| t == id) {
-            hit_types.push("depends_on");
-        }
-        for (rel_type, targets) in &other.relationships {
-            if targets.iter().any(|t| t == id) {
-                hit_types.push(rel_type);
-            }
-        }
-        for rel_type in hit_types {
-            if let Some(def) = types.get(rel_type) {
-                if !def.inverse.is_empty() {
-                    display
-                        .entry(def.inverse.clone())
-                        .or_default()
-                        .insert(other_id.clone());
-                }
-            }
-        }
-    }
-    display
 }
 
 /// Shared, read-only context for rendering a `dep tree`.

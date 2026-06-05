@@ -2634,6 +2634,48 @@ fn list_subtasks_column_shows_parent_progress() {
 }
 
 #[test]
+fn show_surfaces_typed_relationships_forward_and_inverse() {
+    let dir = fresh_dir("show-rels");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    for id in ["epic", "child", "other", "a", "b"] {
+        ta(&dir, &["create", id, "status=open"]);
+    }
+    ta(&dir, &["dep", "add", "epic", "has_subtask=child"]);
+    ta(&dir, &["dep", "add", "epic", "relates_to=other"]);
+    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
+
+    // The parent's record shows its typed relationships, grouped by type.
+    let epic = ta(&dir, &["show", "epic"]);
+    assert!(
+        epic.contains("has_subtask:") && epic.contains("child"),
+        "{epic}"
+    );
+    assert!(
+        epic.contains("relates_to:") && epic.contains("other"),
+        "{epic}"
+    );
+
+    // The child shows the inverse-mirrored edge (subtask_of), in json too.
+    assert!(
+        ta(&dir, &["show", "child", "--format", "json"]).contains(r#""subtask_of":["epic"]"#),
+        "child mirrors subtask_of"
+    );
+
+    // depends_on stays the `deps` built-in — never duplicated as a field; its
+    // inverse `blocks` surfaces on the depended-upon task.
+    let aj = ta(&dir, &["show", "a", "--format", "json"]);
+    assert!(
+        aj.contains(r#""deps":["b"]"#) && !aj.contains("depends_on"),
+        "depends_on not duplicated: {aj}"
+    );
+    assert!(
+        ta(&dir, &["show", "b", "--format", "json"]).contains(r#""blocks":["a"]"#),
+        "inverse blocks surfaced on b"
+    );
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);

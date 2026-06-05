@@ -1,6 +1,8 @@
 //! `ta show <id>` — a single task in full (every field it has, by default).
 
-use crate::cli::state_of;
+use serde_json::Value;
+
+use crate::cli::{relationship_edges, state_of};
 use crate::config::DisplayConfig;
 use crate::error::DynError;
 use crate::format::{full_columns, render_record, render_rows, DisplayArgs, OutputFormat};
@@ -17,8 +19,22 @@ pub fn cmd_show(
     cfg: &DisplayConfig,
 ) -> Result<(), DynError> {
     let state = state_of(store)?;
-    let task = state.get(id).ok_or_else(|| format!("no task `{id}`"))?;
-    let tasks = [task];
+    let mut task = state
+        .get(id)
+        .cloned()
+        .ok_or_else(|| format!("no task `{id}`"))?;
+    // Surface the task's typed relationships (forward + inverse-mirrored, like
+    // `dep list`) as ordinary array fields, so the record and json both show them.
+    // Skip `depends_on` — the `deps` built-in already shows it.
+    let types = store.config().relationships.types.clone();
+    for (name, targets) in relationship_edges(&state, id, &types) {
+        if name == "depends_on" {
+            continue;
+        }
+        let arr = targets.into_iter().map(Value::String).collect();
+        task.custom_fields.insert(name, Value::Array(arr));
+    }
+    let tasks = [&task];
     // Default to the full task: every field of this one task. An explicit
     // `--columns` overrides.
     let columns = display
@@ -26,7 +42,7 @@ pub fn cmd_show(
         .clone()
         .unwrap_or_else(|| full_columns(&tasks, cfg));
     let out = if display.format == OutputFormat::Human {
-        render_record(task, &columns)
+        render_record(&task, &columns)
     } else {
         render_rows(&tasks, &columns, display, cfg)
     };
