@@ -71,6 +71,19 @@ Merging two diverged logs is a **rebase**, not a CRDT union: keep our events, re
 
 `ta init` never overwrites an existing `config.toml`, so a new option is invisible in the dogfood store unless you **also add it (with its default + comment) to the repo's `.taska/config.toml`**, not just `default_toml()`. (TOML ordering bites too: scalar keys must precede any sub-table within a section.) Everything else is automatic — `Config` is `#[serde(default)]`, so partial/old files load and `ta config get/set/list` reflects the struct.
 
+### Before adding a CLI command: prefer a flag, reuse what exists
+
+A new subcommand is the last resort, not the first. Before adding one, work through this in order and record the reasoning (in the task notes / PR):
+
+1. **Find the neighbours.** List the existing commands that do something similar (`ta list`, `ta show`, `ta ready`, the `dep` group, …). `search` folded into `list --open`; `block`/`unblock` folded into `dep`. A new capability usually belongs *next to* one of these.
+2. **Default to a flag on an existing command.** If the new behavior is "the same view/data, filtered or ordered differently," it's a flag, not a verb — e.g. `list --ready` over a separate `ready`, `tree --plan`/`--all` over a new command. Only add a verb when the *output shape* or *primary noun* genuinely differs (e.g. `dep plan`'s flat dedup'd order vs `dep tree`'s nested structure — a confirmed split, see git log).
+3. **If a flag, name it from the existing vocabulary** and make it compose with the flags already there (`--open`, `--full`, `--columns`, `--sort`, `--reverse`, `--format`). Don't invent a second way to express something a flag already covers.
+4. **Generalize, don't fork.** Reuse the shared implementations rather than copy-pasting: `format::cell_value` for any column's value, `parse_field_ops` for `key=value`/`key+=value`, `graph::blocker_edges`/`validate_and_sort_dependencies` for traversal, `state_of` for the materialized map, `confirm` for prompts. If two surfaces need the same logic, lift it into the shared helper (`format`/`graph`/`cli`) and call it from both — extend the primitive, don't grow a parallel one.
+
+**Report before you build — mandatory.** Do not start implementing a command or a command-flag until the approach is confirmed. Surface the analysis first — the similar commands you found, whether it should be a flag or a verb, which flags make sense, and which shared primitives you'll reuse/generalize — propose the option(s), and get explicit confirmation. Implementation comes only after the user signs off.
+
+The bar for a brand-new verb is: it can't be expressed as a flag, it doesn't duplicate an existing surface, and its core logic is built from the shared primitives above.
+
 ## Testing approach
 
 `tests/e2e.rs` drives the real compiled `ta` binary (path from `CARGO_BIN_EXE_ta`) against throwaway git repos. Each test runs in its own dir under the **system** temp dir, *not* `CARGO_TARGET_TMPDIR` — that is deliberate, so `ta`'s walk-up store discovery can't climb into the repo's own `.taska` store. Merge-driver tests prepend the binary's directory to `PATH` so git's `ta git-merge ...` resolves to the binary under test. Compaction tests stay at or above the `keep_events` floor and simply generate more events than they retain. Prefer adding coverage here over ad-hoc manual scripts.
