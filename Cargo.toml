@@ -44,3 +44,8 @@ clap = { version = "4.4", features = ["derive"] }
 # Already in the dependency tree transitively; this only makes it direct.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Bench-only: the perf harness compares Vec vs SmallVec for the per-task
+# blocker-edge lists. Not used by the library/binary, so it never ships.
+[dev-dependencies]
+smallvec = "1"

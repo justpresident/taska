@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{Duration as ChronoDuration, TimeZone, Utc};
 use serde_json::{json, Map};
+use smallvec::SmallVec;
 
 use taska::config::OnConflict;
 use taska::engine::Engine;
@@ -373,6 +374,34 @@ fn time_op<R>(iters: usize, mut f: impl FnMut() -> R) -> Duration {
     median(times)
 }
 
+/// `graph::blocker_edges` as a lazy iterator — produces the edges with no
+/// intermediate collection, so a consumer that only iterates allocates nothing.
+fn edge_iter<'a>(
+    task: &'a TaskState,
+    blockers: &'a BTreeSet<String>,
+) -> impl Iterator<Item = (&'a str, &'a str)> + 'a {
+    let deps = blockers
+        .contains("depends_on")
+        .then(|| task.depends_on.iter().map(|t| (t.as_str(), "depends_on")))
+        .into_iter()
+        .flatten();
+    let rels = task
+        .relationships
+        .iter()
+        .filter(move |(rel, _)| blockers.contains(rel.as_str()))
+        .flat_map(|(rel, targets)| targets.iter().map(move |t| (t.as_str(), rel.as_str())));
+    deps.chain(rels)
+}
+
+/// The same edges materialized into an inline-buffer SmallVec (≤4 edges stay on
+/// the stack), so a consumer can sort/index in place without a heap allocation.
+fn edge_smallvec<'a>(
+    task: &'a TaskState,
+    blockers: &'a BTreeSet<String>,
+) -> SmallVec<[(&'a str, &'a str); 4]> {
+    edge_iter(task, blockers).collect()
+}
+
 fn bench_relationships() {
     let blockers: BTreeSet<String> = ["depends_on", "blocks", "duplicates"]
         .into_iter()
@@ -426,6 +455,35 @@ fn bench_relationships() {
         pct(typename_bytes, content),
     );
 
+    // Per-task blocker-edge access in a materialize-and-sort workload (what
+    // `dep tree` does), to settle Vec vs SmallVec where the edges are actually
+    // collected — not just iterated. The iterate-only floor shows the work that
+    // remains once the allocation is removed entirely.
+    let floor = time_op(20, || {
+        state
+            .values()
+            .map(|t| edge_iter(t, &blockers).count())
+            .sum::<usize>()
+    });
+    let vec_sort = time_op(20, || {
+        let mut total = 0usize;
+        for t in state.values() {
+            let mut v: Vec<(&str, &str)> = edge_iter(t, &blockers).collect();
+            v.sort_unstable();
+            total += v.len();
+        }
+        total
+    });
+    let sv_sort = time_op(20, || {
+        let mut total = 0usize;
+        for t in state.values() {
+            let mut v = edge_smallvec(t, &blockers);
+            v.sort_unstable();
+            total += v.len();
+        }
+        total
+    });
+
     // Graph traversal. toposort/ready are O(V+E) — cheap even at 25k tasks;
     // reachability is O(V·(V+E)), so it runs over a smaller store.
     let order = time_op(ITERS, || {
@@ -443,6 +501,21 @@ fn bench_relationships() {
     println!("\nGraph traversal (blocker edges = depends_on + 2 typed kinds):\n");
     println!("| operation | tasks | median |");
     println!("|---|---|---|");
+    println!(
+        "| edges: iterate only (floor) | {} | {} |",
+        commas(state.len()),
+        fmt_dur(floor),
+    );
+    println!(
+        "| edges: collect Vec + sort | {} | {} |",
+        commas(state.len()),
+        fmt_dur(vec_sort),
+    );
+    println!(
+        "| edges: collect SmallVec + sort | {} | {} |",
+        commas(state.len()),
+        fmt_dur(sv_sort),
+    );
     println!(
         "| validate + toposort | {} | {} |",
         commas(state.len()),
