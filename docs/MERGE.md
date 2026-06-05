@@ -121,34 +121,45 @@ load-then-resolve step, and friendlier to cache than a two-pass walk over a
 materialized graph. Compaction bounds on-disk growth as history accumulates.
 
 The numbers below come from `cargo bench --bench perf` (a dependency-free
-`std::time` harness; release build, single core) over synthetic logs — ~¼
-`Create`s, the rest `Update`s and random `AddDep`s at the stated density, ~4
-events per task. Treat them as orders of magnitude, not guarantees.
+`std::time` harness; release build, single core) over synthetic logs. Each log
+is ~¼ `Create`s; the rest are `Update`s and random `AddDep`s, with the dep share
+varied to probe how a denser graph behaves (the `create / update / dep` column
+gives the actual mix). Treat them as orders of magnitude, not guarantees.
 
 **Replay / materialize** scales linearly with log length, and a denser
-dependency graph costs a little more (the per-task dedup on `AddDep` grows with
-edges/task):
+dependency graph costs a little more — the per-task dedup on `AddDep` grows with
+edges/task. The log is ~97 bytes/event on disk.
 
-| events | log size | replay @5% deps | @20% | @50% |
-|--------|----------|-----------------|------|------|
-| 1,000   | 94 KB  | 0.5 ms   | 0.6 ms   | 0.7 ms   |
-| 10,000  | 958 KB | 6.2 ms   | 6.3 ms   | 7.1 ms   |
-| 100,000 | 9.6 MB | 116.9 ms | 126.0 ms | 138.3 ms |
+| events  | create / update / dep | log size | replay   |
+|---------|-----------------------|----------|----------|
+| 1,000   | 25% / 72% / 3%        | 94 KB    | 0.6 ms   |
+| 1,000   | 25% / 34% / 41%       | 93 KB    | 0.7 ms   |
+| 100,000 | 25% / 71% / 4%        | 9.6 MB   | 108.1 ms |
+| 100,000 | 25% / 37% / 38%       | 9.6 MB   | 126.0 ms |
+| 200,000 | 25% / 60% / 15%       | 19.3 MB  | 291.8 ms |
+| 500,000 | 25% / 71% / 4%        | 48.6 MB  | 719.0 ms |
+| 500,000 | 25% / 37% / 38%       | 49.0 MB  | 828.2 ms |
 
 So even a 100k-event history — far past any hand-managed backlog — replays in
-well under a fifth of a second. The log is ~96 bytes/event on disk.
+about a tenth of a second, and half a million events in under a second.
 
-**Compaction** is about *size*, not speed: its CPU cost is just a replay of the
-prefix it folds, but folding old events into a baseline bounds the footprint. A
-100k-event log (9.6 MB) compacts to a 25,000-task baseline plus the retained
-5,000-event tail — 4.7 MB, a 2.0× shrink, in ~167 ms. The win scales with how
-many events accumulate per task: write-once tasks barely compress, while tasks
-that churn through many updates over their lifetime fold away most of their
-history.
+**Compaction** keeps that hot path cheap as history grows. Every command
+re-materializes the current state from the baseline plus only the retained tail
+(`keep_events`), never the whole log. Same logical state, two storage shapes:
+
+| store                                  | on disk | replay   |
+|----------------------------------------|---------|----------|
+| 500,000-event log, uncompacted         | 48.7 MB | 787.8 ms |
+| 125,000-task baseline + 5,000-event tail | 21.8 MB | 226.5 ms |
+
+— a ~3.5× faster replay and ~2.2× smaller footprint. The win grows with how many
+events accumulate per task: this synthetic log only averages ~4 events/task, so
+the baseline still holds 125k task records; a real backlog of hundreds of tasks,
+each churning through many updates, folds away far more of its history.
 
 **Merge** of two branches diverged from a shared ancestor — 1,000 ancestor
 events plus 100 concurrent, conflicting `owner` edits per branch (100 genuine
-per-field conflicts to resolve) — completes in ~14.8 ms end to end, including
+per-field conflicts to resolve) — completes in ~15 ms end to end, including
 reading the three logs and writing the result.
 
 ## Known limitation: reverting very old changes
