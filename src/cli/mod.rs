@@ -320,14 +320,16 @@ fn inject_time(fields: &mut Map<String, Value>, name: &str, value: Option<DateTi
     }
 }
 
-/// Inject the computed `unblocks`/`blocked_by` columns onto `state`, but only when
-/// the display references them (as a shown column or the sort key) — so default,
-/// `--full`, and json output stay unchanged unless asked. They are graph-derived
-/// (counts of transitive not-done dependents / prerequisites over the blocker
-/// edges) and surfaced as ordinary numeric fields, so `cell_value`/`--sort`/
-/// `--columns` handle them with no special-casing. Used by `list` (including
-/// `--ready`).
-pub(crate) fn inject_reachability_columns(
+/// Inject the computed columns onto `state`, but only when the display references
+/// them (as a shown column or the sort key) — so default, `--full`, and json
+/// output stay unchanged unless asked. They are graph-derived and surfaced as
+/// ordinary fields, so `cell_value`/`--sort`/`--columns` handle them with no
+/// special-casing. Used by `list` (including `--ready`):
+///
+/// - `unblocks`/`blocked_by` — transitive not-done dependents / prerequisites
+///   over the blocker edges (numbers).
+/// - `subtasks` — a parent's `done/total` direct-child completion (string).
+pub(crate) fn inject_computed_columns(
     store: &impl EventStore,
     state: &mut HashMap<String, TaskState>,
     workflow: &crate::config::WorkflowConfig,
@@ -335,22 +337,41 @@ pub(crate) fn inject_reachability_columns(
     cfg: &crate::config::DisplayConfig,
 ) {
     let refs = crate::format::referenced_columns(display, cfg);
-    if !refs.iter().any(|c| c == "unblocks" || c == "blocked_by") {
-        return;
+    let wants = |name: &str| refs.iter().any(|c| c == name);
+
+    if wants("unblocks") || wants("blocked_by") {
+        let blockers = store.config().relationships.blocker_types();
+        let counts = crate::graph::reachability_counts(
+            state,
+            &blockers,
+            &workflow.status_field,
+            &workflow.done_status,
+        );
+        for (id, task) in state.iter_mut() {
+            if let Some(&(unblocks, blocked_by)) = counts.get(id) {
+                task.custom_fields
+                    .insert("unblocks".to_string(), serde_json::json!(unblocks));
+                task.custom_fields
+                    .insert("blocked_by".to_string(), serde_json::json!(blocked_by));
+            }
+        }
     }
-    let blockers = store.config().relationships.blocker_types();
-    let counts = crate::graph::reachability_counts(
-        state,
-        &blockers,
-        &workflow.status_field,
-        &workflow.done_status,
-    );
-    for (id, task) in state.iter_mut() {
-        if let Some(&(unblocks, blocked_by)) = counts.get(id) {
-            task.custom_fields
-                .insert("unblocks".to_string(), serde_json::json!(unblocks));
-            task.custom_fields
-                .insert("blocked_by".to_string(), serde_json::json!(blocked_by));
+
+    if wants("subtasks") {
+        let hierarchy = store.config().relationships.hierarchy_types();
+        let progress = crate::graph::subtask_progress(
+            state,
+            &hierarchy,
+            &workflow.status_field,
+            &workflow.done_status,
+        );
+        for (id, task) in state.iter_mut() {
+            if let Some(&(done, total)) = progress.get(id) {
+                task.custom_fields.insert(
+                    "subtasks".to_string(),
+                    serde_json::json!(format!("{done}/{total}")),
+                );
+            }
         }
     }
 }

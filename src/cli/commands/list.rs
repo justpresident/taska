@@ -30,7 +30,7 @@ pub fn cmd_list(
     // we touch the store.
     let criteria = compile_criteria(criteria)?;
     let mut state = state_of(store)?;
-    crate::cli::inject_reachability_columns(store, &mut state, workflow, display, cfg);
+    crate::cli::inject_computed_columns(store, &mut state, workflow, display, cfg);
     // `--ready` restricts to the ready set (not done, deps satisfied); it already
     // implies not-done, so it subsumes `--open`. Computed once over the full map.
     let ready_set: Option<HashSet<String>> = if ready {

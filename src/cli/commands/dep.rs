@@ -321,19 +321,13 @@ fn rollup_suffix(ctx: &TreeCtx, id: &str) -> String {
     let Some(task) = ctx.state.get(id) else {
         return String::new();
     };
-    let (mut done, mut total) = (0usize, 0usize);
-    for htype in ctx.hierarchy {
-        for child in task.relationships.get(htype).into_iter().flatten() {
-            total += 1;
-            if ctx
-                .state
-                .get(child)
-                .is_some_and(|t| is_done(t, ctx.status_field, ctx.done_status))
-            {
-                done += 1;
-            }
-        }
-    }
+    let (done, total) = crate::graph::subtask_counts(
+        task,
+        ctx.state,
+        ctx.hierarchy,
+        ctx.status_field,
+        ctx.done_status,
+    );
     if total == 0 {
         String::new()
     } else {

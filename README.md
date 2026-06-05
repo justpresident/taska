@@ -211,7 +211,7 @@ Field values are parsed as JSON when possible (`priority=3` is a number, `status
 
 `list` and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON — one object per line — for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, `--columns id,status,…` to pick the columns for one run, and `--sort <column>` / `--reverse` to order the rows (`list`; default column from `[display].sort`). The defaults and `max_width` live in `[display]`.
 
-`list` also offers two **computed** columns for triage — `unblocks` (how many still-open tasks this one transitively unblocks — "finish it to free up N") and `blocked_by` (how many still-open prerequisites it's waiting on). They behave like numeric fields, so `--sort unblocks --reverse` surfaces the highest-leverage work and `--sort blocked_by` the most-stuck. They're opt-in: computed only when named in `--columns`/`--sort` or the configured columns, so default and `--full`/json output are untouched.
+`list` also offers a few **computed** columns for triage — `unblocks` (how many still-open tasks this one transitively unblocks — "finish it to free up N"), `blocked_by` (how many still-open prerequisites it's waiting on), and `subtasks` (a parent's `done/total` child completion). The first two behave like numeric fields, so `--sort unblocks --reverse` surfaces the highest-leverage work and `--sort blocked_by` the most-stuck. They're opt-in: computed only when named in `--columns`/`--sort` or the configured columns, so default and `--full`/json output are untouched.
 
 ## Storage layout
 

@@ -28,6 +28,45 @@ pub fn blocker_edges<'a>(
     edges
 }
 
+/// A task's `(done, total)` direct hierarchy children — its subtask completion.
+pub fn subtask_counts<S: BuildHasher>(
+    task: &TaskState,
+    state: &HashMap<String, TaskState, S>,
+    hierarchy: &BTreeSet<String>,
+    status_field: &str,
+    done_status: &str,
+) -> (usize, usize) {
+    let (mut done, mut total) = (0usize, 0usize);
+    for htype in hierarchy {
+        for child in task.relationships.get(htype).into_iter().flatten() {
+            total += 1;
+            if state
+                .get(child)
+                .is_some_and(|t| is_done(t, status_field, done_status))
+            {
+                done += 1;
+            }
+        }
+    }
+    (done, total)
+}
+
+/// `(done, total)` subtask completion per task that has hierarchy children.
+pub fn subtask_progress<S: BuildHasher>(
+    state: &HashMap<String, TaskState, S>,
+    hierarchy: &BTreeSet<String>,
+    status_field: &str,
+    done_status: &str,
+) -> HashMap<String, (usize, usize)> {
+    state
+        .iter()
+        .filter_map(|(id, task)| {
+            let (done, total) = subtask_counts(task, state, hierarchy, status_field, done_status);
+            (total > 0).then(|| (id.clone(), (done, total)))
+        })
+        .collect()
+}
+
 /// Per-task `(unblocks, blocked_by)` over the blocker graph.
 ///
 /// `unblocks` is how many still-not-done tasks transitively depend on this one

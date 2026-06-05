@@ -2595,6 +2595,45 @@ fn dep_tree_marks_subtasks_and_rolls_up_progress() {
 }
 
 #[test]
+fn list_subtasks_column_shows_parent_progress() {
+    let dir = fresh_dir("subtask-col");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    for id in ["epic", "a", "b", "solo"] {
+        ta(&dir, &["create", id, "status=open"]);
+    }
+    ta(&dir, &["dep", "add", "epic", "has_subtask=a"]);
+    ta(&dir, &["dep", "add", "epic", "has_subtask=b"]);
+    ta(&dir, &["update", "a", "status=closed"]); // 1 of 2
+
+    let json = ta(
+        &dir,
+        &["list", "--columns", "id,subtasks", "--format", "jsonl"],
+    );
+    let line_for = |id: &str| -> String {
+        json.lines()
+            .find(|l| l.contains(&format!("\"id\":\"{id}\"")))
+            .unwrap_or_else(|| panic!("no line for {id}"))
+            .to_string()
+    };
+    assert!(
+        line_for("epic").contains(r#""subtasks":"1/2""#),
+        "parent progress: {json}"
+    );
+    // A task with no subtasks omits the column (absent, not "0/0").
+    assert!(
+        !line_for("solo").contains("subtasks"),
+        "no subtasks omitted: {json}"
+    );
+
+    // Opt-in: a plain list never carries the computed column.
+    assert!(
+        !ta(&dir, &["list", "--format", "jsonl"]).contains("subtasks"),
+        "default omits computed column"
+    );
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);
