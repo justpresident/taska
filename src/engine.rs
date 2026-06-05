@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value};
 
-use crate::model::{is_done, MutationEvent, OpType, TaskState};
+use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON};
 
 pub struct Engine;
 
@@ -46,9 +46,9 @@ fn apply_dep(task: &mut TaskState, payload: &Map<String, Value>, add: bool) {
     let rel_type = payload
         .get("type")
         .and_then(Value::as_str)
-        .unwrap_or("depends_on");
+        .unwrap_or(DEPENDS_ON);
 
-    if rel_type == "depends_on" {
+    if rel_type == DEPENDS_ON {
         if add {
             if !task.depends_on.iter().any(|d| d == dep_id) {
                 task.depends_on.push(dep_id.to_string());

@@ -11,7 +11,7 @@ use crate::cli::state_of;
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::OutputArgs;
-use crate::model::{is_done, MutationEvent, OpType, TaskState};
+use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON};
 use crate::storage::EventStore;
 
 /// `ta dep` subcommands. Edges are `type=target` tokens; `type` must be declared
@@ -129,7 +129,7 @@ fn dep_write(
         let mut payload = Map::new();
         payload.insert("dep".to_string(), Value::String(dep));
         // `depends_on` omits the type to stay legacy-shaped.
-        if rel_type != "depends_on" {
+        if rel_type != DEPENDS_ON {
             payload.insert("type".to_string(), Value::String(rel_type));
         }
         events.push(MutationEvent::new(op.clone(), owner, payload));
@@ -400,7 +400,7 @@ fn build(
 ) -> Node {
     let edge = match kind {
         Some(k) if ctx.hierarchy.contains(k) => Some("subtask".to_string()),
-        Some(k) if k != "depends_on" => Some(k.to_string()),
+        Some(k) if k != DEPENDS_ON => Some(k.to_string()),
         _ => None,
     };
     let Some(task) = ctx.state.get(id) else {

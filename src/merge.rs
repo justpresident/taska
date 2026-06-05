@@ -27,7 +27,7 @@ use serde_json::{Map, Value};
 
 use crate::config::OnConflict;
 use crate::error::DynError;
-use crate::model::{MutationEvent, OpType, TaskState};
+use crate::model::{MutationEvent, OpType, TaskState, DEPENDS_ON};
 
 /// `ta git-merge %O %A %B` — reconcile diverged mutation logs into `current`.
 ///
@@ -301,7 +301,7 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
                         .payload
                         .get("type")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("depends_on");
+                        .unwrap_or(DEPENDS_ON);
                     delta.deps.insert(
                         (dep_type.to_string(), dep.to_string()),
                         DepWrite {
@@ -652,11 +652,11 @@ fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &m
         payload.insert("dep".to_string(), Value::String(target.clone()));
         // Carry the type so the resolution reconstructs the right edge; omit it
         // for `depends_on` to keep legacy-shaped events.
-        if rel_type != "depends_on" {
+        if rel_type != DEPENDS_ON {
             payload.insert("type".to_string(), Value::String(rel_type.clone()));
         }
         // Label the edge by type unless it's the default `depends_on`.
-        let label = if rel_type == "depends_on" {
+        let label = if rel_type == DEPENDS_ON {
             target.clone()
         } else {
             format!("{rel_type}:{target}")

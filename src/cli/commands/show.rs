@@ -6,6 +6,7 @@ use crate::cli::{relationship_edges, state_of};
 use crate::config::DisplayConfig;
 use crate::error::DynError;
 use crate::format::{full_columns, render_rows, DisplayArgs};
+use crate::model::DEPENDS_ON;
 use crate::storage::EventStore;
 
 /// Show a single task by id, defaulting to ALL of its fields (unlike `list`,
@@ -29,7 +30,7 @@ pub fn cmd_show(
     // Skip `depends_on` — the `deps` built-in already shows it.
     let types = store.config().relationships.types.clone();
     for (name, targets) in relationship_edges(&state, id, &types) {
-        if name == "depends_on" {
+        if name == DEPENDS_ON {
             continue;
         }
         let arr = targets.into_iter().map(Value::String).collect();

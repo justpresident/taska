@@ -13,7 +13,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DynError;
-use crate::model::TaskState;
+use crate::model::{TaskState, DEPENDS_ON};
 
 /// Smallest `keep_events` we accept in production.
 ///
@@ -446,8 +446,8 @@ impl RelationshipConfig {
             .filter(|(_, def)| matches!(def.kind, RelType::Blocker | RelType::Hierarchy))
             .map(|(name, _)| name.clone())
             .collect();
-        if !self.types.contains_key("depends_on") {
-            set.insert("depends_on".to_string());
+        if !self.types.contains_key(DEPENDS_ON) {
+            set.insert(DEPENDS_ON.to_string());
         }
         set
     }
@@ -475,7 +475,7 @@ impl Default for RelationshipConfig {
             // (reverse `subtask_of`); `relates_to` is symmetric (self-inverse);
             // `duplicates` is one-way (no inverse surfaced).
             types: [
-                ("depends_on".to_string(), def(RelType::Blocker, "blocks")),
+                (DEPENDS_ON.to_string(), def(RelType::Blocker, "blocks")),
                 (
                     "has_subtask".to_string(),
                     def(RelType::Hierarchy, "subtask_of"),

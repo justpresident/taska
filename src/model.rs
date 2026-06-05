@@ -8,6 +8,16 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+/// The canonical name of the default blocker relationship.
+///
+/// It is at once a declared relationship type and the dedicated [`TaskState`]
+/// field that holds its edges (kept separate from `relationships` so the common
+/// dependency stays legacy-shaped on disk and feeds the `deps` column). Defined
+/// once here so the string lives in a single place: internal logic compares
+/// against this constant, and the literal text surfaces only at parse / serialize
+/// / print boundaries.
+pub const DEPENDS_ON: &str = "depends_on";
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum OpType {
     Create,

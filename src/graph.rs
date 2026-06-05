@@ -5,7 +5,7 @@ use std::hash::BuildHasher;
 
 use petgraph::graphmap::DiGraphMap;
 
-use crate::model::{is_done, TaskState};
+use crate::model::{is_done, TaskState, DEPENDS_ON};
 
 /// A run-local, integer handle for a task *inside the graph*. The persistent id
 /// is the `String` key in the state map; [`IdIndex`] interns those to a dense
@@ -46,8 +46,8 @@ pub fn blocker_edges<'a>(
     blockers: &BTreeSet<String>,
 ) -> Vec<(&'a str, &'a str)> {
     let mut edges = Vec::new();
-    if blockers.contains("depends_on") {
-        edges.extend(task.depends_on.iter().map(|t| (t.as_str(), "depends_on")));
+    if blockers.contains(DEPENDS_ON) {
+        edges.extend(task.depends_on.iter().map(|t| (t.as_str(), DEPENDS_ON)));
     }
     for (rel, targets) in &task.relationships {
         if blockers.contains(rel.as_str()) {

@@ -19,7 +19,7 @@ use crate::engine::Engine;
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs};
 use crate::merge;
-use crate::model::{MutationEvent, TaskState};
+use crate::model::{MutationEvent, TaskState, DEPENDS_ON};
 use crate::storage::{EventStore, FileStore};
 
 mod commands;
@@ -389,7 +389,7 @@ pub(crate) fn relationship_edges(
     if let Some(task) = state.get(id) {
         if !task.depends_on.is_empty() {
             display
-                .entry("depends_on".to_string())
+                .entry(DEPENDS_ON.to_string())
                 .or_default()
                 .extend(task.depends_on.iter().cloned());
         }
@@ -406,7 +406,7 @@ pub(crate) fn relationship_edges(
         }
         let mut hit_types: Vec<&str> = Vec::new();
         if other.depends_on.iter().any(|t| t == id) {
-            hit_types.push("depends_on");
+            hit_types.push(DEPENDS_ON);
         }
         for (rel_type, targets) in &other.relationships {
             if targets.iter().any(|t| t == id) {
