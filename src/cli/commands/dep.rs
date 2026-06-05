@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 use crate::cli::state_of;
 use crate::config::RelationshipDef;
 use crate::error::DynError;
+use crate::format::OutputArgs;
 use crate::model::{is_done, MutationEvent, OpType, TaskState};
 use crate::storage::EventStore;
 
@@ -51,7 +52,10 @@ pub enum DepAction {
         no_color: bool,
     },
     /// Report dependency cycles in the blocker graph: `ta dep cycles`
-    Cycles,
+    Cycles {
+        #[command(flatten)]
+        output: OutputArgs,
+    },
     /// Ordered remaining prerequisites of a goal: `ta dep plan <goal> …`
     Plan {
         /// Goal task(s) to plan toward
@@ -60,6 +64,8 @@ pub enum DepAction {
         /// Show only the critical path: the longest chain of incomplete prerequisites
         #[arg(long)]
         critical: bool,
+        #[command(flatten)]
+        output: OutputArgs,
     },
 }
 
@@ -86,8 +92,12 @@ pub fn cmd_dep_group(
             reverse,
             no_color,
         } => dep_tree(store, &tasks, open, sort, reverse, no_color),
-        DepAction::Cycles => dep_cycles(store),
-        DepAction::Plan { goals, critical } => dep_plan(store, &goals, critical),
+        DepAction::Cycles { output } => dep_cycles(store, &output),
+        DepAction::Plan {
+            goals,
+            critical,
+            output,
+        } => dep_plan(store, &goals, critical, &output),
     }
 }
 
@@ -565,23 +575,38 @@ fn subtree_open(
     open
 }
 
-/// `ta dep cycles` — report any cycles in the blocker graph.
-fn dep_cycles(store: &impl EventStore) -> Result<(), DynError> {
+/// `ta dep cycles` — report any cycles in the blocker graph. JSON is an array of
+/// cycles (each an array of member ids); human is one cycle per line.
+fn dep_cycles(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynError> {
     let state = state_of(store)?;
     let blockers = store.config().relationships.blocker_types();
     let cycles = crate::graph::dependency_cycles(&state, &blockers);
-    if cycles.is_empty() {
-        println!("No dependency cycles.");
-        return Ok(());
-    }
-    println!("{} dependency cycle(s):", cycles.len());
-    for cycle in &cycles {
-        if cycle.len() == 1 {
-            println!("  {} (depends on itself)", cycle[0]);
-        } else {
-            println!("  {}", cycle.join(" ↔ "));
+    let color = crate::format::want_color(output.no_color);
+
+    let value = Value::Array(
+        cycles
+            .iter()
+            .map(|c| Value::Array(c.iter().cloned().map(Value::String).collect()))
+            .collect(),
+    );
+    let human = if cycles.is_empty() {
+        "No dependency cycles.".to_string()
+    } else {
+        let mut lines = vec![crate::format::sgr(
+            &format!("{} dependency cycle(s):", cycles.len()),
+            "1",
+            color,
+        )];
+        for cycle in &cycles {
+            if cycle.len() == 1 {
+                lines.push(format!("  {} (depends on itself)", cycle[0]));
+            } else {
+                lines.push(format!("  {}", cycle.join(" ↔ ")));
+            }
         }
-    }
+        lines.join("\n")
+    };
+    crate::format::emit(output, &human, &value);
     Ok(())
 }
 
@@ -591,7 +616,12 @@ fn dep_cycles(store: &impl EventStore) -> Result<(), DynError> {
 /// `blocker`-typed relationship); already-done ones are dropped as satisfied.
 /// `--critical` narrows the list to the longest single chain of incomplete
 /// prerequisites — the sequence that sets the minimum remaining duration.
-fn dep_plan(store: &impl EventStore, goals: &[String], critical: bool) -> Result<(), DynError> {
+fn dep_plan(
+    store: &impl EventStore,
+    goals: &[String],
+    critical: bool,
+    output: &OutputArgs,
+) -> Result<(), DynError> {
     let state = state_of(store)?;
     for g in goals {
         if !state.contains_key(g) {
@@ -632,38 +662,55 @@ fn dep_plan(store: &impl EventStore, goals: &[String], critical: bool) -> Result
                 .is_some_and(|t| !is_done(t, &wf.status_field, &wf.done_status))
         })
         .collect();
-    if remaining.is_empty() {
-        println!("Nothing to do — every prerequisite is already done.");
-        return Ok(());
-    }
-
     let total = remaining.len();
-    let to_print: Vec<String> = if critical {
+    let to_print: Vec<String> = if remaining.is_empty() {
+        Vec::new()
+    } else if critical {
         critical_path(&remaining, &sub, &blockers)
     } else {
         remaining.iter().map(|id| (*id).clone()).collect()
     };
+    let color = crate::format::want_color(output.no_color);
 
-    let width = to_print.iter().map(String::len).max().unwrap_or(0);
-    for (i, id) in to_print.iter().enumerate() {
-        let status = sub
-            .get(id.as_str())
+    let status_of = |id: &str| -> String {
+        sub.get(id)
             .and_then(|t| t.custom_fields.get(&wf.status_field))
             .map(|v| match v {
                 Value::String(s) => s.clone(),
                 other => other.to_string(),
             })
-            .unwrap_or_default();
-        println!("{:>2}. {id:<width$}  {status}", i + 1);
-    }
-    if critical {
-        println!(
-            "(critical path: {} of {total} remaining task(s))",
-            to_print.len()
-        );
+            .unwrap_or_default()
+    };
+
+    let value = Value::Array(
+        to_print
+            .iter()
+            .map(|id| serde_json::json!({ "id": id, "status": status_of(id) }))
+            .collect(),
+    );
+    let human = if to_print.is_empty() {
+        "Nothing to do — every prerequisite is already done.".to_string()
     } else {
-        println!("({total} task(s) remaining, in order)");
-    }
+        let width = to_print.iter().map(String::len).max().unwrap_or(0);
+        let mut lines: Vec<String> = to_print
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let id_c = crate::format::sgr(&format!("{id:<width$}"), "36", color);
+                format!("{:>2}. {id_c}  {}", i + 1, status_of(id))
+            })
+            .collect();
+        lines.push(if critical {
+            format!(
+                "(critical path: {} of {total} remaining task(s))",
+                to_print.len()
+            )
+        } else {
+            format!("({total} task(s) remaining, in order)")
+        });
+        lines.join("\n")
+    };
+    crate::format::emit(output, &human, &value);
     Ok(())
 }
 

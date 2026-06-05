@@ -2803,7 +2803,13 @@ fn output_commands_are_format_and_color_consistent() {
     // Every command on the shared output pipeline must honor `--format` and color
     // identically: human is escape-free off-TTY, json/jsonl parse and never color.
     // (dep tree/plan/cycles join this list as they're migrated.)
-    let commands: Vec<Vec<&str>> = vec![vec!["list"], vec!["show", "a"], vec!["status"]];
+    let commands: Vec<Vec<&str>> = vec![
+        vec!["list"],
+        vec!["show", "a"],
+        vec!["status"],
+        vec!["dep", "cycles"],
+        vec!["dep", "plan", "a"],
+    ];
     for base in &commands {
         let label = base.join(" ");
         let no_esc = |out: &str, what: &str| {
