@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value};
 
-use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON};
+use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, DEP_KEY, DEP_TYPE_KEY};
 
 pub struct Engine;
 
@@ -40,11 +40,11 @@ fn apply_set(fields: &mut Map<String, Value>, payload: Map<String, Value>) {
 /// `depends_on` field, every other type lives in the `relationships` map. An
 /// emptied non-`depends_on` entry is dropped so the map stays clean.
 fn apply_dep(task: &mut TaskState, payload: &Map<String, Value>, add: bool) {
-    let Some(dep_id) = payload.get("dep").and_then(Value::as_str) else {
+    let Some(dep_id) = payload.get(DEP_KEY).and_then(Value::as_str) else {
         return;
     };
     let rel_type = payload
-        .get("type")
+        .get(DEP_TYPE_KEY)
         .and_then(Value::as_str)
         .unwrap_or(DEPENDS_ON);
 

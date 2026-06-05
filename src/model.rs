@@ -18,6 +18,17 @@ use serde_json::{Map, Value};
 /// / print boundaries.
 pub const DEPENDS_ON: &str = "depends_on";
 
+/// Payload key for the dependency target id in `AddDep`/`RemoveDep` events.
+///
+/// Together with [`DEP_TYPE_KEY`] this is an on-disk event-schema contract: every
+/// reader (engine, merge) and writer (the `dep`/`undo` commands, merge
+/// resolutions) must agree, so the strings are named once here.
+pub const DEP_KEY: &str = "dep";
+
+/// Payload key for a dependency edge's relationship type (absent = the default
+/// [`DEPENDS_ON`]). See [`DEP_KEY`].
+pub const DEP_TYPE_KEY: &str = "type";
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum OpType {
     Create,

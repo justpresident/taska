@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::cli::{confirm, replay};
 use crate::error::DynError;
-use crate::model::{MutationEvent, OpType, TaskState};
+use crate::model::{MutationEvent, OpType, TaskState, DEP_KEY};
 use crate::storage::{EventStore, FileStore};
 
 /// Undo the last `count` event(s) in the log.
@@ -217,7 +217,7 @@ fn compensate(
 /// `cmd_dep` and the engine's `AddDep`/`RemoveDep` replay expect.
 fn dep_event(op: OpType, task_id: &str, dep: &str) -> MutationEvent {
     let mut payload = Map::new();
-    payload.insert("dep".to_string(), Value::String(dep.to_string()));
+    payload.insert(DEP_KEY.to_string(), Value::String(dep.to_string()));
     MutationEvent::new(op, task_id, payload)
 }
 

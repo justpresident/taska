@@ -11,7 +11,7 @@ use crate::cli::state_of;
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::OutputArgs;
-use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON};
+use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, DEP_KEY, DEP_TYPE_KEY};
 use crate::storage::EventStore;
 
 /// `ta dep` subcommands. Edges are `type=target` tokens; `type` must be declared
@@ -127,10 +127,10 @@ fn dep_write(
     let mut events = Vec::with_capacity(resolved.len());
     for (owner, rel_type, dep) in resolved {
         let mut payload = Map::new();
-        payload.insert("dep".to_string(), Value::String(dep));
+        payload.insert(DEP_KEY.to_string(), Value::String(dep));
         // `depends_on` omits the type to stay legacy-shaped.
         if rel_type != DEPENDS_ON {
-            payload.insert("type".to_string(), Value::String(rel_type));
+            payload.insert(DEP_TYPE_KEY.to_string(), Value::String(rel_type));
         }
         events.push(MutationEvent::new(op.clone(), owner, payload));
     }
