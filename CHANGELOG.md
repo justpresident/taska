@@ -5,6 +5,59 @@ All notable changes to `taska` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes bump the
 minor). History before 0.3.0 lives in the git log.
 
+## [0.4.0] - 2026-06-05
+
+This release adds a parent/child **subtask** hierarchy, makes every mutation
+**verified before it is logged**, reworks the dependency views with color and
+consistent machine output, and speeds up graph traversal.
+
+### Added
+- **Subtask hierarchy.** A relationship `type = "hierarchy"` (e.g. `has_subtask`
+  with inverse `subtask_of`) is a parent/child edge that gates readiness like a
+  blocker but renders distinctly: `ta dep tree` tags subtasks and rolls up a
+  parent's `[subtasks done/total]`, and `ta list` gains a `subtasks` completion
+  column. A task may have at most one parent.
+- **`ta show` surfaces a task's typed relationships** (forward and
+  inverse-mirrored) as fields — the way to inspect edges now that `dep list` is
+  gone.
+- **Write-time validation.** Mutations are verified before they're logged,
+  atomically under the store lock: creating a task that already exists,
+  mutating/deleting a missing one, a dependency on itself or on a missing task,
+  `+=` on the single-valued status field, and setting a reserved/computed field
+  name are all rejected; setting a field to its current value — or re-adding an
+  edge that exists — writes nothing instead of bloating the log.
+- **`ta dep tree` rework:** a shortened title per node, color on a TTY (done
+  tasks dimmed + ✓), the exact graph by default with `--open` to prune resolved
+  branches, and `--sort`/`--reverse` for sibling order.
+- **Theme-safe color** for human output (`id` cyan, `status` green, headers and
+  `deps` bold) via the terminal's 16-color palette; auto-disabled off a TTY and
+  for `--format json`/`jsonl`; `--no-color` / `NO_COLOR` force it off.
+- **Consistent machine output everywhere:** `list`, `show`, `status`, and
+  `dep tree`/`plan`/`cycles` all accept the same `--format human|json|jsonl` and
+  `--no-color`.
+- **`--layout table|list`** on `list`/`show`, with per-command defaults in
+  `[display]` (`list_layout`, `show_layout`).
+- A no-dependency **performance benchmark suite** (`cargo bench --bench perf`)
+  and an empirical Performance section in `docs/MERGE.md`.
+- The bundled **tutorials run end-to-end** as a `cargo test`.
+
+### Changed
+- At most one blocking relationship between a pair of tasks, and at most one
+  parent per task — enforced on `ta dep add` and by `ta config validate`.
+- Graph traversal interns task ids to integers for the run, making readiness,
+  topological sort, and reachability markedly faster on large stores.
+- `ta dep cycles` reports cycles over the whole blocker graph (`depends_on` plus
+  any `blocker`/`hierarchy` edges), not just `depends_on`.
+- `seq` minting now refuses to write over an unparseable log line instead of
+  silently skipping it (which could mint a duplicate `seq` and corrupt the log) —
+  typically a stale `ta` binary predating a newer event type.
+
+### Removed
+- **`ta dep list`** — a task's relationships are shown by `ta show`.
+
+### Fixed
+- Format/render tests no longer depend on whether stdout is a TTY.
+
 ## [0.3.0] - 2026-06-05
 
 This release replaces the single untyped dependency edge with a full typed
