@@ -14,7 +14,8 @@ pub fn cmd_ready(
     display: &DisplayArgs,
     cfg: &DisplayConfig,
 ) -> Result<(), DynError> {
-    let state = state_of(store)?;
+    let mut state = state_of(store)?;
+    crate::cli::inject_reachability_columns(store, &mut state, workflow, display, cfg);
     let blockers = store.config().relationships.blocker_types();
     let ready = graph::ready_tasks(
         &state,

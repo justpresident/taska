@@ -324,6 +324,40 @@ fn inject_time(fields: &mut Map<String, Value>, name: &str, value: Option<DateTi
     }
 }
 
+/// Inject the computed `unblocks`/`blocked_by` columns onto `state`, but only when
+/// the display references them (as a shown column or the sort key) — so default,
+/// `--full`, and json output stay unchanged unless asked. They are graph-derived
+/// (counts of transitive not-done dependents / prerequisites over the blocker
+/// edges) and surfaced as ordinary numeric fields, so `cell_value`/`--sort`/
+/// `--columns` handle them with no special-casing. Shared by `list` and `ready`.
+pub(crate) fn inject_reachability_columns(
+    store: &impl EventStore,
+    state: &mut HashMap<String, TaskState>,
+    workflow: &crate::config::WorkflowConfig,
+    display: &DisplayArgs,
+    cfg: &crate::config::DisplayConfig,
+) {
+    let refs = crate::format::referenced_columns(display, cfg);
+    if !refs.iter().any(|c| c == "unblocks" || c == "blocked_by") {
+        return;
+    }
+    let blockers = store.config().relationships.blocker_types();
+    let counts = crate::graph::reachability_counts(
+        state,
+        &blockers,
+        &workflow.status_field,
+        &workflow.done_status,
+    );
+    for (id, task) in state.iter_mut() {
+        if let Some(&(unblocks, blocked_by)) = counts.get(id) {
+            task.custom_fields
+                .insert("unblocks".to_string(), serde_json::json!(unblocks));
+            task.custom_fields
+                .insert("blocked_by".to_string(), serde_json::json!(blocked_by));
+        }
+    }
+}
+
 /// Event keys that are struct fields, not schema-agnostic task fields. Letting a
 /// user field shadow one of these would either collide with the event envelope
 /// or be silently swallowed by `_meta`, so we reject them up front.

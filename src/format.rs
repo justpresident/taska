@@ -177,6 +177,21 @@ fn truncation_caps(columns: &[String], display: &DisplayArgs, cfg: &DisplayConfi
         .collect()
 }
 
+/// The column names this display will *reference* — the sort key plus the
+/// columns it will show (explicit `--columns`, else the configured default).
+/// `--full` is excluded because it shows only fields already on the task; a
+/// caller uses this to inject a computed column (e.g. `impact`/`blocked_by`) only
+/// when it's actually needed, leaving default/`--full`/json output untouched.
+pub(crate) fn referenced_columns(display: &DisplayArgs, cfg: &DisplayConfig) -> Vec<String> {
+    let mut refs = vec![display.sort.clone().unwrap_or_else(|| cfg.sort.clone())];
+    if let Some(cols) = &display.columns {
+        refs.extend(cols.iter().cloned());
+    } else if !display.full {
+        refs.extend(cfg.columns.iter().cloned());
+    }
+    refs
+}
+
 /// Decide the columns: `--full` (the canonical full order), else an explicit
 /// `--columns`, else the configured default.
 fn resolve_columns(

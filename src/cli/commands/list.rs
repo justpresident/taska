@@ -24,7 +24,8 @@ pub fn cmd_list(
     // Compile (and validate regexes) up front so a bad criterion errors before
     // we touch the store.
     let criteria = compile_criteria(criteria)?;
-    let state = state_of(store)?;
+    let mut state = state_of(store)?;
+    crate::cli::inject_reachability_columns(store, &mut state, workflow, display, cfg);
     let tasks: Vec<&TaskState> = state
         .values()
         .filter(|t| !open || !is_done(t, &workflow.status_field, &workflow.done_status))

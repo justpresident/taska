@@ -1,6 +1,6 @@
 //! Dependency graph: cycle detection, topological ordering, and readiness.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::BuildHasher;
 
 use petgraph::graphmap::DiGraphMap;
@@ -26,6 +26,72 @@ pub fn blocker_edges<'a>(
         }
     }
     edges
+}
+
+/// Per-task `(unblocks, blocked_by)` over the blocker graph.
+///
+/// `unblocks` is how many still-not-done tasks transitively depend on this one
+/// ("finish it to unblock N"); `blocked_by` is how many still-not-done tasks it
+/// transitively depends on. Both walk the blocker edges and count distinct
+/// reachable not-done tasks (the task itself excluded); cycles are tolerated.
+pub fn reachability_counts<S: BuildHasher>(
+    state: &HashMap<String, TaskState, S>,
+    blockers: &BTreeSet<String>,
+    status_field: &str,
+    done_status: &str,
+) -> HashMap<String, (usize, usize)> {
+    // Blocker adjacency to existing tasks: prerequisites (forward) and dependents
+    // (reverse).
+    let mut prereqs: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (id, task) in state {
+        for (dep, _) in blocker_edges(task, blockers) {
+            if state.contains_key(dep) {
+                prereqs.entry(id.as_str()).or_default().push(dep);
+                dependents.entry(dep).or_default().push(id.as_str());
+            }
+        }
+    }
+    state
+        .keys()
+        .map(|id| {
+            let blocked_by =
+                reach_not_done(id.as_str(), &prereqs, state, status_field, done_status);
+            let unblocks =
+                reach_not_done(id.as_str(), &dependents, state, status_field, done_status);
+            (id.clone(), (unblocks, blocked_by))
+        })
+        .collect()
+}
+
+/// Count the distinct not-done tasks reachable from `start` over `adj` (the start
+/// itself excluded). Traversal passes through done tasks but only not-done ones
+/// are counted.
+fn reach_not_done<'a, S: BuildHasher>(
+    start: &'a str,
+    adj: &HashMap<&'a str, Vec<&'a str>>,
+    state: &HashMap<String, TaskState, S>,
+    status_field: &str,
+    done_status: &str,
+) -> usize {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut stack = vec![start];
+    let mut count = 0;
+    while let Some(node) = stack.pop() {
+        let Some(next) = adj.get(node) else { continue };
+        for &m in next {
+            if seen.insert(m) {
+                if state
+                    .get(m)
+                    .is_some_and(|t| !is_done(t, status_field, done_status))
+                {
+                    count += 1;
+                }
+                stack.push(m);
+            }
+        }
+    }
+    count
 }
 
 /// Validate the dependency DAG and return a topological ordering

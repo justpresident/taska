@@ -67,6 +67,8 @@ Merging two diverged logs is a **rebase**, not a CRDT union: keep our events, re
 - `close_time` is the *most recent* close and is **cleared on reopen** (a deliberate product choice, not a bug).
 - A test asserting an **exact** column/field set must disable timestamps for that store (`test_support::store_without_timestamps()`, or `[timestamps]` names set to `""`), or the injected times leak in.
 
+The same injection pattern powers the computed graph columns `unblocks`/`blocked_by` (transitive not-done dependents / prerequisites over the blocker edges, from `graph::reachability_counts`), but **conditionally**: `cli::inject_reachability_columns` runs only in `list`/`ready` and only when `format::referenced_columns` shows the display actually names one of them (a column or the `--sort` key). That keeps default/`--full`/json output unchanged, so — unlike timestamps — they don't leak into exact-field-set tests.
+
 ### Adding a config option: backfill the local config
 
 `ta init` never overwrites an existing `config.toml`, so a new option is invisible in the dogfood store unless you **also add it (with its default + comment) to the repo's `.taska/config.toml`**, not just `default_toml()`. (TOML ordering bites too: scalar keys must precede any sub-table within a section.) Everything else is automatic — `Config` is `#[serde(default)]`, so partial/old files load and `ta config get/set/list` reflects the struct.

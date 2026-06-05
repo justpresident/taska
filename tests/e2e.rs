@@ -2388,6 +2388,91 @@ fn dep_plan_lists_remaining_prerequisites_in_order() {
 }
 
 #[test]
+fn list_unblocks_and_blocked_by_columns() {
+    let dir = fresh_dir("unblocks-cols");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    for id in ["a", "b", "c"] {
+        ta(&dir, &["create", id, "status=open"]);
+    }
+    // Chain c -> b -> a (c depends_on b depends_on a).
+    ta(&dir, &["dep", "add", "b", "depends_on=a"]);
+    ta(&dir, &["dep", "add", "c", "depends_on=b"]);
+
+    let line_for = |out: &str, id: &str| -> String {
+        out.lines()
+            .find(|l| l.contains(&format!("\"id\":\"{id}\"")))
+            .unwrap_or_else(|| panic!("no line for {id} in {out}"))
+            .to_string()
+    };
+
+    // Requested as columns, the transitive counts are exact.
+    let json = ta(
+        &dir,
+        &[
+            "list",
+            "--columns",
+            "id,unblocks,blocked_by",
+            "--format",
+            "jsonl",
+        ],
+    );
+    assert!(
+        line_for(&json, "a").contains(r#""unblocks":2"#),
+        "a unblocks b,c: {json}"
+    );
+    assert!(
+        line_for(&json, "a").contains(r#""blocked_by":0"#),
+        "a: {json}"
+    );
+    assert!(
+        line_for(&json, "c").contains(r#""blocked_by":2"#),
+        "c blocked by a,b: {json}"
+    );
+    assert!(
+        line_for(&json, "b").contains(r#""unblocks":1"#),
+        "b unblocks c: {json}"
+    );
+
+    // --sort unblocks --reverse surfaces the highest-leverage task first.
+    let human = ta(
+        &dir,
+        &[
+            "list",
+            "--columns",
+            "id,unblocks",
+            "--sort",
+            "unblocks",
+            "--reverse",
+        ],
+    );
+    let order: Vec<&str> = human
+        .lines()
+        .skip(1) // header
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
+    assert_eq!(order, ["a", "b", "c"], "ordered by leverage desc: {human}");
+
+    // Opt-in only: a plain list never carries the computed columns.
+    let default = ta(&dir, &["list", "--format", "jsonl"]);
+    assert!(
+        !default.contains("unblocks"),
+        "default omits computed columns: {default}"
+    );
+
+    // Done prerequisites stop counting: closing `a` drops c's blocked_by to 1.
+    ta(&dir, &["update", "a", "status=closed"]);
+    let json = ta(
+        &dir,
+        &["list", "--columns", "id,blocked_by", "--format", "jsonl"],
+    );
+    assert!(
+        line_for(&json, "c").contains(r#""blocked_by":1"#),
+        "done prereq excluded: {json}"
+    );
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);
