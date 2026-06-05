@@ -82,6 +82,9 @@ Two gotchas when writing tests:
 - **Default `--sort` is `create_time`** (oldest-first), not `id` — a test asserting row *order* must account for it or pass `--sort id`.
 - When a test result contradicts how something was described, **trust the test and investigate** — it's often surfacing a real decision (e.g. an unset field's *name* reappearing as `null` was a genuine product question, not a flaky test).
 
+## Release process / Publishing a new version of a crate
+Described in docs/crate_release_process.md - use it only when user asks to release a new version.
+
 ## This repo dogfoods taska
 
 The repo tracks its own work in `.taska/`, so:
