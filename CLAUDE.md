@@ -67,7 +67,7 @@ Merging two diverged logs is a **rebase**, not a CRDT union: keep our events, re
 - `close_time` is the *most recent* close and is **cleared on reopen** (a deliberate product choice, not a bug).
 - A test asserting an **exact** column/field set must disable timestamps for that store (`test_support::store_without_timestamps()`, or `[timestamps]` names set to `""`), or the injected times leak in.
 
-The same injection pattern powers the computed graph columns `unblocks`/`blocked_by` (transitive not-done dependents / prerequisites over the blocker edges, from `graph::reachability_counts`), but **conditionally**: `cli::inject_reachability_columns` runs only in `list`/`ready` and only when `format::referenced_columns` shows the display actually names one of them (a column or the `--sort` key). That keeps default/`--full`/json output unchanged, so — unlike timestamps — they don't leak into exact-field-set tests.
+The same injection pattern powers the computed graph columns `unblocks`/`blocked_by` (transitive not-done dependents / prerequisites over the blocker edges, from `graph::reachability_counts`), but **conditionally**: `cli::inject_reachability_columns` runs only in `list` and only when `format::referenced_columns` shows the display actually names one of them (a column or the `--sort` key). That keeps default/`--full`/json output unchanged, so — unlike timestamps — they don't leak into exact-field-set tests.
 
 ### Adding a config option: backfill the local config
 
@@ -77,7 +77,7 @@ The same injection pattern powers the computed graph columns `unblocks`/`blocked
 
 A new subcommand is the last resort, not the first. Before adding one, work through this in order and record the reasoning (in the task notes / PR):
 
-1. **Find the neighbours.** List the existing commands that do something similar (`ta list`, `ta show`, `ta ready`, the `dep` group, …). `search` folded into `list --open`; `block`/`unblock` folded into `dep`. A new capability usually belongs *next to* one of these.
+1. **Find the neighbours.** List the existing commands that do something similar (`ta list`, `ta show`, the `dep` group, …). `search` folded into `list --open`, `ready` into `list --ready`; `block`/`unblock` folded into `dep`. A new capability usually belongs *next to* one of these.
 2. **Default to a flag on an existing command.** If the new behavior is "the same view/data, filtered or ordered differently," it's a flag, not a verb — e.g. `list --ready` over a separate `ready`, `tree --plan`/`--all` over a new command. Only add a verb when the *output shape* or *primary noun* genuinely differs (e.g. `dep plan`'s flat dedup'd order vs `dep tree`'s nested structure — a confirmed split, see git log).
 3. **If a flag, name it from the existing vocabulary** and make it compose with the flags already there (`--open`, `--full`, `--columns`, `--sort`, `--reverse`, `--format`). Don't invent a second way to express something a flag already covers.
 4. **Generalize, don't fork.** Reuse the shared implementations rather than copy-pasting: `format::cell_value` for any column's value, `parse_field_ops` for `key=value`/`key+=value`, `graph::blocker_edges`/`validate_and_sort_dependencies` for traversal, `state_of` for the materialized map, `confirm` for prompts. If two surfaces need the same logic, lift it into the shared helper (`format`/`graph`/`cli`) and call it from both — extend the primitive, don't grow a parallel one.

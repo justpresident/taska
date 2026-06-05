@@ -2,7 +2,10 @@
 //!
 //! Filtering is folded in from the former `ta search`: positional
 //! `field<op>value` criteria, all of which must match — `=` exact, `~` regex,
-//! `!=` not-equal, `!~` regex-no-match — plus the `--open` shortcut (not done).
+//! `!=` not-equal, `!~` regex-no-match — plus the `--open` shortcut (not done)
+//! and `--ready` (the former `ta ready`: not done and every dependency done).
+
+use std::collections::HashSet;
 
 use serde_json::Value;
 
@@ -10,6 +13,7 @@ use crate::cli::state_of;
 use crate::config::{DisplayConfig, WorkflowConfig};
 use crate::error::DynError;
 use crate::format::{print_tasks, DisplayArgs};
+use crate::graph;
 use crate::model::{is_done, TaskState};
 use crate::storage::EventStore;
 
@@ -17,6 +21,7 @@ pub fn cmd_list(
     store: &impl EventStore,
     criteria: &[String],
     open: bool,
+    ready: bool,
     workflow: &WorkflowConfig,
     display: &DisplayArgs,
     cfg: &DisplayConfig,
@@ -26,14 +31,31 @@ pub fn cmd_list(
     let criteria = compile_criteria(criteria)?;
     let mut state = state_of(store)?;
     crate::cli::inject_reachability_columns(store, &mut state, workflow, display, cfg);
+    // `--ready` restricts to the ready set (not done, deps satisfied); it already
+    // implies not-done, so it subsumes `--open`. Computed once over the full map.
+    let ready_set: Option<HashSet<String>> = if ready {
+        let blockers = store.config().relationships.blocker_types();
+        let ids = graph::ready_tasks(
+            &state,
+            &workflow.status_field,
+            &workflow.done_status,
+            &blockers,
+        )?;
+        Some(ids.into_iter().collect())
+    } else {
+        None
+    };
     let tasks: Vec<&TaskState> = state
         .values()
         .filter(|t| !open || !is_done(t, &workflow.status_field, &workflow.done_status))
+        .filter(|t| ready_set.as_ref().is_none_or(|s| s.contains(&t.id)))
         .filter(|t| criteria.iter().all(|c| c.matches(t)))
         .collect();
-    // A bare `list` shows "(no tasks)"; a filtered one that matched nothing reads
-    // as "(no matches)".
-    let empty = if criteria.is_empty() && !open {
+    // A bare `list` shows "(no tasks)"; `--ready` with nothing actionable reads as
+    // "(nothing ready)"; any other filter that matched nothing as "(no matches)".
+    let empty = if ready {
+        "(nothing ready)"
+    } else if criteria.is_empty() && !open {
         "(no tasks)"
     } else {
         "(no matches)"

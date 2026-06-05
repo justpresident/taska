@@ -68,8 +68,8 @@ keep_days = {keep_days}
 
 [workflow]
 # The custom field that records a task's status, and the value that marks a
-# task complete. `ta ready` treats a dependency as satisfied once it reaches
-# `done_status`.
+# task complete. `ta list --ready` treats a dependency as satisfied once it
+# reaches `done_status`.
 status_field = "{status_field}"
 done_status = "{done_status}"
 # Status stamped onto a new task when `ta create` doesn't set one. Set to "" to
@@ -116,8 +116,8 @@ update_time = "{update_time}"
 close_time = "{close_time}"
 
 # Relationship types. `ta dep <a> <type>=<b>` adds an edge; an undeclared type is
-# rejected. type = "blocker" makes the target a prerequisite (feeds `ta ready` and
-# cycle detection); "info" is informational. inverse names the reverse direction
+# rejected. type = "blocker" makes the target a prerequisite (feeds `ta list
+# --ready` and cycle detection); "info" is informational. inverse names the reverse direction
 # and is OPTIONAL — omit it for a one-way type; the type's own name makes it
 # symmetric (`a relates_to b` reads both ways); else it labels the inverse.
 {relationships_toml}
@@ -270,7 +270,7 @@ impl OnConflict {
     }
 }
 
-/// How `list`/`ready` present tasks.
+/// How `list` (including `--ready`) presents tasks.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default)]
 pub struct DisplayConfig {
@@ -284,7 +284,7 @@ pub struct DisplayConfig {
     /// width instead of `max_width` (0 = no limit). `--full` ignores these. A
     /// `BTreeMap` so the rendered config is deterministically ordered.
     pub column_max_width: BTreeMap<String, usize>,
-    /// Default column to sort `list`/`ready` rows by (ascending). Any
+    /// Default column to sort `list` rows by (ascending). Any
     /// field name, `id`, or `deps`; `--sort` overrides per command. An empty
     /// value (or an unknown column) falls back to ordering by `id`.
     pub sort: String,
@@ -341,7 +341,7 @@ impl Default for TimestampConfig {
 #[serde(rename_all = "lowercase")]
 pub enum RelType {
     /// `A <type> B` makes `B` a prerequisite of `A`: `A` is ready only once `B`
-    /// is done. Feeds `ta ready` and cycle detection (the dependency DAG).
+    /// is done. Feeds `ta list --ready` and cycle detection (the dependency DAG).
     Blocker,
     /// No effect on readiness or cycles — purely informational.
     #[default]

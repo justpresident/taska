@@ -24,7 +24,7 @@ use crate::storage::{EventStore, FileStore};
 
 mod commands;
 use commands::{
-    cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_init, cmd_list, cmd_ready,
+    cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_init, cmd_list,
     cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction, DepAction,
 };
 
@@ -71,17 +71,15 @@ enum Commands {
         /// Only tasks that are not done (status is not the configured done value)
         #[arg(long)]
         open: bool,
+        /// Only tasks ready to work on: not done and every dependency done
+        #[arg(long)]
+        ready: bool,
         #[command(flatten)]
         display: DisplayArgs,
     },
     /// Show a single task in full by id: `ta show <id>`
     Show {
         id: String,
-        #[command(flatten)]
-        display: DisplayArgs,
-    },
-    /// Show tasks ready to work on (deps satisfied, not done)
-    Ready {
         #[command(flatten)]
         display: DisplayArgs,
     },
@@ -218,6 +216,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
         Commands::List {
             criteria,
             open,
+            ready,
             display,
         } => {
             let workflow = store.config().workflow.clone();
@@ -225,16 +224,13 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
                 store,
                 &criteria,
                 open,
+                ready,
                 &workflow,
                 &display,
                 &store.config().display,
             )
         }
         Commands::Show { id, display } => cmd_show(store, &id, &display, &store.config().display),
-        Commands::Ready { display } => {
-            let workflow = store.config().workflow.clone();
-            cmd_ready(store, &workflow, &display, &store.config().display)
-        }
         Commands::Status { format } => {
             let workflow = store.config().workflow.clone();
             cmd_status(store, &workflow, format)

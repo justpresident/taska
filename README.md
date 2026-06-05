@@ -55,7 +55,7 @@ $ cargo install --path taska
 
 Run `ta init` once per clone (inside a git repository) to create the `.taska/` store and register the merge driver in your **local** git config.
 
-In the session below, only the lowercase verbs (`create`, `dep`, `ready`, …) are literal taska syntax. Everything else is yours — task ids like `migrate-db` and fields like `status=open priority=3` are arbitrary, and taska defines none of them:
+In the session below, only the lowercase verbs (`create`, `dep`, `list`, …) are literal taska syntax. Everything else is yours — task ids like `migrate-db` and fields like `status=open priority=3` are arbitrary, and taska defines none of them:
 
 ```console
 $ git init && ta init
@@ -73,14 +73,14 @@ ID          TITLE             STATUS  DEPS
 deploy-api  Deploy the API    open    migrate-db
 migrate-db  Run DB migration  open
 
-# `ready` shows only not-done tasks whose dependencies are all done:
-$ ta ready
+# `list --ready` shows only not-done tasks whose dependencies are all done:
+$ ta list --ready
 ID          TITLE             STATUS  DEPS
 migrate-db  Run DB migration  open
 
 # Close the migration, and deploy-api unblocks:
 $ ta update migrate-db status=closed
-$ ta ready
+$ ta list --ready
 ID          TITLE           STATUS  DEPS
 deploy-api  Deploy the API  open    migrate-db
 
@@ -105,7 +105,7 @@ Every command appends an immutable event (`Create`, `Update`, `Append`, `Delete`
 
 Each event carries a store-minted, strictly increasing `seq`. That sequence — not the wall clock — is the authoritative order, which keeps replay deterministic even after branches with interleaved timestamps are merged.
 
-**Dependencies** form a DAG. taska validates against cycles and `ta ready` returns the not-yet-done tasks whose dependencies are all satisfied, in topological order.
+**Dependencies** form a DAG. taska validates against cycles and `ta list --ready` returns the not-yet-done tasks whose dependencies are all satisfied.
 
 **Compaction** (`ta compact`) folds old events into a `baseline.jsonl` snapshot to keep the log small, while retaining recent history so concurrent branches can still be reconciled (see configuration below).
 
@@ -146,7 +146,7 @@ keep_days = 30
 
 [workflow]
 # The field that records status, and the value that means "done".
-# `ta ready` treats a dependency as satisfied once it reaches done_status.
+# `ta list --ready` treats a dependency as satisfied once it reaches done_status.
 status_field = "status"
 done_status = "closed"
 
@@ -198,9 +198,8 @@ Because the times are folded into the baseline at compaction, they survive even 
 | `ta dep cycles` | Report any cycles in the `depends_on` graph |
 | `ta dep plan <goal> …` | A goal's not-done transitive prerequisites in dependency order — "do exactly these, in this order". `--critical` narrows to the longest single chain (the critical path) |
 | `ta delete <id>` | Delete a task |
-| `ta list [criteria...] [--open]` | List tasks, optionally filtered by AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`; `field` may be a task field, `id`, or `deps` (e.g. `ta list status~open priority=3`). `--open` limits to not-done tasks. With no criteria, lists everything |
+| `ta list [criteria...] [--open] [--ready]` | List tasks, optionally filtered by AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`; `field` may be a task field, `id`, or `deps` (e.g. `ta list status~open priority=3`). `--open` limits to not-done tasks; `--ready` to not-done tasks whose dependencies are all done. With no criteria, lists everything |
 | `ta show <id>` | Show one task as a readable vertical record — every field, untruncated, one `field: value` line each (`--format json`/`jsonl` for machine output) |
-| `ta ready` | Not-done tasks whose dependencies are all done |
 | `ta status` | Summary counts: total, per-status (discovered from the data), blocked, ready, and closed (`--format json`/`jsonl` for a machine-readable object) |
 | `ta undo [--count N] [--remove] [--force]` | Reverse the last N events: truncate uncommitted ones, append compensating events for committed ones (`--remove` to force truncation) |
 | `ta compact` | Fold old events into the baseline snapshot |
@@ -210,9 +209,9 @@ Because the times are folded into the baseline at compaction, they survive even 
 
 Field values are parsed as JSON when possible (`priority=3` is a number, `status=open` a string). A value of `@PATH` is read from that file and `@-` from stdin — taken verbatim as a string (one trailing newline trimmed); this is the way to pass long or shell-hostile text (notes, descriptions) without fighting argv quoting, e.g. `ta update api notes=@notes.md` or `… notes=@-`. Write a literal `@` with `@@` (`owner=@@alice`). The keys `seq`, `timestamp`, `op`, `task_id`, and `_meta` are reserved.
 
-`list`, `ready`, and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON — one object per line — for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, `--columns id,status,…` to pick the columns for one run, and `--sort <column>` / `--reverse` to order the rows (`list`/`ready`; default column from `[display].sort`). The defaults and `max_width` live in `[display]`.
+`list` and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON — one object per line — for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, `--columns id,status,…` to pick the columns for one run, and `--sort <column>` / `--reverse` to order the rows (`list`; default column from `[display].sort`). The defaults and `max_width` live in `[display]`.
 
-`list` and `ready` also offer two **computed** columns for triage — `unblocks` (how many still-open tasks this one transitively unblocks — "finish it to free up N") and `blocked_by` (how many still-open prerequisites it's waiting on). They behave like numeric fields, so `--sort unblocks --reverse` surfaces the highest-leverage work and `--sort blocked_by` the most-stuck. They're opt-in: computed only when named in `--columns`/`--sort` or the configured columns, so default and `--full`/json output are untouched.
+`list` also offers two **computed** columns for triage — `unblocks` (how many still-open tasks this one transitively unblocks — "finish it to free up N") and `blocked_by` (how many still-open prerequisites it's waiting on). They behave like numeric fields, so `--sort unblocks --reverse` surfaces the highest-leverage work and `--sort blocked_by` the most-stuck. They're opt-in: computed only when named in `--columns`/`--sort` or the configured columns, so default and `--full`/json output are untouched.
 
 ## Storage layout
 

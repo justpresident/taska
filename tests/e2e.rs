@@ -145,12 +145,12 @@ fn crud_search_and_ready_workflow() {
     assert!(!lists_task(&search, "db"), "db is done, not open: {search}");
 
     // db is done, so api's only dependency is satisfied -> api is ready.
-    let ready = ta(&dir, &["ready"]);
+    let ready = ta(&dir, &["list", "--ready"]);
     assert!(lists_task(&ready, "api"), "ready: {ready}");
 
     // Once api is done too, nothing is ready.
     ta(&dir, &["update", "api", "status=closed"]);
-    assert_eq!(ta(&dir, &["ready"]).trim(), "(nothing ready)");
+    assert_eq!(ta(&dir, &["list", "--ready"]).trim(), "(nothing ready)");
 
     ta(&dir, &["delete", "db"]);
     assert!(!lists_task(&ta(&dir, &["list"]), "db"), "db should be gone");
@@ -554,7 +554,7 @@ fn jsonl_output_across_commands_omits_absent_fields() {
     for args in [
         vec!["list", "--full", "--format", "jsonl"],
         vec!["list", "status=open", "--format", "jsonl"],
-        vec!["ready", "--format", "jsonl"],
+        vec!["list", "--ready", "--format", "jsonl"],
         vec!["show", "api", "--format", "jsonl"],
     ] {
         let out = ta(&dir, &args);
@@ -1238,7 +1238,7 @@ fn workflow_config_override_changes_ready_semantics() {
     ta(&dir, &["dep", "add", "api", "depends_on=db"]);
 
     // With the override, db counts as done, so api becomes ready.
-    let ready = ta(&dir, &["ready"]);
+    let ready = ta(&dir, &["list", "--ready"]);
     assert!(lists_task(&ready, "api"), "api should be ready: {ready}");
     assert!(!lists_task(&ready, "db"), "db is closed/done: {ready}");
 }
@@ -1438,7 +1438,7 @@ fn dep_remove_makes_a_blocked_task_ready() {
     ta(&dir, &["create", "db", "status=open"]);
     ta(&dir, &["create", "api", "status=open"]);
     ta(&dir, &["dep", "add", "api", "depends_on=db"]);
-    let before = ta(&dir, &["ready"]);
+    let before = ta(&dir, &["list", "--ready"]);
     assert!(lists_task(&before, "db"), "db ready: {before}");
     assert!(
         !lists_task(&before, "api"),
@@ -1451,7 +1451,7 @@ fn dep_remove_makes_a_blocked_task_ready() {
         msg.contains("Removed 1 edge(s)"),
         "dep remove should confirm: {msg}"
     );
-    let after = ta(&dir, &["ready"]);
+    let after = ta(&dir, &["list", "--ready"]);
     assert!(
         lists_task(&after, "api"),
         "api ready after unblock: {after}"
@@ -1475,7 +1475,7 @@ fn dependency_cycle_is_reported_by_ready() {
     ta(&dir, &["dep", "add", "a", "depends_on=b"]);
     ta(&dir, &["dep", "add", "b", "depends_on=a"]);
 
-    let out = run(ta_bin(), &dir, &["ready"]);
+    let out = run(ta_bin(), &dir, &["list", "--ready"]);
     assert!(
         !out.status.success(),
         "ready must exit non-zero on a dependency cycle, got:\n{}",
@@ -1549,8 +1549,11 @@ fn empty_results_render_placeholders_and_empty_json_array() {
     // for json.
     assert_eq!(ta(&dir, &["list"]).trim(), "(no tasks)");
     assert_eq!(ta(&dir, &["list", "--format", "json"]).trim(), "[]");
-    assert_eq!(ta(&dir, &["ready"]).trim(), "(nothing ready)");
-    assert_eq!(ta(&dir, &["ready", "--format", "json"]).trim(), "[]");
+    assert_eq!(ta(&dir, &["list", "--ready"]).trim(), "(nothing ready)");
+    assert_eq!(
+        ta(&dir, &["list", "--ready", "--format", "json"]).trim(),
+        "[]"
+    );
 
     // A search that matches nothing has its own placeholder and empty array.
     ta(&dir, &["create", "a", "status=open"]);
@@ -2236,7 +2239,7 @@ fn custom_blocker_relationship_gates_readiness() {
     ta(&dir, &["dep", "add", "a", "requires=b"]);
 
     // `requires` is a blocker, so `a` is gated by still-open `b`: only `b` ready.
-    let ready = ta(&dir, &["ready"]);
+    let ready = ta(&dir, &["list", "--ready"]);
     assert!(lists_task(&ready, "b"), "b ready: {ready}");
     assert!(!lists_task(&ready, "a"), "a blocked by requires=b: {ready}");
 
@@ -2258,7 +2261,7 @@ fn custom_blocker_relationship_gates_readiness() {
     // Close `b`, and `a` unblocks.
     ta(&dir, &["update", "b", "status=closed"]);
     assert!(
-        lists_task(&ta(&dir, &["ready"]), "a"),
+        lists_task(&ta(&dir, &["list", "--ready"]), "a"),
         "a ready after requires-dep done"
     );
 }
@@ -2274,7 +2277,7 @@ fn informational_relationship_does_not_gate_readiness() {
     ta(&dir, &["dep", "add", "x", "relates_to=y"]);
 
     // An informational edge must not block: both are ready.
-    let ready = ta(&dir, &["ready"]);
+    let ready = ta(&dir, &["list", "--ready"]);
     assert!(
         lists_task(&ready, "x"),
         "x ready despite relates_to: {ready}"
