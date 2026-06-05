@@ -1,11 +1,40 @@
 //! Dependency graph: cycle detection, topological ordering, and readiness.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::BuildHasher;
 
 use petgraph::graphmap::DiGraphMap;
 
 use crate::model::{is_done, TaskState};
+
+/// A run-local, integer handle for a task *inside the graph*. The persistent id
+/// is the `String` key in the state map; [`IdIndex`] interns those to a dense
+/// `TaskId` so whole-graph traversal works on integers (cheap hashing,
+/// contiguous adjacency, a stamped `seen` array) rather than `String`/`&str`.
+/// These numbers are regenerated each run and never touch the on-disk log or
+/// baseline, which stay string-keyed.
+type TaskId = usize;
+
+/// A run-local interning of the task ids to dense [`TaskId`]s (and back), built
+/// once per graph operation. Indices are assigned in sorted id order so any
+/// derived ordering is deterministic.
+struct IdIndex<'a> {
+    ids: Vec<&'a str>,
+    to_ix: HashMap<&'a str, TaskId>,
+}
+
+impl<'a> IdIndex<'a> {
+    fn new<S: BuildHasher>(state: &'a HashMap<String, TaskState, S>) -> Self {
+        let mut ids: Vec<&'a str> = state.keys().map(String::as_str).collect();
+        ids.sort_unstable();
+        let to_ix = ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+        Self { ids, to_ix }
+    }
+
+    fn ix(&self, id: &str) -> Option<TaskId> {
+        self.to_ix.get(id).copied()
+    }
+}
 
 /// A task's blocker edges as `(target, type)` pairs.
 ///
@@ -134,51 +163,64 @@ pub fn reachability_counts<S: BuildHasher>(
     status_field: &str,
     done_status: &str,
 ) -> HashMap<String, (usize, usize)> {
-    // Blocker adjacency to existing tasks: prerequisites (forward) and dependents
-    // (reverse).
-    let mut prereqs: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (id, task) in state {
-        for (dep, _) in blocker_edges(task, blockers) {
-            if state.contains_key(dep) {
-                prereqs.entry(id.as_str()).or_default().push(dep);
-                dependents.entry(dep).or_default().push(id.as_str());
+    let index = IdIndex::new(state);
+    let n = index.ids.len();
+    // Precompute not-done per interned task, so the inner DFS is a Vec lookup.
+    let not_done: Vec<bool> = index
+        .ids
+        .iter()
+        .map(|&id| {
+            state
+                .get(id)
+                .is_some_and(|t| !is_done(t, status_field, done_status))
+        })
+        .collect();
+    // Integer adjacency to existing tasks: prerequisites (forward) and dependents
+    // (reverse), as contiguous Vecs indexed by interned id.
+    let mut prereqs: Vec<Vec<TaskId>> = vec![Vec::new(); n];
+    let mut dependents: Vec<Vec<TaskId>> = vec![Vec::new(); n];
+    for (i, &id) in index.ids.iter().enumerate() {
+        if let Some(task) = state.get(id) {
+            for (dep, _) in blocker_edges(task, blockers) {
+                if let Some(j) = index.ix(dep) {
+                    prereqs[i].push(j);
+                    dependents[j].push(i);
+                }
             }
         }
     }
-    state
-        .keys()
-        .map(|id| {
-            let blocked_by =
-                reach_not_done(id.as_str(), &prereqs, state, status_field, done_status);
-            let unblocks =
-                reach_not_done(id.as_str(), &dependents, state, status_field, done_status);
-            (id.clone(), (unblocks, blocked_by))
+    // A monotonically increasing stamp marks nodes seen in the current DFS, so
+    // `seen` is reused across all 2·n traversals without an O(n) reset each time.
+    let mut seen = vec![0u64; n];
+    let mut stamp = 0u64;
+    (0..n)
+        .map(|i| {
+            stamp += 1;
+            let blocked_by = reach_not_done(i, &prereqs, &not_done, &mut seen, stamp);
+            stamp += 1;
+            let unblocks = reach_not_done(i, &dependents, &not_done, &mut seen, stamp);
+            (index.ids[i].to_string(), (unblocks, blocked_by))
         })
         .collect()
 }
 
 /// Count the distinct not-done tasks reachable from `start` over `adj` (the start
 /// itself excluded). Traversal passes through done tasks but only not-done ones
-/// are counted.
-fn reach_not_done<'a, S: BuildHasher>(
-    start: &'a str,
-    adj: &HashMap<&'a str, Vec<&'a str>>,
-    state: &HashMap<String, TaskState, S>,
-    status_field: &str,
-    done_status: &str,
+/// are counted. `seen[m] == stamp` marks `m` visited in this call.
+fn reach_not_done(
+    start: TaskId,
+    adj: &[Vec<TaskId>],
+    not_done: &[bool],
+    seen: &mut [u64],
+    stamp: u64,
 ) -> usize {
-    let mut seen: HashSet<&str> = HashSet::new();
     let mut stack = vec![start];
     let mut count = 0;
     while let Some(node) = stack.pop() {
-        let Some(next) = adj.get(node) else { continue };
-        for &m in next {
-            if seen.insert(m) {
-                if state
-                    .get(m)
-                    .is_some_and(|t| !is_done(t, status_field, done_status))
-                {
+        for &m in &adj[node] {
+            if seen[m] != stamp {
+                seen[m] = stamp;
+                if not_done[m] {
                     count += 1;
                 }
                 stack.push(m);
@@ -194,15 +236,18 @@ pub fn validate_and_sort_dependencies<S: BuildHasher>(
     state: &HashMap<String, TaskState, S>,
     blockers: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
-    let mut graph: DiGraphMap<&str, ()> = DiGraphMap::new();
+    let index = IdIndex::new(state);
+    let mut graph: DiGraphMap<TaskId, ()> = DiGraphMap::new();
 
-    for (id, task) in state {
-        graph.add_node(id.as_str());
-        for (dep, _) in blocker_edges(task, blockers) {
-            // Only wire edges to deps that actually exist; dangling deps are
-            // reported separately rather than crashing the sort.
-            if state.contains_key(dep) {
-                graph.add_edge(dep, id.as_str(), ());
+    for (i, &id) in index.ids.iter().enumerate() {
+        graph.add_node(i);
+        if let Some(task) = state.get(id) {
+            for (dep, _) in blocker_edges(task, blockers) {
+                // Only wire edges to deps that actually exist; dangling deps are
+                // reported separately rather than crashing the sort.
+                if let Some(j) = index.ix(dep) {
+                    graph.add_edge(j, i, ());
+                }
             }
         }
     }
@@ -214,7 +259,7 @@ pub fn validate_and_sort_dependencies<S: BuildHasher>(
     let sorted = petgraph::algo::toposort(&graph, None)
         .map_err(|_| "Topological cycle processing failure".to_string())?
         .into_iter()
-        .map(std::string::ToString::to_string)
+        .map(|ix| index.ids[ix].to_string())
         .collect();
 
     Ok(sorted)
@@ -229,15 +274,18 @@ pub fn dependency_cycles<S: BuildHasher>(
     state: &HashMap<String, TaskState, S>,
     blockers: &BTreeSet<String>,
 ) -> Vec<Vec<String>> {
-    let mut graph: DiGraphMap<&str, ()> = DiGraphMap::new();
+    let index = IdIndex::new(state);
+    let mut graph: DiGraphMap<TaskId, ()> = DiGraphMap::new();
     let mut self_loops: Vec<String> = Vec::new();
-    for (id, task) in state {
-        graph.add_node(id.as_str());
-        for (dep, _) in blocker_edges(task, blockers) {
-            if state.contains_key(dep) {
-                graph.add_edge(id.as_str(), dep, ());
-                if dep == id.as_str() {
-                    self_loops.push(id.clone());
+    for (i, &id) in index.ids.iter().enumerate() {
+        graph.add_node(i);
+        if let Some(task) = state.get(id) {
+            for (dep, _) in blocker_edges(task, blockers) {
+                if let Some(j) = index.ix(dep) {
+                    graph.add_edge(i, j, ());
+                    if j == i {
+                        self_loops.push(id.to_string());
+                    }
                 }
             }
         }
@@ -246,7 +294,8 @@ pub fn dependency_cycles<S: BuildHasher>(
     let mut cycles: Vec<Vec<String>> = Vec::new();
     for scc in petgraph::algo::tarjan_scc(&graph) {
         if scc.len() > 1 {
-            let mut members: Vec<String> = scc.iter().map(|s| (*s).to_string()).collect();
+            let mut members: Vec<String> =
+                scc.iter().map(|&ix| index.ids[ix].to_string()).collect();
             members.sort();
             cycles.push(members);
         }
