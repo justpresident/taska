@@ -2598,6 +2598,24 @@ fn dep_tree_marks_subtasks_and_rolls_up_progress() {
         tree.contains("dep1") && !tree.contains("dep1 [subtask]"),
         "plain dependency untagged: {tree}"
     );
+
+    // The same structure is available as nested json.
+    let json: serde_json::Value =
+        serde_json::from_str(&ta(&dir, &["dep", "tree", "epic", "--format", "json"])).unwrap();
+    let epic = &json[0];
+    assert_eq!(epic["id"], "epic");
+    assert_eq!(epic["subtasks"], serde_json::json!({"done": 1, "total": 2}));
+    let kids = epic["children"].as_array().unwrap();
+    assert!(
+        kids.iter()
+            .any(|c| c["id"] == "a" && c["edge"] == "subtask" && c["done"] == true),
+        "subtask child in json: {json}"
+    );
+    assert!(
+        kids.iter()
+            .any(|c| c["id"] == "dep1" && c.get("edge").is_none()),
+        "plain dependency has no edge tag: {json}"
+    );
 }
 
 #[test]
@@ -2809,6 +2827,7 @@ fn output_commands_are_format_and_color_consistent() {
         vec!["status"],
         vec!["dep", "cycles"],
         vec!["dep", "plan", "a"],
+        vec!["dep", "tree"],
     ];
     for base in &commands {
         let label = base.join(" ");
