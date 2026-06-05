@@ -195,53 +195,57 @@ fn bench_replay() {
 }
 
 fn bench_compaction() {
-    // Compaction's payoff is the *everyday* replay: from a compacted store every
-    // command re-materializes the current state from the baseline plus only the
-    // retained tail (`keep_events`) — not the whole history. Same logical state,
-    // two storage shapes; compare on-disk size and replay time of each.
-    let (n, dep_pct) = (500_000usize, 20usize);
-    let log = gen_log(n, dep_pct);
-    let (c, u, d) = op_mix(&log);
-
-    // Measure the uncompacted replay first, in a clean heap — before the 125k-task
-    // baseline is resident — so it agrees with the replay table above.
-    let cold = bench_materialize(&[], &log);
-
-    let now = Utc
-        .timestamp_opt(1_700_000_000 + n as i64, 0)
-        .single()
-        .expect("ts");
-    let split = Engine::retention_split(&log, KEEP_EVENTS, 0, now);
-    let baseline: Vec<TaskState> =
-        Engine::materialize_state(Vec::new(), log[..split].to_vec(), STATUS_FIELD, DONE_STATUS)
-            .into_values()
-            .collect();
-    let recent = &log[split..];
-    let warm = bench_materialize(&baseline, recent);
-
+    // Each `history` value below appears on TWO rows — the SAME set of events in
+    // two storage shapes: the full log, vs a compacted store (a baseline of the
+    // folded events plus the retained `keep_events` tail). Both materialize to
+    // identical state; we compare on-disk size and the everyday replay time, which
+    // is compaction's real payoff. The `dep` field is touched per task, so the mix
+    // is the same as the 20%-density rows above (~25% / 60% / 15%).
+    let dep_pct = 20usize;
+    let (c, u, d) = op_mix(&gen_log(10_000, dep_pct));
     println!(
-        "\nCompaction — everyday replay reads the baseline + retained tail, not full history\n\
-         (keep_events={}, mix {}% / {}% / {}%):\n",
+        "\nCompaction — the SAME history replays from a baseline + retained tail,\n\
+         not the full log (keep_events={}, mix {}% / {}% / {}%):\n",
         commas(KEEP_EVENTS),
-        pct(c, n),
-        pct(u, n),
-        pct(d, n),
+        pct(c, 10_000),
+        pct(u, 10_000),
+        pct(d, 10_000),
     );
-    println!("| store | on disk | replay |");
-    println!("|---|---|---|");
-    println!(
-        "| {}-event log, uncompacted | {} | {} |",
-        commas(n),
-        fmt_bytes(log_bytes(&log)),
-        fmt_dur(cold),
-    );
-    println!(
-        "| {}-task baseline + {}-event tail | {} | {} |",
-        commas(baseline.len()),
-        commas(n - split),
-        fmt_bytes(baseline_bytes(&baseline) + log_bytes(recent)),
-        fmt_dur(warm),
-    );
+    println!("| history | stored as | on disk | replay |");
+    println!("|---|---|---|---|");
+    for n in [100_000usize, 200_000, 500_000] {
+        let log = gen_log(n, dep_pct);
+        // Measure the uncompacted replay first, in a clean heap — before the
+        // baseline is resident — so it agrees with the replay table above.
+        let cold = bench_materialize(&[], &log);
+
+        let now = Utc
+            .timestamp_opt(1_700_000_000 + n as i64, 0)
+            .single()
+            .expect("ts");
+        let split = Engine::retention_split(&log, KEEP_EVENTS, 0, now);
+        let baseline: Vec<TaskState> =
+            Engine::materialize_state(Vec::new(), log[..split].to_vec(), STATUS_FIELD, DONE_STATUS)
+                .into_values()
+                .collect();
+        let recent = &log[split..];
+        let warm = bench_materialize(&baseline, recent);
+
+        println!(
+            "| {} events | full log | {} | {} |",
+            commas(n),
+            fmt_bytes(log_bytes(&log)),
+            fmt_dur(cold),
+        );
+        println!(
+            "| {} events | {}-task baseline + {} tail | {} | {} |",
+            commas(n),
+            commas(baseline.len()),
+            commas(n - split),
+            fmt_bytes(baseline_bytes(&baseline) + log_bytes(recent)),
+            fmt_dur(warm),
+        );
+    }
 }
 
 fn bench_merge() {
