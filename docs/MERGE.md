@@ -118,9 +118,38 @@ To keep the log small, `ta compact` folds an old prefix into a snapshot,
 
 Replay rebuilds the whole dependency graph in a **single pass** over the log — no
 load-then-resolve step, and friendlier to cache than a two-pass walk over a
-materialized graph. Compaction bounds replay cost as history grows. Empirical
-benchmarks are tracked separately (see the `benchmarks` task) and will be linked
-here.
+materialized graph. Compaction bounds on-disk growth as history accumulates.
+
+The numbers below come from `cargo bench --bench perf` (a dependency-free
+`std::time` harness; release build, single core) over synthetic logs — ~¼
+`Create`s, the rest `Update`s and random `AddDep`s at the stated density, ~4
+events per task. Treat them as orders of magnitude, not guarantees.
+
+**Replay / materialize** scales linearly with log length, and a denser
+dependency graph costs a little more (the per-task dedup on `AddDep` grows with
+edges/task):
+
+| events | log size | replay @5% deps | @20% | @50% |
+|--------|----------|-----------------|------|------|
+| 1,000   | 94 KB  | 0.5 ms   | 0.6 ms   | 0.7 ms   |
+| 10,000  | 958 KB | 6.2 ms   | 6.3 ms   | 7.1 ms   |
+| 100,000 | 9.6 MB | 116.9 ms | 126.0 ms | 138.3 ms |
+
+So even a 100k-event history — far past any hand-managed backlog — replays in
+well under a fifth of a second. The log is ~96 bytes/event on disk.
+
+**Compaction** is about *size*, not speed: its CPU cost is just a replay of the
+prefix it folds, but folding old events into a baseline bounds the footprint. A
+100k-event log (9.6 MB) compacts to a 25,000-task baseline plus the retained
+5,000-event tail — 4.7 MB, a 2.0× shrink, in ~167 ms. The win scales with how
+many events accumulate per task: write-once tasks barely compress, while tasks
+that churn through many updates over their lifetime fold away most of their
+history.
+
+**Merge** of two branches diverged from a shared ancestor — 1,000 ancestor
+events plus 100 concurrent, conflicting `owner` edits per branch (100 genuine
+per-field conflicts to resolve) — completes in ~14.8 ms end to end, including
+reading the three logs and writing the result.
 
 ## Known limitation: reverting very old changes
 
