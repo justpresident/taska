@@ -48,6 +48,9 @@ pub enum DepAction {
         /// Goal task(s) to plan toward
         #[arg(required = true)]
         goals: Vec<String>,
+        /// Show only the critical path: the longest chain of incomplete prerequisites
+        #[arg(long)]
+        critical: bool,
     },
 }
 
@@ -70,7 +73,7 @@ pub fn cmd_dep_group(
         DepAction::List { tasks } => dep_list(store, &tasks, types),
         DepAction::Tree { tasks } => dep_tree(store, &tasks),
         DepAction::Cycles => dep_cycles(store),
-        DepAction::Plan { goals } => dep_plan(store, &goals),
+        DepAction::Plan { goals, critical } => dep_plan(store, &goals, critical),
     }
 }
 
@@ -369,7 +372,9 @@ fn dep_cycles(store: &impl EventStore) -> Result<(), DynError> {
 /// (the goals included), in dependency order: do exactly these, in this order.
 /// Prerequisites are the blocker edges (the `depends_on` field plus any
 /// `blocker`-typed relationship); already-done ones are dropped as satisfied.
-fn dep_plan(store: &impl EventStore, goals: &[String]) -> Result<(), DynError> {
+/// `--critical` narrows the list to the longest single chain of incomplete
+/// prerequisites — the sequence that sets the minimum remaining duration.
+fn dep_plan(store: &impl EventStore, goals: &[String], critical: bool) -> Result<(), DynError> {
     let state = state_of(store)?;
     for g in goals {
         if !state.contains_key(g) {
@@ -415,8 +420,15 @@ fn dep_plan(store: &impl EventStore, goals: &[String]) -> Result<(), DynError> {
         return Ok(());
     }
 
-    let width = remaining.iter().map(|id| id.len()).max().unwrap_or(0);
-    for (i, id) in remaining.iter().enumerate() {
+    let total = remaining.len();
+    let to_print: Vec<String> = if critical {
+        critical_path(&remaining, &sub, &blockers)
+    } else {
+        remaining.iter().map(|id| (*id).clone()).collect()
+    };
+
+    let width = to_print.iter().map(String::len).max().unwrap_or(0);
+    for (i, id) in to_print.iter().enumerate() {
         let status = sub
             .get(id.as_str())
             .and_then(|t| t.custom_fields.get(&wf.status_field))
@@ -427,6 +439,64 @@ fn dep_plan(store: &impl EventStore, goals: &[String]) -> Result<(), DynError> {
             .unwrap_or_default();
         println!("{:>2}. {id:<width$}  {status}", i + 1);
     }
-    println!("({} task(s) remaining, in order)", remaining.len());
+    if critical {
+        println!(
+            "(critical path: {} of {total} remaining task(s))",
+            to_print.len()
+        );
+    } else {
+        println!("({total} task(s) remaining, in order)");
+    }
     Ok(())
+}
+
+/// The longest chain of incomplete prerequisites within `remaining` (already in
+/// topological order, prerequisites first). A DP over that order — `depth(t) =
+/// 1 + max(depth(p))` across `t`'s not-done blocker prerequisites — then a
+/// backtrack from the deepest task. Ties break on the smaller id so the chosen
+/// path is deterministic.
+fn critical_path(
+    remaining: &[&String],
+    sub: &HashMap<String, TaskState>,
+    blockers: &BTreeSet<String>,
+) -> Vec<String> {
+    let in_rem: BTreeSet<&str> = remaining.iter().map(|s| s.as_str()).collect();
+    let mut depth: HashMap<&str, usize> = HashMap::new();
+    let mut pred: HashMap<&str, Option<&str>> = HashMap::new();
+    for id in remaining {
+        let id = id.as_str();
+        // Best (deepest) not-done prerequisite, smaller id winning ties.
+        let mut best: Option<(usize, &str)> = None;
+        if let Some(task) = sub.get(id) {
+            for (dep, _) in crate::graph::blocker_edges(task, blockers) {
+                if in_rem.contains(dep) {
+                    let d = depth.get(dep).copied().unwrap_or(0);
+                    let keep = best.is_some_and(|b| b.0 > d || (b.0 == d && b.1 < dep));
+                    if !keep {
+                        best = Some((d, dep));
+                    }
+                }
+            }
+        }
+        depth.insert(id, best.map_or(1, |b| b.0 + 1));
+        pred.insert(id, best.map(|b| b.1));
+    }
+
+    // End at the deepest task (the goal, as the common sink), smaller id on ties.
+    let end = remaining.iter().copied().max_by(|a, b| {
+        let (da, db) = (
+            depth.get(a.as_str()).copied().unwrap_or(0),
+            depth.get(b.as_str()).copied().unwrap_or(0),
+        );
+        da.cmp(&db).then_with(|| b.as_str().cmp(a.as_str()))
+    });
+
+    let mut chain = Vec::new();
+    let mut cur = end.map(String::as_str);
+    while let Some(node) = cur {
+        chain.push(node.to_string());
+        cur = pred.get(node).copied().flatten();
+    }
+    chain.reverse();
+    chain
 }

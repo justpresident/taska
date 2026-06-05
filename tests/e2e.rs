@@ -2388,6 +2388,48 @@ fn dep_plan_lists_remaining_prerequisites_in_order() {
 }
 
 #[test]
+fn dep_plan_critical_shows_the_longest_chain() {
+    let dir = fresh_dir("dep-plan-critical");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    for id in ["ship", "a1", "a2", "a3", "c1"] {
+        ta(&dir, &["create", id, "status=open"]);
+    }
+    // ship has a long branch (a3 -> a2 -> a1 -> ship) and a short one (c1 -> ship).
+    ta(&dir, &["dep", "add", "ship", "depends_on=a1"]);
+    ta(&dir, &["dep", "add", "a1", "depends_on=a2"]);
+    ta(&dir, &["dep", "add", "a2", "depends_on=a3"]);
+    ta(&dir, &["dep", "add", "ship", "depends_on=c1"]);
+
+    // The full plan lists all five remaining tasks.
+    let plan = ta(&dir, &["dep", "plan", "ship"]);
+    assert!(
+        plan.contains("c1"),
+        "full plan includes the short branch: {plan}"
+    );
+    assert!(plan.contains("5 task(s) remaining"), "count: {plan}");
+
+    // --critical narrows to the longest chain (a3,a2,a1,ship), dropping the short
+    // branch, in dependency order.
+    let crit = ta(&dir, &["dep", "plan", "ship", "--critical"]);
+    assert!(!crit.contains("c1"), "short branch excluded: {crit}");
+    let (p3, p2, p1, ps) = (
+        crit.find("a3").unwrap(),
+        crit.find("a2").unwrap(),
+        crit.find("a1").unwrap(),
+        crit.find("ship").unwrap(),
+    );
+    assert!(
+        p3 < p2 && p2 < p1 && p1 < ps,
+        "longest chain in order: {crit}"
+    );
+    assert!(
+        crit.contains("critical path: 4 of 5"),
+        "critical-path count: {crit}"
+    );
+}
+
+#[test]
 fn list_unblocks_and_blocked_by_columns() {
     let dir = fresh_dir("unblocks-cols");
     init_repo(&dir);
