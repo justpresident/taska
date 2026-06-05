@@ -204,6 +204,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 | `ta undo [--count N] [--remove] [--force]` | Reverse the last N events: truncate uncommitted ones, append compensating events for committed ones (`--remove` to force truncation) |
 | `ta compact` | Fold old events into the baseline snapshot |
 | `ta config get\|set\|list [key] [value]` | View or change `.taska/config.toml` by dotted key (e.g. `ta config set compaction.keep_events 500`); `set` validates and preserves comments |
+| `ta config validate` | Check the config against the task graph: every relationship edge uses a declared type, blocker edges are acyclic, inverse names don't collide. Run after hand-editing `config.toml` (`set` runs the same check) |
 | `ta resolve` | Review and clear a surfaced merge conflict |
 
 Field values are parsed as JSON when possible (`priority=3` is a number, `status=open` a string). A value of `@PATH` is read from that file and `@-` from stdin — taken verbatim as a string (one trailing newline trimmed); this is the way to pass long or shell-hostile text (notes, descriptions) without fighting argv quoting, e.g. `ta update api notes=@notes.md` or `… notes=@-`. Write a literal `@` with `@@` (`owner=@@alice`). The keys `seq`, `timestamp`, `op`, `task_id`, and `_meta` are reserved.

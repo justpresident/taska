@@ -2283,6 +2283,68 @@ fn informational_relationship_does_not_gate_readiness() {
 }
 
 #[test]
+fn config_validate_flags_an_undeclared_relationship_type() {
+    let dir = fresh_dir("cfg-validate-undeclared");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a"]);
+    ta(&dir, &["create", "b"]);
+    ta(&dir, &["dep", "add", "a", "relates_to=b"]);
+
+    // A consistent store validates clean.
+    assert!(
+        ta(&dir, &["config", "validate"]).contains("Config OK"),
+        "clean store validates"
+    );
+
+    // Drop `relates_to` from the config while task `a` still uses it.
+    let cfg = dir.join(".taska/config.toml");
+    fs::write(
+        &cfg,
+        "[relationships.depends_on]\ntype = \"blocker\"\ninverse = \"blocks\"\n",
+    )
+    .unwrap();
+    let out = run(ta_bin(), &dir, &["config", "validate"]);
+    assert!(
+        !out.status.success(),
+        "undeclared-type config must be rejected"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("relates_to") && err.contains("not declared"),
+        "error names the undeclared type: {err}"
+    );
+}
+
+#[test]
+fn config_validate_flags_a_blocker_cycle_and_set_runs_the_same_check() {
+    let dir = fresh_dir("cfg-validate-cycle");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "x"]);
+    ta(&dir, &["create", "y"]);
+    ta(&dir, &["dep", "add", "x", "depends_on=y"]);
+    ta(&dir, &["dep", "add", "y", "depends_on=x"]);
+
+    let out = run(ta_bin(), &dir, &["config", "validate"]);
+    assert!(!out.status.success(), "a blocker cycle must be reported");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("cycle"),
+        "error mentions the cycle: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // `config set` runs the same validation, so it too refuses while the graph
+    // is inconsistent (the cheap struct-only path keeps fixing commands usable).
+    let set = run(
+        ta_bin(),
+        &dir,
+        &["config", "set", "merge.on_conflict", "ours"],
+    );
+    assert!(!set.status.success(), "config set runs graph validation");
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);

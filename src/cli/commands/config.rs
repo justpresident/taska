@@ -2,6 +2,7 @@
 
 use clap::Subcommand;
 
+use crate::cli::state_of;
 use crate::config::Config;
 use crate::error::DynError;
 use crate::storage::{EventStore, FileStore};
@@ -15,15 +16,28 @@ pub enum ConfigAction {
     Set { key: String, value: String },
     /// Print every effective config value as `dotted.key = value`
     List,
+    /// Check the config against the task graph: `ta config validate`
+    Validate,
 }
 
-/// Dispatch `ta config get|set|list`.
+/// Dispatch `ta config get|set|list|validate`.
 pub fn cmd_config(store: &FileStore, action: ConfigAction) -> Result<(), DynError> {
     match action {
         ConfigAction::Get { key } => cmd_config_get(store.config(), &key),
         ConfigAction::List => cmd_config_list(store.config()),
         ConfigAction::Set { key, value } => cmd_config_set(store, &key, &value),
+        ConfigAction::Validate => cmd_config_validate(store),
     }
+}
+
+/// Validate the effective config against the materialized task graph, reporting
+/// every problem found (or confirming it's clean). Run this after hand-editing
+/// `.taska/config.toml`; `config set` runs the same check before persisting.
+fn cmd_config_validate(store: &FileStore) -> Result<(), DynError> {
+    let state = state_of(store)?;
+    store.config().validate_against(&state)?;
+    println!("Config OK ({} task(s) checked).", state.len());
+    Ok(())
 }
 
 /// Print one effective config value addressed by a dotted key. Reads the merged
@@ -74,7 +88,6 @@ fn cmd_config_set(store: &FileStore, key: &str, raw: &str) -> Result<(), DynErro
     // Config (catches bad types / unknown enum variants) AND passes validate()
     // (catches semantic limits like the keep_events floor).
     let candidate: Config = toml::from_str(&doc.to_string())?;
-    candidate.validate()?;
 
     // Guard against typo'd keys: serde(default) silently drops an unknown field,
     // so the value must survive a load round-trip to confirm the key is real.
@@ -85,6 +98,13 @@ fn cmd_config_set(store: &FileStore, key: &str, raw: &str) -> Result<(), DynErro
             format!("unknown config key `{key}` (no such field; nothing was changed)")
         })?;
     }
+
+    // Reject the edit unless the resulting config is valid against the current
+    // task graph — the keep_events floor, bad enums, plus relationship/cycle
+    // consistency. The commands you'd use to fix a graph problem run the cheap
+    // struct-only `validate`, so this never locks you out.
+    let state = state_of(store)?;
+    candidate.validate_against(&state)?;
 
     std::fs::write(&path, doc.to_string())?;
     println!("Set {key} = {shown}");

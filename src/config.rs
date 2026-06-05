@@ -6,12 +6,13 @@
 //! driver reconciles concurrent branches. Every key here is honored somewhere —
 //! this file is not a list of aspirations.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::DynError;
+use crate::model::TaskState;
 
 /// Smallest `keep_events` we accept in production.
 ///
@@ -393,8 +394,8 @@ impl RelationshipConfig {
     /// isn't declared at all (legacy stores without a `[relationships]` section
     /// still treat `depends_on` as a blocker). A `depends_on` explicitly set to
     /// `info` is honored and excluded.
-    pub fn blocker_types(&self) -> std::collections::BTreeSet<String> {
-        let mut set: std::collections::BTreeSet<String> = self
+    pub fn blocker_types(&self) -> BTreeSet<String> {
+        let mut set: BTreeSet<String> = self
             .types
             .iter()
             .filter(|(_, def)| def.kind == RelType::Blocker)
@@ -439,20 +440,104 @@ impl Config {
         }
     }
 
-    /// Reject configurations that would corrupt the store. The CLI calls this on
-    /// every store-backed command so a bad edit is reported on the very next
-    /// `ta` invocation rather than silently at the next compaction.
+    /// Cheap, struct-only validation: reject configurations that would corrupt the
+    /// store regardless of the task data (today: the `keep_events` floor). The CLI
+    /// calls this on every store-backed command so a bad edit is reported on the
+    /// very next `ta` invocation rather than silently at the next compaction — and
+    /// because it never inspects the graph, it can't lock you out of the commands
+    /// (`resolve`, `dep remove`, `config get`) you'd use to fix a deeper problem.
     pub fn validate(&self) -> Result<(), DynError> {
+        let mut problems = Vec::new();
+        self.collect_struct_problems(&mut problems);
+        Self::finish(&problems)
+    }
+
+    /// Full validation: the struct-only checks plus consistency against the
+    /// materialized task graph. `ta config validate` and `ta config set` run this
+    /// so a manual edit (or a `set`) that contradicts the data — an edge of an
+    /// undeclared type, a blocker cycle, an inverse name colliding with another
+    /// type — is caught up front. This is the hook `type-schemas` extends with
+    /// per-type field validation.
+    pub fn validate_against(&self, state: &HashMap<String, TaskState>) -> Result<(), DynError> {
+        let mut problems = Vec::new();
+        self.collect_struct_problems(&mut problems);
+        self.collect_graph_problems(state, &mut problems);
+        Self::finish(&problems)
+    }
+
+    fn collect_struct_problems(&self, problems: &mut Vec<String>) {
         if self.compaction.keep_events < MIN_KEEP_EVENTS {
-            return Err(format!(
-                "config error: compaction.keep_events = {} is below the minimum of {}. \
-                 Retaining fewer events risks discarding history still needed to reconcile \
-                 merges. Edit .taska/config.toml.",
+            problems.push(format!(
+                "compaction.keep_events = {} is below the minimum of {}. Retaining fewer \
+                 events risks discarding history still needed to reconcile merges.",
                 self.compaction.keep_events, MIN_KEEP_EVENTS
-            )
-            .into());
+            ));
         }
-        Ok(())
+    }
+
+    /// Relationship/graph consistency checks against the materialized tasks.
+    fn collect_graph_problems(
+        &self,
+        state: &HashMap<String, TaskState>,
+        problems: &mut Vec<String>,
+    ) {
+        let types = &self.relationships.types;
+
+        // 1. Every typed relationship edge present in the data must use a declared
+        //    type — so renaming/removing a type that tasks still use is caught.
+        let mut undeclared: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for (id, task) in state {
+            for rel in task.relationships.keys() {
+                if !types.contains_key(rel) {
+                    undeclared.entry(rel).or_default().insert(id);
+                }
+            }
+        }
+        for (rel, who) in &undeclared {
+            let list: Vec<&str> = who.iter().copied().collect();
+            problems.push(format!(
+                "relationship type `{rel}` is used by {} task(s) ({}) but is not declared \
+                 in [relationships]",
+                who.len(),
+                list.join(", ")
+            ));
+        }
+
+        // 2. The blocker graph must be acyclic.
+        let blockers = self.relationships.blocker_types();
+        for cycle in crate::graph::dependency_cycles(state, &blockers) {
+            let shown = if cycle.len() == 1 {
+                format!("{} (depends on itself)", cycle[0])
+            } else {
+                cycle.join(" ↔ ")
+            };
+            problems.push(format!("blocker dependency cycle: {shown}"));
+        }
+
+        // 3. An inverse name must not collide with a *different* declared type, or
+        //    `ta dep` can't tell the forward edge from the inverse one.
+        for (name, def) in types {
+            if !def.inverse.is_empty() && def.inverse != *name && types.contains_key(&def.inverse) {
+                problems.push(format!(
+                    "relationship `{name}` has inverse `{}`, which is also a declared type — \
+                     ambiguous (use a distinct inverse name, or set inverse = \"{name}\" to make \
+                     it symmetric)",
+                    def.inverse
+                ));
+            }
+        }
+    }
+
+    fn finish(problems: &[String]) -> Result<(), DynError> {
+        if problems.is_empty() {
+            return Ok(());
+        }
+        let mut msg = format!("config validation failed ({} problem(s)):", problems.len());
+        for p in problems {
+            msg.push_str("\n  - ");
+            msg.push_str(p);
+        }
+        Err(msg.into())
     }
 }
 
@@ -529,5 +614,32 @@ mod tests {
 
         cfg.compaction.keep_events = MIN_KEEP_EVENTS;
         assert!(cfg.validate().is_ok(), "exactly the floor is allowed");
+    }
+
+    #[test]
+    fn validate_against_passes_for_defaults_and_flags_inverse_collision() {
+        let cfg = Config::default();
+        assert!(
+            cfg.validate_against(&HashMap::new()).is_ok(),
+            "default config + empty graph is valid"
+        );
+
+        // Declaring a `blocks` type collides with depends_on's inverse name.
+        let mut cfg = Config::default();
+        cfg.relationships.types.insert(
+            "blocks".to_string(),
+            RelationshipDef {
+                kind: RelType::Info,
+                inverse: String::new(),
+            },
+        );
+        let err = cfg
+            .validate_against(&HashMap::new())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("ambiguous"),
+            "inverse collision flagged: {err}"
+        );
     }
 }
