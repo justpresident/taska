@@ -122,9 +122,10 @@ impl Engine {
 
     /// Like [`Engine::materialize_state`], but also reports *orphaned* events:
     /// those whose target task did not exist when the event was applied, so the
-    /// event folded into nothing. These are `Update`/`AddDep`/`RemoveDep`/`Delete`
-    /// events on a `task_id` absent from the state map at apply time (`Create` is
-    /// never an orphan). The returned `Vec<u64>` holds their `seq`s in replay order.
+    /// event folded into nothing. These are `Update`/`Append`/`AddDep`/`RemoveDep`/
+    /// `Delete` events on a `task_id` absent from the state map at apply time
+    /// (`Create` is never an orphan). The returned `Vec<u64>` holds their `seq`s in
+    /// replay order.
     ///
     /// Replay stays non-fatal: orphans are merely counted, never errored. They can
     /// arise from the merge driver's removal-union, reverts, or manual edits that

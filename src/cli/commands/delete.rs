@@ -2,8 +2,7 @@
 
 use serde_json::Map;
 
-use crate::cli::vet_events;
-use crate::engine::Engine;
+use crate::cli::{materialize, vet_events};
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType};
 use crate::storage::EventStore;
@@ -14,12 +13,7 @@ pub fn cmd_delete(store: &impl EventStore, id: &str) -> Result<(), DynError> {
     let draft = MutationEvent::new(OpType::Delete, id, Map::new());
     let config = store.config().clone();
     store.append_checked(&|baseline, log| {
-        let state = Engine::materialize_state(
-            baseline.to_vec(),
-            log.to_vec(),
-            &config.workflow.status_field,
-            &config.workflow.done_status,
-        );
+        let state = materialize(&config, baseline, log);
         vet_events(std::slice::from_ref(&draft), &state, &config)
     })?;
     println!("Deleted task `{id}`");

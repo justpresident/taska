@@ -1,5 +1,5 @@
-//! The `ta dep` command group — add, remove, list, and inspect typed
-//! relationship edges between tasks.
+//! The `ta dep` command group — add, remove, and inspect (tree/cycles/plan)
+//! typed relationship edges between tasks.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -7,9 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use clap::Subcommand;
 use serde_json::{Map, Value};
 
-use crate::cli::{state_of, vet_events};
+use crate::cli::{materialize, state_of, vet_events};
 use crate::config::RelationshipDef;
-use crate::engine::Engine;
 use crate::error::DynError;
 use crate::format::OutputArgs;
 use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, DEP_KEY, DEP_TYPE_KEY};
@@ -20,6 +19,9 @@ use crate::storage::EventStore;
 #[derive(Subcommand)]
 pub enum DepAction {
     /// Add typed edge(s): `ta dep add <task> depends_on=<other> [relates_to=<x> …]`
+    ///
+    /// Both tasks must exist and a task can't reference itself; a duplicate edge
+    /// is a no-op. At most one blocker between a pair, and one parent per task.
     Add {
         task: String,
         /// `type=target` pairs (each `type` must be a declared relationship type)
@@ -143,12 +145,7 @@ fn dep_write(
     let hierarchy = store.config().relationships.hierarchy_types();
     let config = store.config().clone();
     let written = store.append_checked(&|baseline, log| {
-        let state = Engine::materialize_state(
-            baseline.to_vec(),
-            log.to_vec(),
-            &config.workflow.status_field,
-            &config.workflow.done_status,
-        );
+        let state = materialize(&config, baseline, log);
         if !removing {
             validate_blocker_additions(&resolved, &state, &blockers, &hierarchy)?;
         }

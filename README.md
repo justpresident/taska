@@ -153,6 +153,21 @@ done_status = "closed"
 [merge]
 on_conflict = "surface"
 
+# Typed relationship edges. Each `[relationships.<name>]` declares a type usable
+# with `ta dep add/remove`. `type` is its semantics: "blocker" gates readiness and
+# cycle detection, "hierarchy" is a parent/child subtask edge (gates like a blocker
+# but renders distinctly), "info" is informational only. `inverse` names the reverse
+# edge `show` surfaces ("" = one-way). `depends_on` is the built-in default blocker.
+[relationships.depends_on]
+type = "blocker"
+inverse = "blocks"
+[relationships.has_subtask]
+type = "hierarchy"
+inverse = "subtask_of"
+[relationships.relates_to]
+type = "info"
+inverse = "relates_to"   # symmetric
+
 [display]
 # Columns for list/ready (and the field order used by --format json).
 # "id" and "deps" are built-ins; any other name is a task field. Override per
@@ -166,6 +181,10 @@ max_width = 40
 # Default column to sort list/ready by (ascending; --sort overrides,
 # --reverse flips). Any field, "id", or "deps"; empty/unknown falls back to id.
 sort = "create_time"
+# Default layout per command: "table" (aligned columns) or "list" (a vertical
+# field: value record per task). --layout overrides for one run.
+list_layout = "table"
+show_layout = "list"
 
 # Per-column truncation overrides: a column listed here is truncated to its own
 # width instead of max_width (0 = no limit). --full ignores these entirely.
@@ -194,7 +213,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 | `ta dep add <task> <type>=<target> …` | Add typed relationship edge(s); each `type` must be declared in `[relationships]` (e.g. `ta dep add api depends_on=db relates_to=ui`). A `hierarchy` type like `has_subtask` makes a parent/child edge that gates like a blocker but renders distinctly. Rejects a second blocking edge between the same pair, or a second parent for a task |
 | `ta dep remove <task> <type>=<target> …` | Remove typed edge(s); a type's configured `inverse` name works too (`ta dep remove db blocks=api` removes `api depends_on db`) |
 | `ta dep tree [<task> …]` | ASCII dependency tree with a shortened title per node, colored on a TTY (done tasks dimmed + `✓`). Shows the exact graph by default — never spliced; `--open` prunes fully-resolved branches. `--sort`/`--reverse` order siblings. Subtasks are tagged `[subtask]`, a parent rolls up `[subtasks done/total]`, shared nodes collapse, cycles are flagged |
-| `ta dep cycles` | Report any cycles in the `depends_on` graph |
+| `ta dep cycles` | Report cycles in the blocker graph (`depends_on` plus any `blocker`/`hierarchy` relationship edges) |
 | `ta dep plan <goal> …` | A goal's not-done transitive prerequisites in dependency order — "do exactly these, in this order". `--critical` narrows to the longest single chain (the critical path) |
 | `ta delete <id>` | Delete a task |
 | `ta list [criteria...] [--open] [--ready]` | List tasks, optionally filtered by AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`; `field` may be a task field, `id`, or `deps` (e.g. `ta list status~open priority=3`). `--open` limits to not-done tasks; `--ready` to not-done tasks whose dependencies are all done. With no criteria, lists everything |
@@ -207,6 +226,8 @@ Because the times are folded into the baseline at compaction, they survive even 
 | `ta resolve` | Review and clear a surfaced merge conflict |
 
 Field values are parsed as JSON when possible (`priority=3` is a number, `status=open` a string). A value of `@PATH` is read from that file and `@-` from stdin — taken verbatim as a string (one trailing newline trimmed); this is the way to pass long or shell-hostile text (notes, descriptions) without fighting argv quoting, e.g. `ta update api notes=@notes.md` or `… notes=@-`. Write a literal `@` with `@@` (`owner=@@alice`). The keys `seq`, `timestamp`, `op`, `task_id`, and `_meta` are reserved.
+
+Mutations are **verified before they're logged** (atomically, under the store lock). Rejected: creating a task that already exists; updating, deleting, or adding a dependency to a task that doesn't; a dependency on itself; `+=` on the single-valued status field; and setting a reserved or *computed* field name (`id`, `deps`, the timestamp/graph columns, or a relationship type name — their value is derived, so a user value would be invisible). Setting a field to the value it already has, or re-adding an edge that already exists, writes nothing rather than bloating the log.
 
 `list` and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON — one object per line — for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, `--columns id,status,…` to pick the columns for one run (its `--help` lists the always-available computed columns), `--sort <column>` / `--reverse` to order the rows (`list`; default column from `[display].sort`), and `--layout table|list` to switch between an aligned table and a vertical `field: value` record per task. The per-command layout default lives in `[display]` (`list_layout` defaults to `table`, `show_layout` to `list`), alongside the columns and `max_width`.
 

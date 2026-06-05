@@ -1,7 +1,6 @@
 //! `ta update` — set (`=`) and/or append to (`+=`) fields on a task.
 
-use crate::cli::{parse_field_ops, vet_events};
-use crate::engine::Engine;
+use crate::cli::{materialize, parse_field_ops, vet_events};
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType};
 use crate::storage::EventStore;
@@ -24,12 +23,7 @@ pub fn cmd_update(store: &impl EventStore, id: &str, fields: &[String]) -> Resul
     // value writes nothing rather than bloating the log).
     let config = store.config().clone();
     let written = store.append_checked(&|baseline, log| {
-        let state = Engine::materialize_state(
-            baseline.to_vec(),
-            log.to_vec(),
-            &config.workflow.status_field,
-            &config.workflow.done_status,
-        );
+        let state = materialize(&config, baseline, log);
         vet_events(&events, &state, &config)
     })?;
     if written.is_empty() {

@@ -406,7 +406,8 @@ impl RelType {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct RelationshipDef {
-    /// `blocker` (gates readiness/cycles) or `info` (informational). The config
+    /// `blocker` (gates readiness/cycles), `hierarchy` (parent/child — gates like
+    /// a blocker but renders as subtasks), or `info` (informational). The config
     /// key is `type`.
     #[serde(rename = "type")]
     pub kind: RelType,

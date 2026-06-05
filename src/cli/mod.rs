@@ -40,6 +40,9 @@ enum Commands {
     /// Initialize a taska repository environment
     Init,
     /// Create a new schema-agnostic task: `ta create <id> [field=value ...]`
+    ///
+    /// Errors if `<id>` already exists or a field name is reserved/computed
+    /// (`id`, `deps`, the timestamp/graph columns, relationship type names).
     Create {
         id: String,
         /// Fields as `key=value` (parsed as JSON when possible). `key=@FILE` reads
@@ -47,6 +50,9 @@ enum Commands {
         fields: Vec<String>,
     },
     /// Update a task: `=` sets a field, `+=` appends (e.g. `status=done log+=note`)
+    ///
+    /// The task must exist; setting a field to its current value is a no-op
+    /// (nothing is written), and `+=` is rejected on the single-valued status field.
     Update {
         id: String,
         /// `key=value` sets a field, `key+=value` appends (one entry per line;
@@ -60,7 +66,7 @@ enum Commands {
         #[command(subcommand)]
         action: DepAction,
     },
-    /// Delete a task: `ta delete <id>`
+    /// Delete a task: `ta delete <id>` (errors if it doesn't exist)
     Delete { id: String },
     /// List tasks, optionally filtered: `ta list status~open priority=3 --open`
     List {
@@ -276,10 +282,27 @@ pub(crate) fn replay_report(
     Engine::materialize_report(baseline, mutations, &w.status_field, &w.done_status)
 }
 
+/// Materialize from raw baseline + log slices, using `config`'s workflow names.
+/// The variant the `append_checked` verifier closures use: they hold slices
+/// (read under the store lock), not a store, so can't go through [`replay`].
+pub(crate) fn materialize(
+    config: &Config,
+    baseline: &[TaskState],
+    log: &[MutationEvent],
+) -> HashMap<String, TaskState> {
+    let w = &config.workflow;
+    Engine::materialize_state(
+        baseline.to_vec(),
+        log.to_vec(),
+        &w.status_field,
+        &w.done_status,
+    )
+}
+
 /// Load and materialize the current task map from any store.
 ///
-/// Replay also reports *orphaned* events — `Update`/`AddDep`/`RemoveDep`/`Delete`
-/// events whose target task no longer exists, which apply to nothing. They are a
+/// Replay also reports *orphaned* events — `Update`/`Append`/`AddDep`/`RemoveDep`/
+/// `Delete` events whose target task no longer exists, which apply to nothing. They are a
 /// silent symptom of a dropped `Create` (from the merge driver's removal-union, a
 /// revert, or a manual edit), so every read command warns about them on STDERR
 /// and points at `ta resolve`. The warning never blocks the read.
@@ -436,17 +459,20 @@ const RESERVED_FIELD_KEYS: &[&str] = &["seq", "timestamp", "op", "task_id", "_me
 /// redundant ones, returning exactly the events worth appending.
 ///
 /// Meant to run inside the store's write lock (via `EventStore::append_checked`),
-/// so the verify-then-write is atomic and can't race a concurrent writer. Rules:
-/// - `Create` of an existing id — or any other op whose target task is absent —
-///   is **rejected** (a hard error; nothing is written).
+/// so the verify-then-write is atomic and can't race a concurrent writer. Rules
+/// (a rejection is a hard error — nothing in the batch is written):
+/// - Setting a reserved/computed field name (the envelope keys, `id`/`deps`/`dep`,
+///   the timestamp and graph columns, relationship names) is **rejected**.
+/// - `Create` of an existing id — or any op whose target task is absent (incl.
+///   `Delete`) — is **rejected**, as is an `AddDep` to itself or to a missing
+///   target.
 /// - An `Update` keeps only the fields that actually change (a value already
 ///   equal, or a `null`-unset of an already-absent field, is dropped); an
 ///   `Update` left with no fields is dropped entirely.
-/// - `AddDep` of an existing edge, `RemoveDep` of an absent one, and `Delete` of
-///   an absent task are dropped as no-ops.
+/// - `AddDep` of an existing edge and `RemoveDep` of an absent one are dropped as
+///   no-ops.
 /// - `Append` (`+=`) never lands on a no-op, but is rejected on the single-valued
-///   status field (reserved keys are already blocked at parse). This is where
-///   per-field type-schema checks will plug in later.
+///   status field. This is where per-field type-schema checks will plug in later.
 pub(crate) fn vet_events(
     drafts: &[MutationEvent],
     state: &HashMap<String, TaskState>,

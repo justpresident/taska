@@ -214,7 +214,7 @@ fn compensate(
 }
 
 /// A dependency draft event with the `{ "dep": <id> }` payload shape that
-/// `cmd_dep` and the engine's `AddDep`/`RemoveDep` replay expect.
+/// `cmd_dep_group` and the engine's `AddDep`/`RemoveDep` replay expect.
 fn dep_event(op: OpType, task_id: &str, dep: &str) -> MutationEvent {
     let mut payload = Map::new();
     payload.insert(DEP_KEY.to_string(), Value::String(dep.to_string()));
