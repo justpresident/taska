@@ -58,12 +58,26 @@ pub(crate) enum OutputFormat {
     Jsonl,
 }
 
-/// Display flags shared by `list` and `show`.
+/// The machine-format + color flags EVERY output command shares. Tabular
+/// commands flatten this into [`DisplayArgs`]; structured commands (`status`,
+/// `dep *`) take it directly and route through [`emit`], so `--format`/`--no-color`
+/// behave identically everywhere.
 #[derive(Args, Clone)]
-pub(crate) struct DisplayArgs {
-    /// Output format: human (aligned table), json (array), or jsonl (NDJSON)
+pub(crate) struct OutputArgs {
+    /// Output format: human, json (pretty array/object), or jsonl (NDJSON)
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     pub(crate) format: OutputFormat,
+    /// Disable ANSI color (also auto-disabled when stdout is not a TTY)
+    #[arg(long)]
+    pub(crate) no_color: bool,
+}
+
+/// Display flags shared by `list` and `show`: the common [`OutputArgs`] plus the
+/// tabular extras (columns/sort/layout/full).
+#[derive(Args, Clone)]
+pub(crate) struct DisplayArgs {
+    #[command(flatten)]
+    pub(crate) output: OutputArgs,
     /// Show every field, not just the configured columns
     #[arg(long)]
     pub(crate) full: bool,
@@ -82,9 +96,30 @@ pub(crate) struct DisplayArgs {
     /// per-command default lives in `[display]` (`list_layout`/`show_layout`)
     #[arg(long, value_enum)]
     pub(crate) layout: Option<Layout>,
-    /// Disable ANSI color (also auto-disabled when stdout is not a TTY)
-    #[arg(long)]
-    pub(crate) no_color: bool,
+}
+
+/// Emit `value` per the chosen format: the prebuilt `human` string, pretty JSON,
+/// or NDJSON (one line per top-level array element, else one compact line). Color
+/// is the caller's concern (human output only) — json/jsonl are never colored.
+/// The single output dispatch for the structured commands (`status`, `dep *`).
+pub(crate) fn emit(out: &OutputArgs, human: &str, value: &Value) {
+    match out.format {
+        OutputFormat::Human => println!("{human}"),
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(value).unwrap_or_default()
+            );
+        }
+        OutputFormat::Jsonl => match value {
+            Value::Array(items) => {
+                for item in items {
+                    println!("{}", serde_json::to_string(item).unwrap_or_default());
+                }
+            }
+            other => println!("{}", serde_json::to_string(other).unwrap_or_default()),
+        },
+    }
 }
 
 /// Sort a collected task set by the display args and print it, with `empty` as
@@ -106,7 +141,7 @@ pub(crate) fn print_tasks(
 fn render(tasks: &[&TaskState], display: &DisplayArgs, cfg: &DisplayConfig, empty: &str) -> String {
     // Only the human table needs an explicit empty placeholder; json/jsonl render
     // their own empty forms (`[]` / no lines).
-    if display.format == OutputFormat::Human && tasks.is_empty() {
+    if display.output.format == OutputFormat::Human && tasks.is_empty() {
         return empty.to_string();
     }
     let columns = resolve_columns(display, cfg, tasks);
@@ -122,11 +157,11 @@ pub(crate) fn render_rows(
     display: &DisplayArgs,
     cfg: &DisplayConfig,
 ) -> String {
-    match display.format {
+    match display.output.format {
         OutputFormat::Json => render_json(tasks, columns),
         OutputFormat::Jsonl => render_jsonl(tasks, columns),
         OutputFormat::Human => {
-            let color = want_color(display.no_color);
+            let color = want_color(display.output.no_color);
             match display.layout.unwrap_or(Layout::Table) {
                 Layout::Table => render_human(
                     tasks,
@@ -552,13 +587,15 @@ mod tests {
         let none = task("d", &[], &[]); // no priority -> sorts last (ascending)
         let cfg = DisplayConfig::default();
         let args = |sort: &str, reverse: bool| DisplayArgs {
-            format: OutputFormat::Human,
+            output: OutputArgs {
+                format: OutputFormat::Human,
+                no_color: false,
+            },
             full: false,
             columns: None,
             sort: Some(sort.to_string()),
             reverse,
             layout: None,
-            no_color: false,
         };
         let ids =
             |tasks: &[&TaskState]| -> Vec<String> { tasks.iter().map(|t| t.id.clone()).collect() };

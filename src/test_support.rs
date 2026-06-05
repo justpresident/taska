@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::config::{Config, TimestampConfig};
 use crate::error::DynError;
-use crate::format::{DisplayArgs, OutputFormat};
+use crate::format::{DisplayArgs, OutputArgs, OutputFormat};
 use crate::model::{MutationEvent, TaskState};
 use crate::storage::EventStore;
 
@@ -90,12 +90,14 @@ pub fn state(tasks: &[TaskState]) -> HashMap<String, TaskState> {
 /// Build [`DisplayArgs`] with the non-format flags at their defaults.
 pub fn display(format: OutputFormat, full: bool, columns: Option<&[&str]>) -> DisplayArgs {
     DisplayArgs {
-        format,
+        output: OutputArgs {
+            format,
+            no_color: false,
+        },
         full,
         columns: columns.map(|c| c.iter().map(|s| (*s).to_string()).collect()),
         sort: None,
         reverse: false,
         layout: None,
-        no_color: false,
     }
 }

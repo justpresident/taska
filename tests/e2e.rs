@@ -746,8 +746,9 @@ fn status_summarizes_counts_blocked_and_ready() {
         "{human}"
     );
 
-    // JSON form is a single object with the computed fields.
-    let json = ta(&dir, &["status", "--format", "json"]);
+    // JSON form is a single object with the computed fields (jsonl = one compact
+    // line; `--format json` is the same data pretty-printed).
+    let json = ta(&dir, &["status", "--format", "jsonl"]);
     assert!(json.contains(r#""total":3"#), "json total: {json}");
     assert!(json.contains(r#""closed":1"#), "one done task: {json}");
     assert!(
@@ -1900,7 +1901,7 @@ fn revert_to_empty_log_is_handled() {
         "the reverted task must be gone and `list` must not error"
     );
     assert!(
-        ta(&dir, &["status", "--format", "json"]).contains(r#""total":0"#),
+        ta(&dir, &["status", "--format", "jsonl"]).contains(r#""total":0"#),
         "an emptied log reports zero tasks"
     );
 }
@@ -2788,6 +2789,58 @@ fn dep_add_enforces_single_blocker_and_single_parent() {
             .success(),
         "idempotent re-add allowed"
     );
+}
+
+#[test]
+fn output_commands_are_format_and_color_consistent() {
+    let dir = fresh_dir("output-consistency");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a", "status=open"]);
+    ta(&dir, &["create", "b", "status=open"]);
+    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
+
+    // Every command on the shared output pipeline must honor `--format` and color
+    // identically: human is escape-free off-TTY, json/jsonl parse and never color.
+    // (dep tree/plan/cycles join this list as they're migrated.)
+    let commands: Vec<Vec<&str>> = vec![vec!["list"], vec!["show", "a"], vec!["status"]];
+    for base in &commands {
+        let label = base.join(" ");
+        let no_esc = |out: &str, what: &str| {
+            assert!(
+                !out.contains('\x1b'),
+                "`ta {label}` {what} must be escape-free: {out:?}"
+            );
+        };
+
+        no_esc(&ta(&dir, base), "human");
+
+        // --no-color is accepted everywhere.
+        let mut nc = base.clone();
+        nc.push("--no-color");
+        assert!(
+            run(ta_bin(), &dir, &nc).status.success(),
+            "`ta {label} --no-color` ok"
+        );
+
+        // --format json: one valid JSON value, never colored.
+        let mut j = base.clone();
+        j.extend(["--format", "json"]);
+        let json = ta(&dir, &j);
+        no_esc(&json, "json");
+        serde_json::from_str::<serde_json::Value>(&json)
+            .unwrap_or_else(|e| panic!("`ta {label} --format json` invalid: {e}: {json}"));
+
+        // --format jsonl: each non-empty line is valid JSON, never colored.
+        let mut jl = base.clone();
+        jl.extend(["--format", "jsonl"]);
+        let jsonl = ta(&dir, &jl);
+        no_esc(&jsonl, "jsonl");
+        for line in jsonl.lines().filter(|l| !l.trim().is_empty()) {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|e| panic!("`ta {label} --format jsonl` bad line: {e}: {line}"));
+        }
+    }
 }
 
 #[test]

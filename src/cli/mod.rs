@@ -17,7 +17,7 @@ use serde_json::{Map, Value};
 use crate::config::{Config, RelationshipDef};
 use crate::engine::Engine;
 use crate::error::DynError;
-use crate::format::{DisplayArgs, OutputFormat};
+use crate::format::{DisplayArgs, OutputArgs};
 use crate::merge;
 use crate::model::{MutationEvent, TaskState};
 use crate::storage::{EventStore, FileStore};
@@ -85,9 +85,8 @@ enum Commands {
     },
     /// Summary counts: total, per-status, blocked, ready, closed
     Status {
-        /// Render as a human summary or a JSON object
-        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
-        format: OutputFormat,
+        #[command(flatten)]
+        output: OutputArgs,
     },
     /// Undo the last event(s): `ta undo [--count N] [--remove] [--force]`
     Undo {
@@ -231,9 +230,9 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             )
         }
         Commands::Show { id, display } => cmd_show(store, &id, &display, &store.config().display),
-        Commands::Status { format } => {
+        Commands::Status { output } => {
             let workflow = store.config().workflow.clone();
-            cmd_status(store, &workflow, format)
+            cmd_status(store, &workflow, &output)
         }
         Commands::Undo {
             count,

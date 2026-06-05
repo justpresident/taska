@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::cli::state_of;
 use crate::config::WorkflowConfig;
 use crate::error::DynError;
-use crate::format::OutputFormat;
+use crate::format::{emit, sgr, want_color, OutputArgs};
 use crate::graph;
 use crate::model::{is_done, TaskState};
 use crate::storage::EventStore;
@@ -73,23 +73,20 @@ fn status_summary(
 pub fn cmd_status(
     store: &impl EventStore,
     workflow: &WorkflowConfig,
-    format: OutputFormat,
+    output: &OutputArgs,
 ) -> Result<(), DynError> {
     let state = state_of(store)?;
     let blockers = store.config().relationships.blocker_types();
     let summary = status_summary(&state, workflow, &blockers)?;
-    let out = match format {
-        // The summary is a single object, so json and jsonl render identically.
-        OutputFormat::Json | OutputFormat::Jsonl => render_status_json(&summary),
-        OutputFormat::Human => render_status_human(&summary),
-    };
-    println!("{out}");
+    let human = render_status_human(&summary, want_color(output.no_color));
+    emit(output, &human, &status_value(&summary));
     Ok(())
 }
 
 /// Human summary: an aligned `Total`, a per-status block (sorted, with an
 /// `(unset)` bucket last), then the computed `Ready`/`Blocked`/`Closed` lines.
-fn render_status_human(s: &StatusSummary) -> String {
+/// Labels are bolded when `color`.
+fn render_status_human(s: &StatusSummary, color: bool) -> String {
     // Per-status rows, indented; the no-status bucket sorts last under `(unset)`.
     let mut status_rows: Vec<(String, usize)> = s
         .by_status
@@ -121,12 +118,15 @@ fn render_status_human(s: &StatusSummary) -> String {
         .map(|c| c.to_string().len())
         .max()
         .unwrap_or(1);
-    let row = |label: &str, count: usize| format!("{label:<label_w$}  {count:>count_w$}");
+    let row = |label: &str, count: usize| {
+        let label = sgr(&format!("{label:<label_w$}"), "1", color);
+        format!("{label}  {count:>count_w$}")
+    };
 
     let mut lines = vec![
         row("Total", s.total),
         String::new(),
-        "By status:".to_string(),
+        sgr("By status:", "1", color),
     ];
     lines.extend(status_rows.iter().map(|(label, count)| row(label, *count)));
     lines.push(String::new());
@@ -134,23 +134,22 @@ fn render_status_human(s: &StatusSummary) -> String {
     lines.join("\n")
 }
 
-/// Machine-readable summary as a single compact JSON object, keys in a fixed
-/// order so the output is stable for scripting.
-fn render_status_json(s: &StatusSummary) -> String {
-    let by_status: Vec<String> = s
+/// The summary as a JSON object (a single value; `emit` renders it for
+/// json/jsonl). Keys serialize in sorted order — deterministic for scripting.
+fn status_value(s: &StatusSummary) -> Value {
+    let by_status: serde_json::Map<String, Value> = s
         .by_status
         .iter()
-        .map(|(k, v)| format!("{}:{v}", serde_json::to_string(k).unwrap_or_default()))
+        .map(|(k, v)| (k.clone(), Value::from(*v)))
         .collect();
-    format!(
-        "{{\"total\":{},\"by_status\":{{{}}},\"no_status\":{},\"ready\":{},\"blocked\":{},\"closed\":{}}}",
-        s.total,
-        by_status.join(","),
-        s.no_status,
-        s.ready,
-        s.blocked,
-        s.closed
-    )
+    serde_json::json!({
+        "total": s.total,
+        "by_status": by_status,
+        "no_status": s.no_status,
+        "ready": s.ready,
+        "blocked": s.blocked,
+        "closed": s.closed,
+    })
 }
 
 #[cfg(test)]
@@ -185,7 +184,7 @@ mod tests {
         assert_eq!(s.ready + s.blocked, not_done);
 
         // Human output names the sections and a `(unset)` bucket for no-status.
-        let human = render_status_human(&s);
+        let human = render_status_human(&s, false);
         assert!(human.contains("Total"), "human: {human}");
         assert!(human.contains("By status:"), "human: {human}");
         assert!(human.contains("(unset)"), "no-status bucket shown: {human}");
@@ -195,8 +194,7 @@ mod tests {
         );
 
         // JSON output is a single valid object with the computed fields.
-        let json = render_status_json(&s);
-        let parsed: Value = serde_json::from_str(&json).unwrap();
+        let parsed = status_value(&s);
         assert_eq!(parsed["total"], 5);
         assert_eq!(parsed["ready"], 3);
         assert_eq!(parsed["blocked"], 1);
