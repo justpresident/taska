@@ -2568,6 +2568,33 @@ fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
 }
 
 #[test]
+fn dep_tree_marks_subtasks_and_rolls_up_progress() {
+    let dir = fresh_dir("subtask-tree");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    for id in ["epic", "a", "b", "dep1"] {
+        ta(&dir, &["create", id, "status=open"]);
+    }
+    ta(&dir, &["dep", "add", "epic", "has_subtask=a"]);
+    ta(&dir, &["dep", "add", "epic", "has_subtask=b"]);
+    ta(&dir, &["dep", "add", "epic", "depends_on=dep1"]);
+    ta(&dir, &["update", "a", "status=closed"]); // 1 of 2 subtasks done
+
+    let tree = ta(&dir, &["dep", "tree", "epic"]);
+    assert!(
+        tree.contains("epic [subtasks 1/2]"),
+        "parent rolls up child completion: {tree}"
+    );
+    assert!(tree.contains("a [subtask]"), "subtask tagged: {tree}");
+    assert!(tree.contains("b [subtask]"), "subtask tagged: {tree}");
+    // A plain depends_on edge is a dependency, not a subtask — never tagged.
+    assert!(
+        tree.contains("dep1") && !tree.contains("dep1 [subtask]"),
+        "plain dependency untagged: {tree}"
+    );
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);

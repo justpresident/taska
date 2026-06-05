@@ -242,14 +242,27 @@ fn relationship_edges(
     display
 }
 
+/// Shared, read-only context for rendering a `dep tree`.
+struct TreeCtx<'a> {
+    state: &'a HashMap<String, TaskState>,
+    blockers: &'a BTreeSet<String>,
+    hierarchy: &'a BTreeSet<String>,
+    status_field: &'a str,
+    done_status: &'a str,
+}
+
 /// `ta dep tree` — ASCII tree of the blocker graph (the `depends_on` field plus
-/// any `type = "blocker"` relationship), children nested under their dependents.
-/// Roots default to tasks nothing depends on (the top-level goals); if every task
-/// has a dependent (e.g. a pure cycle), all tasks are used as roots so nothing is
-/// hidden. Non-`depends_on` blocker edges are labelled with their type.
+/// any `blocker`- or `hierarchy`-typed relationship), children nested under their
+/// dependents. Roots default to tasks nothing depends on (the top-level goals); if
+/// every task has a dependent (e.g. a pure cycle), all tasks are used as roots so
+/// nothing is hidden. Hierarchy (subtask) edges are tagged `[subtask]` and a
+/// parent rolls up its child completion as `[subtasks done/total]`; other
+/// non-`depends_on` blocker edges are labelled with their type.
 fn dep_tree(store: &impl EventStore, tasks: &[String]) -> Result<(), DynError> {
     let state = state_of(store)?;
     let blockers = store.config().relationships.blocker_types();
+    let hierarchy = store.config().relationships.hierarchy_types();
+    let wf = store.config().workflow.clone();
     let roots = if tasks.is_empty() {
         let depended: BTreeSet<&str> = state
             .values()
@@ -281,68 +294,99 @@ fn dep_tree(store: &impl EventStore, tasks: &[String]) -> Result<(), DynError> {
         println!("(no tasks)");
         return Ok(());
     }
+    let ctx = TreeCtx {
+        state: &state,
+        blockers: &blockers,
+        hierarchy: &hierarchy,
+        status_field: &wf.status_field,
+        done_status: &wf.done_status,
+    };
     let mut out = String::new();
     let mut expanded: HashSet<String> = HashSet::new();
     for root in &roots {
         out.push_str(root);
+        out.push_str(&rollup_suffix(&ctx, root));
         out.push('\n');
         expanded.insert(root.clone());
         let mut path = vec![root.clone()];
-        push_subtree(
-            &state,
-            root,
-            "",
-            &blockers,
-            &mut out,
-            &mut path,
-            &mut expanded,
-        );
+        push_subtree(&ctx, root, "", &mut out, &mut path, &mut expanded);
     }
     print!("{out}");
     Ok(())
 }
 
-/// Append `id`'s blocker children to `out` with box-drawing connectors,
-/// labelling non-`depends_on` edges with their type. `path` (ancestors) breaks
-/// cycles; `expanded` collapses a node already shown in full elsewhere to `…` so
-/// a shared DAG node isn't reprinted.
+/// A parent's subtask-completion suffix, ` [subtasks done/total]`, over its direct
+/// hierarchy children; empty for a task with none.
+fn rollup_suffix(ctx: &TreeCtx, id: &str) -> String {
+    let Some(task) = ctx.state.get(id) else {
+        return String::new();
+    };
+    let (mut done, mut total) = (0usize, 0usize);
+    for htype in ctx.hierarchy {
+        for child in task.relationships.get(htype).into_iter().flatten() {
+            total += 1;
+            if ctx
+                .state
+                .get(child)
+                .is_some_and(|t| is_done(t, ctx.status_field, ctx.done_status))
+            {
+                done += 1;
+            }
+        }
+    }
+    if total == 0 {
+        String::new()
+    } else {
+        format!(" [subtasks {done}/{total}]")
+    }
+}
+
+/// Append `id`'s blocker children to `out` with box-drawing connectors: hierarchy
+/// edges tagged `[subtask]`, other non-`depends_on` edges labelled with their
+/// type, and each node's own subtask rollup appended. `path` (ancestors) breaks
+/// cycles; `expanded` collapses a node already shown in full elsewhere to `…`.
 fn push_subtree(
-    state: &HashMap<String, TaskState>,
+    ctx: &TreeCtx,
     id: &str,
     prefix: &str,
-    blockers: &BTreeSet<String>,
     out: &mut String,
     path: &mut Vec<String>,
     expanded: &mut HashSet<String>,
 ) {
-    let Some(task) = state.get(id) else { return };
-    let children = crate::graph::blocker_edges(task, blockers);
+    let Some(task) = ctx.state.get(id) else {
+        return;
+    };
+    let children = crate::graph::blocker_edges(task, ctx.blockers);
     let n = children.len();
-    for (i, (child, kind)) in children.iter().enumerate() {
+    for (i, &(child, kind)) in children.iter().enumerate() {
         let last = i + 1 == n;
         out.push_str(prefix);
         out.push_str(if last { "└─ " } else { "├─ " });
         out.push_str(child);
-        if *kind != "depends_on" {
+        if ctx.hierarchy.contains(kind) {
+            out.push_str(" [subtask]");
+        } else if kind != "depends_on" {
             out.push_str(" [");
             out.push_str(kind);
             out.push(']');
         }
-        let has_subtree = state
-            .get(*child)
-            .is_some_and(|t| !crate::graph::blocker_edges(t, blockers).is_empty());
-        if !state.contains_key(*child) {
+        out.push_str(&rollup_suffix(ctx, child));
+        let has_subtree = ctx
+            .state
+            .get(child)
+            .is_some_and(|t| !crate::graph::blocker_edges(t, ctx.blockers).is_empty());
+        if !ctx.state.contains_key(child) {
             out.push_str(" (missing)\n");
-        } else if path.iter().any(|p| p == child) {
+        } else if path.iter().any(|p| p.as_str() == child) {
             out.push_str(" (cycle)\n");
-        } else if expanded.contains(*child) && has_subtree {
+        } else if expanded.contains(child) && has_subtree {
             out.push_str(" …\n");
         } else {
             out.push('\n');
-            expanded.insert((*child).to_string());
-            path.push((*child).to_string());
+            expanded.insert(child.to_string());
+            path.push(child.to_string());
             let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
-            push_subtree(state, child, &child_prefix, blockers, out, path, expanded);
+            push_subtree(ctx, child, &child_prefix, out, path, expanded);
             path.pop();
         }
     }
