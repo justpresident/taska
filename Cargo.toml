@@ -21,6 +21,11 @@ path = "src/lib.rs"
 name = "ta"
 path = "src/main.rs"
 
+# No-dependency perf harness (plain `main()`, std timing — no criterion).
+[[bench]]
+name = "perf"
+harness = false
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

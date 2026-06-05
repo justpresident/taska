@@ -17,6 +17,7 @@ cargo test --test e2e                                # end-to-end tests only
 cargo test <name>                                    # a single test, e.g. cargo test crud_search_and_ready_workflow
 cargo clippy --all --all-features --all-targets -- -D warnings   # lint (CI fails on any warning; --all-targets also lints #[cfg(test)] code)
 cargo fmt --all                                      # format; CI runs `cargo fmt --all -- --check`
+cargo bench --bench perf                             # perf table (replay/compaction/merge); no-dep harness, harness=false
 ```
 
 CI (`.github/workflows/ci.yml`) runs test + clippy + fmt-check, and a separate coverage job via `cargo tarpaulin`.
