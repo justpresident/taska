@@ -145,22 +145,24 @@ about a tenth of a second, and half a million events in under a second.
 
 **Compaction** keeps that hot path cheap as history grows. Every command
 re-materializes the current state from the baseline plus only the retained tail
-(`keep_events`), never the whole log. Same logical state, two storage shapes:
+(`keep_events`), never the whole log. Each `history` below is one set of events
+in two storage shapes — the full log, vs a compacted store — that materialize to
+identical state:
 
-| store                                  | on disk | replay   |
-|----------------------------------------|---------|----------|
-| 500,000-event log, uncompacted         | 48.7 MB | 787.8 ms |
-| 125,000-task baseline + 5,000-event tail | 21.8 MB | 226.5 ms |
+| history        | stored as                         ________| on disk | replay   |
+|----------------|-------------------------------------------|---------|----------|
+| 100,000 events | full log                                  | 9.6 MB  | 118.1 ms |
+| 100,000 events | 25,000-task baseline + 5,000 events tail  | 4.7 MB  | 60.2 ms  |
+| 200,000 events | full log                                  | 19.3 MB | 294.1 ms |
+| 200,000 events | 50,000-task baseline + 5,000 events tail  | 8.9 MB  | 129.0 ms |
+| 500,000 events | full log                                  | 48.7 MB | 746.1 ms |
+| 500,000 events | 125,000-task baseline + 5,000 events tail | 21.8 MB | 225.4 ms |
 
-— a ~3.5× faster replay and ~2.2× smaller footprint. The win grows with how many
-events accumulate per task: this synthetic log only averages ~4 events/task, so
-the baseline still holds 125k task records; a real backlog of hundreds of tasks,
-each churning through many updates, folds away far more of its history.
-
-**Merge** of two branches diverged from a shared ancestor — 1,000 ancestor
-events plus 100 concurrent, conflicting `owner` edits per branch (100 genuine
-per-field conflicts to resolve) — completes in ~15 ms end to end, including
-reading the three logs and writing the result.
+The replay speedup widens as history deepens — `~2`× at 100k, `~3.3`× at 500k — at a
+roughly constant `~2.2`× smaller footprint. And it understates the real win: this
+synthetic log averages only ~4 events/task, so the baseline still holds a quarter
+as many records as there were events; a real backlog of hundreds of tasks, each
+churning through many updates, folds away far more of its history.
 
 ## Known limitation: reverting very old changes
 
