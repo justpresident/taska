@@ -83,9 +83,9 @@ fn log_bytes(log: &[MutationEvent]) -> usize {
 }
 
 /// On-disk size of a materialized baseline as JSONL (one task per line).
-fn baseline_bytes(state: &std::collections::HashMap<String, TaskState>) -> usize {
-    state
-        .values()
+fn baseline_bytes(states: &[TaskState]) -> usize {
+    states
+        .iter()
         .map(|t| serde_json::to_string(t).expect("ser").len() + 1)
         .sum()
 }
@@ -93,6 +93,20 @@ fn baseline_bytes(state: &std::collections::HashMap<String, TaskState>) -> usize
 fn median(mut times: Vec<Duration>) -> Duration {
     times.sort_unstable();
     times[times.len() / 2]
+}
+
+/// Median wall time of folding `log` over `baseline`. Pre-clones the (consumed)
+/// inputs each iteration so only the materialize itself is timed.
+fn bench_materialize(baseline: &[TaskState], log: &[MutationEvent]) -> Duration {
+    let times = (0..ITERS)
+        .map(|_| (baseline.to_vec(), log.to_vec()))
+        .map(|(b, l)| {
+            let start = Instant::now();
+            let _ = Engine::materialize_state(b, l, STATUS_FIELD, DONE_STATUS);
+            start.elapsed()
+        })
+        .collect();
+    median(times)
 }
 
 fn fmt_dur(d: Duration) -> String {
@@ -126,6 +140,27 @@ fn commas(n: usize) -> String {
     out
 }
 
+/// Count events by kind: (creates, updates, dependency-adds). `Update`/`Append`/
+/// `RemoveDep`/`Delete` all fold into "updates" — this generator only emits the
+/// first three kinds anyway.
+fn op_mix(log: &[MutationEvent]) -> (usize, usize, usize) {
+    let mut creates = 0;
+    let mut deps = 0;
+    for e in log {
+        match e.op {
+            OpType::Create => creates += 1,
+            OpType::AddDep => deps += 1,
+            _ => {}
+        }
+    }
+    (creates, log.len() - creates - deps, deps)
+}
+
+/// `part` as a whole-percent of `whole`, rounded.
+fn pct(part: usize, whole: usize) -> u64 {
+    ((part as f64 / whole as f64) * 100.0).round() as u64
+}
+
 fn write_log(path: &Path, log: &[MutationEvent]) {
     let body: String = log
         .iter()
@@ -135,74 +170,77 @@ fn write_log(path: &Path, log: &[MutationEvent]) {
 }
 
 fn bench_replay() {
-    println!("Replay / materialize — by log size and random-dependency density:\n");
-    println!("| density | events | log size | replay |");
+    // The `dep_pct` knob is the chance a *non-create* event is an `AddDep`; the
+    // "create / update / dep" column reports the resulting whole-log mix (creates
+    // are ~¼ of every log), so the composition is explicit rather than implied.
+    println!("Replay / materialize — by log size and event mix:\n");
+    println!("| events | create / update / dep | log size | replay |");
     println!("|---|---|---|---|");
-    for dep_pct in [5usize, 20, 50] {
-        for n in [1_000usize, 10_000, 100_000] {
+    for n in [1_000usize, 10_000, 100_000, 200_000, 500_000] {
+        for dep_pct in [5usize, 20, 50] {
             let log = gen_log(n, dep_pct);
-            let size = log_bytes(&log);
-            // Pre-clone inputs (materialize consumes its Vec) so only the
-            // materialize itself is timed.
-            let times = (0..ITERS)
-                .map(|_| log.clone())
-                .map(|input| {
-                    let start = Instant::now();
-                    let _ = Engine::materialize_state(Vec::new(), input, STATUS_FIELD, DONE_STATUS);
-                    start.elapsed()
-                })
-                .collect();
+            let (c, u, d) = op_mix(&log);
+            let t = bench_materialize(&[], &log);
             println!(
-                "| {dep_pct}% | {} | {} | {} |",
+                "| {} | {}% / {}% / {}% | {} | {} |",
                 commas(n),
-                fmt_bytes(size),
-                fmt_dur(median(times))
+                pct(c, n),
+                pct(u, n),
+                pct(d, n),
+                fmt_bytes(log_bytes(&log)),
+                fmt_dur(t),
             );
         }
     }
 }
 
 fn bench_compaction() {
-    // Compaction's *time* is just a replay of the folded prefix; its point is
-    // SIZE — folding old events into a compact baseline bounds on-disk growth.
-    let (n, dep_pct) = (100_000usize, 20usize);
+    // Compaction's payoff is the *everyday* replay: from a compacted store every
+    // command re-materializes the current state from the baseline plus only the
+    // retained tail (`keep_events`) — not the whole history. Same logical state,
+    // two storage shapes; compare on-disk size and replay time of each.
+    let (n, dep_pct) = (500_000usize, 20usize);
     let log = gen_log(n, dep_pct);
+    let (c, u, d) = op_mix(&log);
+
+    // Measure the uncompacted replay first, in a clean heap — before the 125k-task
+    // baseline is resident — so it agrees with the replay table above.
+    let cold = bench_materialize(&[], &log);
+
     let now = Utc
         .timestamp_opt(1_700_000_000 + n as i64, 0)
         .single()
         .expect("ts");
     let split = Engine::retention_split(&log, KEEP_EVENTS, 0, now);
-
-    let full = log_bytes(&log);
-    let baseline =
-        Engine::materialize_state(Vec::new(), log[..split].to_vec(), STATUS_FIELD, DONE_STATUS);
-    let after = baseline_bytes(&baseline) + log_bytes(&log[split..]);
-
-    let folded = &log[..split];
-    let times = (0..ITERS)
-        .map(|_| folded.to_vec())
-        .map(|input| {
-            let start = Instant::now();
-            let _ = Engine::materialize_state(Vec::new(), input, STATUS_FIELD, DONE_STATUS);
-            start.elapsed()
-        })
-        .collect();
+    let baseline: Vec<TaskState> =
+        Engine::materialize_state(Vec::new(), log[..split].to_vec(), STATUS_FIELD, DONE_STATUS)
+            .into_values()
+            .collect();
+    let recent = &log[split..];
+    let warm = bench_materialize(&baseline, recent);
 
     println!(
-        "\nCompaction — fold the old prefix into a baseline (keep_events={}, {dep_pct}% deps):\n",
-        commas(KEEP_EVENTS)
+        "\nCompaction — everyday replay reads the baseline + retained tail, not full history\n\
+         (keep_events={}, mix {}% / {}% / {}%):\n",
+        commas(KEEP_EVENTS),
+        pct(c, n),
+        pct(u, n),
+        pct(d, n),
     );
-    println!("| from | to | shrink | fold time |");
-    println!("|---|---|---|---|");
+    println!("| store | on disk | replay |");
+    println!("|---|---|---|");
     println!(
-        "| {}-event log ({}) | {} baseline + {} log ({}) | {:.1}× | {} |",
+        "| {}-event log, uncompacted | {} | {} |",
         commas(n),
-        fmt_bytes(full),
+        fmt_bytes(log_bytes(&log)),
+        fmt_dur(cold),
+    );
+    println!(
+        "| {}-task baseline + {}-event tail | {} | {} |",
         commas(baseline.len()),
         commas(n - split),
-        fmt_bytes(after),
-        full as f64 / after as f64,
-        fmt_dur(median(times))
+        fmt_bytes(baseline_bytes(&baseline) + log_bytes(recent)),
+        fmt_dur(warm),
     );
 }
 
