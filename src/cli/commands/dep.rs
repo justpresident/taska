@@ -90,24 +90,103 @@ fn dep_write(
     types: &BTreeMap<String, RelationshipDef>,
 ) -> Result<(), DynError> {
     let removing = matches!(op, OpType::RemoveDep);
-    let mut events = Vec::with_capacity(edges.len());
+    let mut resolved: Vec<(String, String, String)> = Vec::new();
     for edge in edges {
         let (name, target) = edge
             .split_once('=')
             .filter(|(t, v)| !t.is_empty() && !v.is_empty())
             .ok_or_else(|| format!("invalid edge `{edge}` (expected type=target)"))?;
-        for (owner, rel_type, dep) in resolve_edge(name, task, target, types, removing)? {
-            let mut payload = Map::new();
-            payload.insert("dep".to_string(), Value::String(dep));
-            // `depends_on` omits the type to stay legacy-shaped.
-            if rel_type != "depends_on" {
-                payload.insert("type".to_string(), Value::String(rel_type));
-            }
-            events.push(MutationEvent::new(op.clone(), owner, payload));
+        resolved.extend(resolve_edge(name, task, target, types, removing)?);
+    }
+    if !removing {
+        validate_blocker_additions(store, &resolved)?;
+    }
+    let mut events = Vec::with_capacity(resolved.len());
+    for (owner, rel_type, dep) in resolved {
+        let mut payload = Map::new();
+        payload.insert("dep".to_string(), Value::String(dep));
+        // `depends_on` omits the type to stay legacy-shaped.
+        if rel_type != "depends_on" {
+            payload.insert("type".to_string(), Value::String(rel_type));
         }
+        events.push(MutationEvent::new(op.clone(), owner, payload));
     }
     store.append_events(&events)?;
     println!("{verb} {} edge(s) on `{task}`", edges.len());
+    Ok(())
+}
+
+/// Reject blocker-edge additions that would break the structural invariants:
+/// (1) at most one blocking relationship between two tasks, and (2) a task may
+/// have at most one parent (one incoming `hierarchy` edge). Checked incrementally
+/// against the current state *plus* the edges added earlier in this command, so a
+/// pre-existing violation elsewhere never blocks an unrelated add.
+fn validate_blocker_additions(
+    store: &impl EventStore,
+    resolved: &[(String, String, String)],
+) -> Result<(), DynError> {
+    let blockers = store.config().relationships.blocker_types();
+    if !resolved
+        .iter()
+        .any(|(_, t, _)| blockers.contains(t.as_str()))
+    {
+        return Ok(());
+    }
+    let hierarchy = store.config().relationships.hierarchy_types();
+    let state = state_of(store)?;
+
+    // Seed the would-be view from current state: each owner's blocker target→type,
+    // and each child's parent.
+    let mut blocker_to: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut parent_of: HashMap<String, String> = HashMap::new();
+    for (id, task) in &state {
+        for (target, kind) in crate::graph::blocker_edges(task, &blockers) {
+            blocker_to
+                .entry(id.clone())
+                .or_default()
+                .insert(target.to_string(), kind.to_string());
+        }
+        for htype in &hierarchy {
+            for child in task.relationships.get(htype).into_iter().flatten() {
+                parent_of.insert(child.clone(), id.clone());
+            }
+        }
+    }
+
+    for (owner, rel_type, target) in resolved {
+        if !blockers.contains(rel_type.as_str()) {
+            continue;
+        }
+        let owner_map = blocker_to.entry(owner.clone()).or_default();
+        match owner_map.get(target).cloned() {
+            Some(existing) if existing != *rel_type => {
+                return Err(format!(
+                    "`{owner}` already has a `{existing}` relationship to `{target}`; only one \
+                     blocking relationship is allowed between two tasks"
+                )
+                .into());
+            }
+            Some(_) => {} // same type, idempotent
+            None => {
+                owner_map.insert(target.clone(), rel_type.clone());
+            }
+        }
+        if hierarchy.contains(rel_type.as_str()) {
+            match parent_of.get(target).cloned() {
+                Some(parent) if parent != *owner => {
+                    return Err(format!(
+                        "`{target}` is already a subtask of `{parent}`; a task can have only one \
+                         parent"
+                    )
+                    .into());
+                }
+                Some(_) => {}
+                None => {
+                    parent_of.insert(target.clone(), owner.clone());
+                }
+            }
+        }
+    }
     Ok(())
 }
 

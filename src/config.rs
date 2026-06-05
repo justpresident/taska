@@ -550,6 +550,24 @@ impl Config {
                 ));
             }
         }
+
+        // 4. At most one blocking relationship between any two tasks.
+        for (task, target, kinds) in crate::graph::duplicate_blocker_edges(state, &blockers) {
+            problems.push(format!(
+                "`{task}` has more than one blocking relationship to `{target}` ({}); only one \
+                 is allowed between two tasks",
+                kinds.join(", ")
+            ));
+        }
+
+        // 5. A task may have at most one parent (one incoming hierarchy edge).
+        let hierarchy = self.relationships.hierarchy_types();
+        for (child, parents) in crate::graph::multi_parent_tasks(state, &hierarchy) {
+            problems.push(format!(
+                "`{child}` is a subtask of multiple parents ({}); a task can have only one parent",
+                parents.join(", ")
+            ));
+        }
     }
 
     fn finish(problems: &[String]) -> Result<(), DynError> {
@@ -664,6 +682,43 @@ mod tests {
         assert!(
             err.contains("ambiguous"),
             "inverse collision flagged: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_against_flags_double_blocker_and_multiple_parents() {
+        use crate::test_support::task;
+        let into_state = |tasks: Vec<crate::model::TaskState>| -> HashMap<String, _> {
+            tasks.into_iter().map(|t| (t.id.clone(), t)).collect()
+        };
+
+        // `a` blocks-by-two: depends_on b (field) and has_subtask b (hierarchy).
+        let mut a = task("a", &["b"], &[]);
+        a.relationships
+            .insert("has_subtask".to_string(), vec!["b".to_string()]);
+        let err = Config::default()
+            .validate_against(&into_state(vec![a, task("b", &[], &[])]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("only one") && err.contains("blocking"),
+            "double blocker flagged: {err}"
+        );
+
+        // `c` is a subtask of both p1 and p2.
+        let mut p1 = task("p1", &[], &[]);
+        p1.relationships
+            .insert("has_subtask".to_string(), vec!["c".to_string()]);
+        let mut p2 = task("p2", &[], &[]);
+        p2.relationships
+            .insert("has_subtask".to_string(), vec!["c".to_string()]);
+        let err = Config::default()
+            .validate_against(&into_state(vec![p1, p2, task("c", &[], &[])]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("one parent"),
+            "multiple parents flagged: {err}"
         );
     }
 }

@@ -2676,6 +2676,50 @@ fn show_surfaces_typed_relationships_forward_and_inverse() {
 }
 
 #[test]
+fn dep_add_enforces_single_blocker_and_single_parent() {
+    let dir = fresh_dir("subtask-constraints");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    for id in ["a", "b", "e1", "e2", "c"] {
+        ta(&dir, &["create", id]);
+    }
+
+    // At most one blocking relationship between two tasks.
+    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
+    let out = run(ta_bin(), &dir, &["dep", "add", "a", "has_subtask=b"]);
+    assert!(
+        !out.status.success(),
+        "second blocking edge must be rejected"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("only one blocking relationship"),
+        "error names the rule: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // A task may have only one parent.
+    ta(&dir, &["dep", "add", "e1", "has_subtask=c"]);
+    let out = run(ta_bin(), &dir, &["dep", "add", "e2", "has_subtask=c"]);
+    assert!(!out.status.success(), "second parent must be rejected");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("only one parent"),
+        "error names the rule: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Same constraint when added from the child side via the inverse.
+    let out = run(ta_bin(), &dir, &["dep", "add", "c", "subtask_of=e2"]);
+    assert!(!out.status.success(), "inverse second-parent also rejected");
+
+    // Re-adding the exact same edge is idempotent, not a conflict.
+    assert!(
+        run(ta_bin(), &dir, &["dep", "add", "e1", "has_subtask=c"])
+            .status
+            .success(),
+        "idempotent re-add allowed"
+    );
+}
+
+#[test]
 fn output_to_a_closed_pipe_does_not_panic() {
     let dir = fresh_dir("broken-pipe");
     init_repo(&dir);

@@ -1,6 +1,6 @@
 //! Dependency graph: cycle detection, topological ordering, and readiness.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::BuildHasher;
 
 use petgraph::graphmap::DiGraphMap;
@@ -26,6 +26,61 @@ pub fn blocker_edges<'a>(
         }
     }
     edges
+}
+
+/// Pairs with more than one blocker-gating edge between them.
+///
+/// Returns `(task, target, conflicting type names)`. At most one blocking
+/// relationship is allowed between two tasks (e.g. not both `depends_on` and
+/// `has_subtask`).
+pub fn duplicate_blocker_edges<S: BuildHasher>(
+    state: &HashMap<String, TaskState, S>,
+    blockers: &BTreeSet<String>,
+) -> Vec<(String, String, Vec<String>)> {
+    let mut out = Vec::new();
+    for (id, task) in state {
+        let mut by_target: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for (target, kind) in blocker_edges(task, blockers) {
+            by_target.entry(target).or_default().insert(kind);
+        }
+        for (target, kinds) in by_target {
+            if kinds.len() > 1 {
+                out.push((
+                    id.clone(),
+                    target.to_string(),
+                    kinds.into_iter().map(str::to_string).collect(),
+                ));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Tasks that are a subtask of more than one parent: `(child, parent ids)`. A
+/// task may have at most one parent.
+pub fn multi_parent_tasks<S: BuildHasher>(
+    state: &HashMap<String, TaskState, S>,
+    hierarchy: &BTreeSet<String>,
+) -> Vec<(String, Vec<String>)> {
+    let mut parents: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (id, task) in state {
+        for htype in hierarchy {
+            for child in task.relationships.get(htype).into_iter().flatten() {
+                parents.entry(child).or_default().insert(id);
+            }
+        }
+    }
+    parents
+        .into_iter()
+        .filter(|(_, ps)| ps.len() > 1)
+        .map(|(child, ps)| {
+            (
+                child.to_string(),
+                ps.into_iter().map(str::to_string).collect(),
+            )
+        })
+        .collect()
 }
 
 /// A task's `(done, total)` direct hierarchy children — its subtask completion.
