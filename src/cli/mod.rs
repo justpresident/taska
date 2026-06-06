@@ -495,10 +495,31 @@ pub(crate) fn inverse_edges(
     display
 }
 
-/// Event keys that are struct fields, not schema-agnostic task fields. Letting a
-/// user field shadow one of these would either collide with the event envelope
-/// or be silently swallowed by `_meta`, so we reject them up front.
-const RESERVED_FIELD_KEYS: &[&str] = &["seq", "timestamp", "op", "task_id", "_meta"];
+/// Field names never legal as user fields under ANY config — rejectable at
+/// parse time, before a store or config exists. Two reasons, interleaved in
+/// the list: the event-envelope keys (payload fields are serde-flattened next
+/// to them on the log line, so a user field would collide with the envelope or
+/// be swallowed by `_meta`), and the static computed/injected columns (their
+/// value is derived at read time, so a stored field would be silently
+/// shadowed; `dep` additionally reads like a dependency — use `ta dep add`).
+/// The config-DEPENDENT reserved names (timestamp columns, relationship types
+/// and inverses) can't live in a const; [`reserved_field_names`] unions them
+/// in for the write gate, which re-checks everything under the store lock.
+const RESERVED_FIELD_KEYS: &[&str] = &[
+    // event envelope
+    "seq",
+    "timestamp",
+    "op",
+    "task_id",
+    "_meta",
+    // static computed/injected columns
+    "id",
+    "deps",
+    "dep",
+    "unblocks",
+    "blocked_by",
+    "subtasks",
+];
 
 /// Validate a batch of draft events against the current `state` and drop the
 /// redundant ones, returning exactly the events worth appending.
@@ -607,20 +628,16 @@ pub(crate) fn vet_events(
     Ok(out)
 }
 
-/// Field names that can't be set directly because their value is computed or
-/// injected — a user field of the same name is silently shadowed (so meaningless
-/// and invisible). The envelope keys plus: the structural columns `id`/`deps`
-/// (and `dep`, which reads like a dependency — use `ta dep add`), the computed
-/// graph columns, the configured timestamp columns, and the relationship type
-/// names + inverses (which `show` surfaces and `ta dep` edits).
+/// The full set of field names the write gate refuses: the static
+/// [`RESERVED_FIELD_KEYS`] plus the config-dependent computed/injected names —
+/// the configured timestamp columns and the relationship type names + inverses
+/// (which `show` surfaces and `ta dep` edits). A user field with any of these
+/// names would be silently shadowed at read time, so meaningless and invisible.
 fn reserved_field_names(config: &Config) -> BTreeSet<String> {
     let mut names: BTreeSet<String> = RESERVED_FIELD_KEYS
         .iter()
         .map(|s| (*s).to_string())
         .collect();
-    for s in ["id", "deps", "dep", "unblocks", "blocked_by", "subtasks"] {
-        names.insert(s.to_string());
-    }
     for name in [
         &config.timestamps.create_time,
         &config.timestamps.update_time,
@@ -703,7 +720,10 @@ pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
             return Err(format!("invalid field `{raw}`: empty field name").into());
         }
         if RESERVED_FIELD_KEYS.contains(&key) {
-            return Err(format!("field name `{key}` is reserved and can't be used").into());
+            return Err(format!(
+                "`{key}` is a reserved or computed field and can't be set directly"
+            )
+            .into());
         }
         let value = field_value(key, val)?;
         if is_append {
@@ -843,7 +863,14 @@ mod tests {
 
     #[test]
     fn parse_field_ops_rejects_reserved_empty_and_opless() {
-        assert!(parse_field_ops(&["seq=1".into()]).is_err(), "reserved set");
+        // Both reservation reasons reject at parse time: envelope keys (`seq`)
+        // and the static computed columns (`id`, `deps`, `unblocks`).
+        for key in ["seq", "id", "deps", "unblocks"] {
+            assert!(
+                parse_field_ops(&[format!("{key}=1")]).is_err(),
+                "reserved set: {key}"
+            );
+        }
         assert!(
             parse_field_ops(&["seq+=1".into()]).is_err(),
             "reserved append"
