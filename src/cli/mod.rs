@@ -24,7 +24,7 @@ use crate::storage::{EventStore, FileStore};
 
 mod commands;
 use commands::{
-    cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_init, cmd_list,
+    cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_init, cmd_list, cmd_repair,
     cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction, DepAction,
 };
 
@@ -119,6 +119,12 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Repair the store; `--migrate` brings the on-disk format up to date
+    Repair {
+        /// Migrate the event log and baseline to the current on-disk format
+        #[arg(long)]
+        migrate: bool,
+    },
     /// Git event-log merge driver entrypoint (invoked by Git, not humans)
     #[command(name = "git-merge", hide = true)]
     GitMerge {
@@ -188,11 +194,21 @@ pub fn run() -> Result<(), DynError> {
         // the very command that fixes it. `set` validates the *result* itself.
         Commands::Config { action } => cmd_config(&FileStore::discover()?, action),
 
-        // Everything else resolves the store once and validates its config
-        // before dispatching, so a bad config edit surfaces on the next command.
+        // Repair is the format fixer, so it bypasses the format gate (but still
+        // needs a valid config — it reads the default blocker type to migrate to).
+        Commands::Repair { migrate } => {
+            let store = FileStore::discover()?;
+            enforce_config(store.config())?;
+            cmd_repair(&store, migrate)
+        }
+
+        // Everything else resolves the store once and validates its config and its
+        // on-disk format before dispatching, so a bad config edit or a stale store
+        // surfaces on the next command (the latter pointing at `ta repair`).
         store_command => {
             let store = FileStore::discover()?;
             enforce_config(store.config())?;
+            enforce_format(&store)?;
             dispatch_store_command(store_command, &store)
         }
     }
@@ -202,6 +218,24 @@ pub fn run() -> Result<(), DynError> {
 /// on the very next `ta` invocation rather than silently at the next compaction.
 fn enforce_config(cfg: &Config) -> Result<(), DynError> {
     cfg.validate()
+}
+
+/// Refuse a normal command if the store is in an older on-disk format, pointing
+/// at `ta repair --migrate` rather than mis-reading or silently rewriting legacy
+/// data. Detection only — `repair` bypasses this and does the migration.
+fn enforce_format(store: &FileStore) -> Result<(), DynError> {
+    let snap = crate::migrate::Snapshot {
+        log: store.load_mutations()?,
+        baseline: store.load_baseline()?,
+    };
+    if let Some(reason) = crate::migrate::pending(&snap, store.config()) {
+        return Err(format!(
+            "{reason}. The store is in an older on-disk format — run \
+             `ta repair --migrate` to update it."
+        )
+        .into());
+    }
+    Ok(())
 }
 
 /// Dispatch a command that operates on an already-resolved, already-validated
@@ -253,6 +287,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
         Commands::Init
         | Commands::Config { .. }
         | Commands::Resolve { .. }
+        | Commands::Repair { .. }
         | Commands::GitMerge { .. }
         | Commands::GitMergeBaseline { .. } => {
             unreachable!("non-store commands are handled before dispatch")
