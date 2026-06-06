@@ -13,7 +13,7 @@ cargo build                                          # build
 cargo run -- <subcommand> [args]                     # run `ta` from source, e.g. cargo run -- list
 cargo test --all --all-features                      # all tests (unit + e2e)
 cargo test --lib                                     # unit tests only (in-crate #[cfg(test)] modules)
-cargo test --test e2e                                # end-to-end tests only
+cargo test --test deps                               # one e2e theme (each tests/<theme>.rs is its own binary; helpers in tests/common/)
 cargo test <name>                                    # a single test, e.g. cargo test crud_search_and_ready_workflow
 cargo clippy --all --all-features --all-targets -- -D warnings   # lint (CI fails on any warning; --all-targets also lints #[cfg(test)] code)
 cargo fmt --all                                      # format; CI runs `cargo fmt --all -- --check`
@@ -89,7 +89,7 @@ The bar for a brand-new verb is: it can't be expressed as a flag, it doesn't dup
 
 ## Testing approach
 
-`tests/e2e.rs` drives the real compiled `ta` binary (path from `CARGO_BIN_EXE_ta`) against throwaway git repos. Each test runs in its own dir under the **system** temp dir, *not* `CARGO_TARGET_TMPDIR` — that is deliberate, so `ta`'s walk-up store discovery can't climb into the repo's own `.taska` store. Merge-driver tests prepend the binary's directory to `PATH` so git's `ta git-merge ...` resolves to the binary under test. Compaction tests stay at or above the `keep_events` floor and simply generate more events than they retain. Prefer adding coverage here over ad-hoc manual scripts.
+The end-to-end tests drive the real compiled `ta` binary (path from `CARGO_BIN_EXE_ta`) against throwaway git repos. They're split by theme — `tests/crud.rs`, `list_search.rs`, `output_format.rs`, `deps.rs`, `merge.rs`, `undo.rs`, `compaction.rs`, `resolve.rs`, `config.rs`, `write_gate.rs` — each its own test binary starting with `mod common; use common::*;`. The shared harness lives in **`tests/common/mod.rs`** (a *subdirectory* module, so Cargo doesn't compile it as a standalone test binary the way a `tests/common.rs` would); add a genuinely-shared helper there (it carries `#![allow(dead_code, unused_imports)]` since each binary uses only a subset), a theme-local one in the theme file. Each test runs in its own dir under the **system** temp dir, *not* `CARGO_TARGET_TMPDIR` — that is deliberate, so `ta`'s walk-up store discovery can't climb into the repo's own `.taska` store. Merge-driver tests prepend the binary's directory to `PATH` so git's `ta git-merge ...` resolves to the binary under test. Compaction tests stay at or above the `keep_events` floor and simply generate more events than they retain. Prefer adding coverage here over ad-hoc manual scripts.
 
 `tutorials/` holds runnable bash walkthroughs (`NN-*.sh`, driven by `lib.sh`; `run-all.sh` runs them in order) that double as UX validation and learning material. Each spins up its own throwaway repo outside the checkout. Run unattended with `TUTORIAL_NONINTERACTIVE=1`; they need `ta` on `PATH`.
 
