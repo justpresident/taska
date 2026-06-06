@@ -209,8 +209,21 @@ pub fn run() -> Result<(), DynError> {
             let store = FileStore::discover()?;
             enforce_config(store.config())?;
             enforce_format(&store)?;
+            warn_scm_health(&store);
             dispatch_store_command(store_command, &store)
         }
+    }
+}
+
+/// Print (never fail on) the SCM health warning before every store-backed
+/// command: an unregistered merge driver in this clone, missing `.gitattributes`
+/// entries, or an unsupported SCM — each pointing at its remedy. Warning-only,
+/// unlike the enforce gates: the store itself is healthy, the clone's merge
+/// protection is what's incomplete, and a warning per command nags exactly until
+/// someone runs `ta init`.
+fn warn_scm_health(store: &FileStore) {
+    if let Some(warning) = store.repo_root().and_then(crate::git::health_warning) {
+        eprintln!("warning: {warning}");
     }
 }
 

@@ -63,6 +63,102 @@ fn init_outside_git_is_quiet_and_actionable() {
 }
 
 #[test]
+fn store_commands_warn_until_merge_drivers_are_registered() {
+    // The trap: `ta init` BEFORE `git init` (the fresh-clone state looks the
+    // same) leaves .gitattributes pointing at merge drivers no config defines —
+    // a git merge would text-merge the log. Every store command must warn.
+    let dir = fresh_dir("scm-health");
+    run(ta_bin(), &dir, &["init"]);
+    init_repo(&dir);
+
+    let out = run(ta_bin(), &dir, &["list"]);
+    assert!(out.status.success(), "warning never blocks the command");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("merge drivers") && stderr.contains("`ta init`"),
+        "warning points at ta init: {stderr}"
+    );
+
+    // `ta init` repairs the clone; the warning stops.
+    ta(&dir, &["init"]);
+    let out = run(ta_bin(), &dir, &["list"]);
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("warning:"),
+        "quiet once registered"
+    );
+
+    // A deleted .gitattributes resurfaces a warning with the same remedy.
+    fs::remove_file(dir.join(".gitattributes")).unwrap();
+    let out = run(ta_bin(), &dir, &["list"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(".gitattributes") && stderr.contains("`ta init`"),
+        "attrs warning: {stderr}"
+    );
+}
+
+#[test]
+fn plain_dir_stays_quiet_and_mercurial_warns_unsupported() {
+    // No SCM at all: deliberate plain-dir use — store commands don't nag
+    // (`ta init` already warned once at setup time).
+    let dir = fresh_dir("scm-none");
+    run(ta_bin(), &dir, &["init"]);
+    let out = run(ta_bin(), &dir, &["list"]);
+    assert!(out.status.success());
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("warning:"),
+        "no SCM -> no nagging"
+    );
+
+    // Mercurial detection is a directory stat — no hg binary needed.
+    fs::create_dir(dir.join(".hg")).unwrap();
+    let out = run(ta_bin(), &dir, &["list"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("mercurial") && stderr.contains("only git"),
+        "hg warning: {stderr}"
+    );
+}
+
+#[test]
+fn nested_store_inside_a_repo_is_supported_by_walk_up_detection() {
+    // The store and the SCM root need not share a directory: here `.taska`
+    // predates the repo and lives two levels below it. Health detection must
+    // walk UP from the store's parent rather than expect `.git` beside it.
+    let dir = fresh_dir("scm-nested");
+    let sub = dir.join("crates").join("app");
+    fs::create_dir_all(&sub).unwrap();
+    run(ta_bin(), &sub, &["init"]); // plain-dir store first...
+    init_repo(&dir); // ...the repo appears ABOVE it later
+
+    // Re-running `ta init` from the store's dir reuses the nested store and
+    // registers the drivers (git config resolves from any dir in the repo).
+    let out = run(ta_bin(), &sub, &["init"]);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("already present"),
+        "nested store reused, not shadowed"
+    );
+    let out = run(ta_bin(), &sub, &["list"]);
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("warning:"),
+        "registered nested store is healthy"
+    );
+
+    // Unregister a driver (what a fresh clone of this layout looks like): the
+    // warning must fire even though `.git` is two levels above the store.
+    git(
+        &dir,
+        &["config", "--unset", "merge.taska-merge-driver.driver"],
+    );
+    let out = run(ta_bin(), &sub, &["list"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("merge drivers") && stderr.contains("`ta init`"),
+        "nested store warns via walk-up: {stderr}"
+    );
+}
+
+#[test]
 fn reinit_is_idempotent_and_preserves_edited_config() {
     let dir = fresh_dir("reinit");
     init_repo(&dir);

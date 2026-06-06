@@ -97,7 +97,7 @@ $ ta list --format jsonl
 {"id":"migrate-db","title":"Run DB migration","status":"closed","deps":{}}
 ```
 
-Commit `.taska/` and `.gitattributes` along with your code — they travel with the repo.
+Commit `.taska/` and `.gitattributes` along with your code — they travel with the repo. The merge-driver *definitions*, however, live in per-clone local git config, so run `ta init` once in every fresh clone (and after a late `git init`); until you do, every `ta` command warns on stderr that the clone's merge protection is incomplete.
 
 ## How it works
 
