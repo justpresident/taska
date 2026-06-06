@@ -45,16 +45,25 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
+      # cargo-llvm-cov merges the per-process .profraw files (the e2e suite spawns
+      # the `ta` binary ~2000 times) via `llvm-profdata merge --sparse` — the C++
+      # tool, streaming and memory-light — instead of tarpaulin's in-Rust merge,
+      # which OOM'd on that many files. Same cobertura output for the badge below.
       - name: Generate coverage
         run: |
-          cargo tarpaulin --out xml --output-dir coverage --all-features --engine llvm --run-types AllTargets --workspace --exclude-files 'tests/*' 'src/cli/utils.rs' 'src/cli/completer.rs' --timeout 300
+          mkdir -p coverage
+          cargo llvm-cov --all-features --workspace \
+            --ignore-filename-regex '(^|/)tests/' \
+            --cobertura --output-path coverage/cobertura.xml
 
       - name: Extract coverage percentage
         id: coverage
