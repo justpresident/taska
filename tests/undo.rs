@@ -145,3 +145,50 @@ fn undo_with_empty_log_is_a_noop() {
     let out = ta(&dir, &["undo", "--force"]);
     assert!(out.contains("Nothing to undo"), "got: {out}");
 }
+
+#[test]
+fn undo_committed_compensates_typed_edges() {
+    let dir = fresh_dir("undo-typed-edges");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a", "status=open"]);
+    ta(&dir, &["create", "b", "status=open"]);
+    // Commit everything up to and including a typed (non-depends_on) edge.
+    ta(&dir, &["dep", "add", "a", "relates_to=b"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    // Undo the committed typed add: the log must GROW (typed RemoveDep
+    // compensation appended) and the edge must be gone from state.
+    let log = dir.join(".taska/mutations.jsonl");
+    let before = rows(&log);
+    ta(&dir, &["undo", "--force"]);
+    assert_eq!(
+        rows(&log),
+        before + 1,
+        "compensation appended, not truncated"
+    );
+    assert!(
+        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":{}"#),
+        "typed edge compensated away"
+    );
+    let tail = std::fs::read_to_string(&log).unwrap();
+    let last = tail.lines().last().unwrap();
+    assert!(
+        last.contains(r#""op":"RemoveDep""#)
+            && last.contains(r#""type":"relates_to""#)
+            && last.contains(r#""dep":"b""#),
+        "compensation is a TYPED RemoveDep: {last}"
+    );
+
+    // Now the inverse: commit a typed REMOVE, undo it, and the edge returns.
+    ta(&dir, &["dep", "add", "a", "relates_to=b"]);
+    ta(&dir, &["dep", "remove", "a", "relates_to=b"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "removed"]);
+    ta(&dir, &["undo", "--force"]);
+    assert!(
+        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":{"relates_to":["b"]}"#),
+        "undoing a committed typed remove restores the edge"
+    );
+}

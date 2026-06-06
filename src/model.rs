@@ -153,8 +153,9 @@ pub struct TaskState {
 
 impl TaskState {
     /// The `depends_on` edges — the default blocker relationship. Stored in
-    /// `relationships` like every other type; this is the read accessor `undo`'s
-    /// dep-diffing uses (display reads the whole map — see the `deps` column).
+    /// `relationships` like every other type; a convenience read accessor (crate
+    /// logic reads the whole map — the `deps` column, undo's dep-diffing — but
+    /// tests and library consumers often want just the default blocker's edges).
     #[must_use]
     pub fn depends_on(&self) -> &[String] {
         self.relationships

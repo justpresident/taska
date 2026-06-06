@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::cli::{confirm, replay};
 use crate::error::DynError;
-use crate::model::{MutationEvent, OpType, TaskState, DEP_KEY};
+use crate::model::{MutationEvent, OpType, TaskState, DEP_KEY, DEP_TYPE_KEY};
 use crate::storage::{EventStore, FileStore};
 
 /// Undo the last `count` event(s) in the log.
@@ -130,18 +130,21 @@ fn committed_mutation_count(store: &FileStore) -> usize {
 }
 
 /// Render a task's salient state for the before/after preview: `(absent)` for a
-/// missing task, else the JSON of its custom fields plus `deps={:?}` when it has
-/// any. Mirrors the field-centric framing of the other task views.
+/// missing task, else the JSON of its custom fields plus `deps=<typed map>` when
+/// it has any edge — the same `{type: [targets…]}` shape the `deps` column
+/// shows. Mirrors the field-centric framing of the other task views.
 fn describe(task: Option<&TaskState>) -> String {
     task.map_or_else(
         || "(absent)".to_string(),
         |t| {
             let fields =
                 serde_json::to_string(&t.custom_fields).unwrap_or_else(|_| "{}".to_string());
-            if t.depends_on().is_empty() {
+            if t.relationships.is_empty() {
                 fields
             } else {
-                format!("{fields} deps={:?}", t.depends_on())
+                let deps =
+                    serde_json::to_string(&t.relationships).unwrap_or_else(|_| "{}".to_string());
+                format!("{fields} deps={deps}")
             }
         },
     )
@@ -152,11 +155,12 @@ fn describe(task: Option<&TaskState>) -> String {
 /// op vocabulary plus the null-unset convention:
 ///
 /// - in `from` but not `to` -> `Delete`.
-/// - in `to` but not `from` -> `Create` carrying its fields, then one `AddDep`
-///   per dependency.
+/// - in `to` but not `from` -> `Create` carrying its fields, then one typed
+///   `AddDep` per relationship edge.
 /// - in both -> a single `Update` that sets each field whose value differs and
 ///   unsets (sets to null) each field present in `from` but gone in `to`; skipped
-///   when that payload is empty. Then `AddDep`/`RemoveDep` to reconcile deps.
+///   when that payload is empty. Then typed `AddDep`/`RemoveDep` to reconcile
+///   the relationships map, per `(type, target)` edge.
 /// - in neither -> nothing.
 fn compensate(
     from: &HashMap<String, TaskState>,
@@ -175,8 +179,10 @@ fn compensate(
                     id.clone(),
                     t.custom_fields.clone(),
                 ));
-                for dep in t.depends_on() {
-                    events.push(dep_event(OpType::AddDep, id, dep));
+                for (rel, targets) in &t.relationships {
+                    for dep in targets {
+                        events.push(dep_event(OpType::AddDep, id, rel, dep));
+                    }
                 }
             }
             (Some(f), Some(t)) => {
@@ -196,14 +202,24 @@ fn compensate(
                 if !payload.is_empty() {
                     events.push(MutationEvent::new(OpType::Update, id.clone(), payload));
                 }
-                for dep in t.depends_on() {
-                    if !f.depends_on().contains(dep) {
-                        events.push(dep_event(OpType::AddDep, id, dep));
+                // Reconcile every relationship type: an edge is identified by its
+                // `(type, target)` pair, so the same target under another type is
+                // a different edge.
+                let has_edge = |s: &TaskState, rel: &str, dep: &String| {
+                    s.relationships.get(rel).is_some_and(|d| d.contains(dep))
+                };
+                for (rel, targets) in &t.relationships {
+                    for dep in targets {
+                        if !has_edge(f, rel, dep) {
+                            events.push(dep_event(OpType::AddDep, id, rel, dep));
+                        }
                     }
                 }
-                for dep in f.depends_on() {
-                    if !t.depends_on().contains(dep) {
-                        events.push(dep_event(OpType::RemoveDep, id, dep));
+                for (rel, targets) in &f.relationships {
+                    for dep in targets {
+                        if !has_edge(t, rel, dep) {
+                            events.push(dep_event(OpType::RemoveDep, id, rel, dep));
+                        }
                     }
                 }
             }
@@ -213,11 +229,17 @@ fn compensate(
     events
 }
 
-/// A dependency draft event with the `{ "dep": <id> }` payload shape that
-/// `cmd_dep_group` and the engine's `AddDep`/`RemoveDep` replay expect.
-fn dep_event(op: OpType, task_id: &str, dep: &str) -> MutationEvent {
+/// A dependency draft event with the `{ "dep": <id>, "type": <rel> }` payload
+/// shape `cmd_dep_group` writes and the engine's `AddDep`/`RemoveDep` replay
+/// expects. The type is always explicit — an untyped event is the legacy shape
+/// `ta repair --migrate` exists to rewrite.
+fn dep_event(op: OpType, task_id: &str, rel_type: &str, dep: &str) -> MutationEvent {
     let mut payload = Map::new();
     payload.insert(DEP_KEY.to_string(), Value::String(dep.to_string()));
+    payload.insert(
+        DEP_TYPE_KEY.to_string(),
+        Value::String(rel_type.to_string()),
+    );
     MutationEvent::new(op, task_id, payload)
 }
 
@@ -265,13 +287,18 @@ mod tests {
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].op, OpType::Delete);
 
-        // b -> Create (carrying y) then AddDep dep1
+        // b -> Create (carrying y) then a typed AddDep dep1
         let b: Vec<_> = events.iter().filter(|e| e.task_id == "b").collect();
         assert_eq!(b.len(), 2, "create + adddep: {b:?}");
         assert_eq!(b[0].op, OpType::Create);
         assert_eq!(b[0].payload.get("y"), Some(&serde_json::json!(2)));
         assert_eq!(b[1].op, OpType::AddDep);
         assert_eq!(b[1].payload.get("dep"), Some(&serde_json::json!("dep1")));
+        assert_eq!(
+            b[1].payload.get("type"),
+            Some(&serde_json::json!("depends_on")),
+            "compensating dep events carry their type: {b:?}"
+        );
 
         // c -> Update setting only the changed status
         let c: Vec<_> = events.iter().filter(|e| e.task_id == "c").collect();
@@ -308,12 +335,68 @@ mod tests {
     }
 
     #[test]
-    fn describe_renders_absent_fields_and_deps() {
+    fn compensate_reconciles_typed_edges_per_type_and_target() {
+        // The SAME target moves from relates_to to has_subtask, and a relates_to
+        // edge to y disappears: each `(type, target)` pair is its own edge, so
+        // the compensation is AddDep has_subtask=x, RemoveDep relates_to=x,
+        // RemoveDep relates_to=y — all typed.
+        let mut f = task("a", &[], &[]);
+        f.relationships.insert(
+            "relates_to".to_string(),
+            vec!["x".to_string(), "y".to_string()],
+        );
+        let mut t = task("a", &[], &[]);
+        t.relationships
+            .insert("has_subtask".to_string(), vec!["x".to_string()]);
+        let events = compensate(&state(&[f]), &state(&[t]), &["a".to_string()]);
+
+        let pair = |e: &MutationEvent| {
+            (
+                e.op.clone(),
+                e.payload.get("type").cloned(),
+                e.payload.get("dep").cloned(),
+            )
+        };
+        let got: Vec<_> = events.iter().map(pair).collect();
+        assert!(
+            got.contains(&(
+                OpType::AddDep,
+                Some(serde_json::json!("has_subtask")),
+                Some(serde_json::json!("x"))
+            )),
+            "adds the new typed edge: {got:?}"
+        );
+        assert!(
+            got.contains(&(
+                OpType::RemoveDep,
+                Some(serde_json::json!("relates_to")),
+                Some(serde_json::json!("x"))
+            )),
+            "removes the old type's edge to the same target: {got:?}"
+        );
+        assert!(
+            got.contains(&(
+                OpType::RemoveDep,
+                Some(serde_json::json!("relates_to")),
+                Some(serde_json::json!("y"))
+            )),
+            "removes the dropped edge: {got:?}"
+        );
+        assert_eq!(events.len(), 3, "no Update, nothing extra: {got:?}");
+    }
+
+    #[test]
+    fn describe_renders_absent_fields_and_typed_deps() {
         assert_eq!(describe(None), "(absent)");
-        let t = task("a", &["d1"], &[("status", serde_json::json!("open"))]);
+        let mut t = task("a", &["d1"], &[("status", serde_json::json!("open"))]);
+        t.relationships
+            .insert("relates_to".to_string(), vec!["d2".to_string()]);
         let out = describe(Some(&t));
         assert!(out.contains(r#""status":"open""#), "fields: {out}");
-        assert!(out.contains("deps="), "deps shown: {out}");
+        assert!(
+            out.contains(r#"deps={"depends_on":["d1"],"relates_to":["d2"]}"#),
+            "typed deps map shown: {out}"
+        );
 
         let no_deps = task("b", &[], &[]);
         assert_eq!(describe(Some(&no_deps)), "{}", "empty fields, no deps");
