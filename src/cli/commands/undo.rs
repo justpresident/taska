@@ -138,10 +138,10 @@ fn describe(task: Option<&TaskState>) -> String {
         |t| {
             let fields =
                 serde_json::to_string(&t.custom_fields).unwrap_or_else(|_| "{}".to_string());
-            if t.depends_on.is_empty() {
+            if t.depends_on().is_empty() {
                 fields
             } else {
-                format!("{fields} deps={:?}", t.depends_on)
+                format!("{fields} deps={:?}", t.depends_on())
             }
         },
     )
@@ -175,7 +175,7 @@ fn compensate(
                     id.clone(),
                     t.custom_fields.clone(),
                 ));
-                for dep in &t.depends_on {
+                for dep in t.depends_on() {
                     events.push(dep_event(OpType::AddDep, id, dep));
                 }
             }
@@ -196,13 +196,13 @@ fn compensate(
                 if !payload.is_empty() {
                     events.push(MutationEvent::new(OpType::Update, id.clone(), payload));
                 }
-                for dep in &t.depends_on {
-                    if !f.depends_on.contains(dep) {
+                for dep in t.depends_on() {
+                    if !f.depends_on().contains(dep) {
                         events.push(dep_event(OpType::AddDep, id, dep));
                     }
                 }
-                for dep in &f.depends_on {
-                    if !t.depends_on.contains(dep) {
+                for dep in f.depends_on() {
+                    if !t.depends_on().contains(dep) {
                         events.push(dep_event(OpType::RemoveDep, id, dep));
                     }
                 }

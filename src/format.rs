@@ -221,7 +221,11 @@ fn cell_value(task: &TaskState, column: &str) -> Option<Value> {
     match column {
         "id" => Some(Value::String(task.id.clone())),
         "deps" => Some(Value::Array(
-            task.depends_on.iter().cloned().map(Value::String).collect(),
+            task.depends_on()
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect(),
         )),
         _ => task.custom_fields.get(column).cloned(),
     }

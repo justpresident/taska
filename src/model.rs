@@ -10,12 +10,11 @@ use serde_json::{Map, Value};
 
 /// The canonical name of the default blocker relationship.
 ///
-/// It is at once a declared relationship type and the dedicated [`TaskState`]
-/// field that holds its edges (kept separate from `relationships` so the common
-/// dependency stays legacy-shaped on disk and feeds the `deps` column). Defined
-/// once here so the string lives in a single place: internal logic compares
-/// against this constant, and the literal text surfaces only at parse / serialize
-/// / print boundaries.
+/// A declared relationship type stored in [`TaskState::relationships`] like any
+/// other (read via [`TaskState::depends_on`], surfaced as the `deps` column, and
+/// what the readiness gate walks). Defined once here so the string lives in a
+/// single place: internal logic compares against this constant, and the literal
+/// text surfaces only at parse / serialize / print boundaries.
 pub const DEPENDS_ON: &str = "depends_on";
 
 /// Payload key for the dependency target id in `AddDep`/`RemoveDep` events.
@@ -117,15 +116,16 @@ pub fn verify_seq_order(events: &[MutationEvent]) -> Result<(), String> {
 /// The materialized final state of a single task (lives only in memory, or as a
 /// compacted baseline record).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(from = "TaskStateRepr")]
 pub struct TaskState {
     pub id: String,
-    pub depends_on: Vec<String>,
 
-    /// Typed relationship edges OTHER than `depends_on`: type name → target ids.
-    /// The `depends_on` type keeps its own field above (the default blocker, and
-    /// the `deps` column); every other declared type (`relates_to`, `blocks`,
-    /// `duplicates`, …) lives here. `skip_serializing_if` keeps it off the line
-    /// when unused and old baselines (which lack it) readable.
+    /// Typed relationship edges, `type name → target ids` — including the default
+    /// blocker [`DEPENDS_ON`] (read via [`TaskState::depends_on`], surfaced as the
+    /// `deps` column, and what the readiness gate walks). Every declared type
+    /// (`depends_on`, `relates_to`, `blocks`, `duplicates`, …) lives here, so the
+    /// engine and graph treat them uniformly. `skip_serializing_if` keeps it off
+    /// the line for a task with no edges.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub relationships: BTreeMap<String, Vec<String>>,
 
@@ -148,6 +148,61 @@ pub struct TaskState {
     pub update_time: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close_time: Option<DateTime<Utc>>,
+}
+
+impl TaskState {
+    /// The `depends_on` edges — the default blocker relationship. Stored in
+    /// `relationships` like every other type; this is the read accessor the `deps`
+    /// column and readiness gate use.
+    #[must_use]
+    pub fn depends_on(&self) -> &[String] {
+        self.relationships
+            .get(DEPENDS_ON)
+            .map_or(&[], Vec::as_slice)
+    }
+}
+
+/// On-disk shape for *deserializing* [`TaskState`], with backward compatibility:
+/// baselines written before `depends_on` was folded into `relationships` carry a
+/// top-level `depends_on` field, which this merges into the map. New baselines
+/// omit it (it lives in `relationships`), so reads round-trip either way.
+#[derive(Deserialize)]
+struct TaskStateRepr {
+    id: String,
+    #[serde(default)]
+    depends_on: Vec<String>,
+    #[serde(default)]
+    relationships: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    custom_fields: Map<String, Value>,
+    #[serde(default)]
+    create_time: Option<DateTime<Utc>>,
+    #[serde(default)]
+    update_time: Option<DateTime<Utc>>,
+    #[serde(default)]
+    close_time: Option<DateTime<Utc>>,
+}
+
+impl From<TaskStateRepr> for TaskState {
+    fn from(r: TaskStateRepr) -> Self {
+        let mut relationships = r.relationships;
+        if !r.depends_on.is_empty() {
+            let entry = relationships.entry(DEPENDS_ON.to_string()).or_default();
+            for dep in r.depends_on {
+                if !entry.contains(&dep) {
+                    entry.push(dep);
+                }
+            }
+        }
+        Self {
+            id: r.id,
+            relationships,
+            custom_fields: r.custom_fields,
+            create_time: r.create_time,
+            update_time: r.update_time,
+            close_time: r.close_time,
+        }
+    }
 }
 
 /// Whether a task counts as done: its `status_field` equals `done_status`.

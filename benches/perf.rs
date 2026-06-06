@@ -380,17 +380,11 @@ fn edge_iter<'a>(
     task: &'a TaskState,
     blockers: &'a BTreeSet<String>,
 ) -> impl Iterator<Item = (&'a str, &'a str)> + 'a {
-    let deps = blockers
-        .contains("depends_on")
-        .then(|| task.depends_on.iter().map(|t| (t.as_str(), "depends_on")))
-        .into_iter()
-        .flatten();
-    let rels = task
-        .relationships
+    // depends_on now lives in the relationships map like every other type.
+    task.relationships
         .iter()
         .filter(move |(rel, _)| blockers.contains(rel.as_str()))
-        .flat_map(|(rel, targets)| targets.iter().map(move |t| (t.as_str(), rel.as_str())));
-    deps.chain(rels)
+        .flat_map(|(rel, targets)| targets.iter().map(move |t| (t.as_str(), rel.as_str())))
 }
 
 /// The same edges materialized into an inline-buffer SmallVec (≤4 edges stay on
@@ -416,15 +410,18 @@ fn bench_relationships() {
     let (mut maps, mut vecs, mut rel_edges, mut dep_edges) = (0usize, 0usize, 0usize, 0usize);
     for (key, t) in &state {
         content += key.len() + t.id.len();
-        dep_edges += t.depends_on.len();
-        content +=
-            t.depends_on.capacity() * word + t.depends_on.iter().map(String::len).sum::<usize>();
         if !t.relationships.is_empty() {
             maps += 1;
         }
+        // depends_on is now a relationship entry like the rest; split the edge
+        // counts for the report but account every entry's heap once.
         for (rel_type, targets) in &t.relationships {
             vecs += 1;
-            rel_edges += targets.len();
+            if rel_type == "depends_on" {
+                dep_edges += targets.len();
+            } else {
+                rel_edges += targets.len();
+            }
             typename_bytes += rel_type.len();
             content += rel_type.len()
                 + targets.capacity() * word
@@ -550,7 +547,6 @@ fn bench_dep_type_id(state: &HashMap<String, TaskState>, blockers: &BTreeSet<Str
         .map(|(i, &t)| (t, i as u32))
         .collect();
     let blocker_mask: Vec<bool> = all_types.iter().map(|t| blockers.contains(*t)).collect();
-    let dep_id = type_to_id["depends_on"] as usize;
 
     // (1) Current: BTreeSet<String> membership, once per type per task.
     let string_filter = time_op(20, || {
@@ -565,9 +561,6 @@ fn bench_dep_type_id(state: &HashMap<String, TaskState>, blockers: &BTreeSet<Str
     let int_filter = time_op(20, || {
         let mut total = 0usize;
         for t in state.values() {
-            if blocker_mask[dep_id] {
-                total += t.depends_on.len();
-            }
             for (rel, targets) in &t.relationships {
                 if type_to_id
                     .get(rel.as_str())
@@ -585,11 +578,7 @@ fn bench_dep_type_id(state: &HashMap<String, TaskState>, blockers: &BTreeSet<Str
     let interned: Vec<Vec<(u32, &str)>> = state
         .values()
         .map(|t| {
-            let mut v: Vec<(u32, &str)> = t
-                .depends_on
-                .iter()
-                .map(|d| (dep_id as u32, d.as_str()))
-                .collect();
+            let mut v: Vec<(u32, &str)> = Vec::new();
             for (rel, targets) in &t.relationships {
                 if let Some(&id) = type_to_id.get(rel.as_str()) {
                     v.extend(targets.iter().map(|x| (id, x.as_str())));

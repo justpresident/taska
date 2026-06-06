@@ -36,9 +36,9 @@ fn apply_set(fields: &mut Map<String, Value>, payload: Map<String, Value>) {
 }
 
 /// Apply an `AddDep`/`RemoveDep` (`add` = true/false). The edge's `type` (absent
-/// = the legacy/default `depends_on`) routes it: `depends_on` stays in the
-/// `depends_on` field, every other type lives in the `relationships` map. An
-/// emptied non-`depends_on` entry is dropped so the map stays clean.
+/// = the default [`DEPENDS_ON`]) keys it in the `relationships` map — every type,
+/// `depends_on` included, is stored uniformly. An emptied entry is dropped so the
+/// map stays clean.
 fn apply_dep(task: &mut TaskState, payload: &Map<String, Value>, add: bool) {
     let Some(dep_id) = payload.get(DEP_KEY).and_then(Value::as_str) else {
         return;
@@ -48,15 +48,7 @@ fn apply_dep(task: &mut TaskState, payload: &Map<String, Value>, add: bool) {
         .and_then(Value::as_str)
         .unwrap_or(DEPENDS_ON);
 
-    if rel_type == DEPENDS_ON {
-        if add {
-            if !task.depends_on.iter().any(|d| d == dep_id) {
-                task.depends_on.push(dep_id.to_string());
-            }
-        } else {
-            task.depends_on.retain(|d| d != dep_id);
-        }
-    } else if add {
+    if add {
         let targets = task.relationships.entry(rel_type.to_string()).or_default();
         if !targets.iter().any(|d| d == dep_id) {
             targets.push(dep_id.to_string());
@@ -156,7 +148,6 @@ impl Engine {
                             .entry(event.task_id.clone())
                             .or_insert_with(|| TaskState {
                                 id: event.task_id.clone(),
-                                depends_on: Vec::new(),
                                 relationships: BTreeMap::new(),
                                 custom_fields: serde_json::Map::new(),
                                 create_time: None,
@@ -357,7 +348,7 @@ mod tests {
             json!("done"),
             "update overwrote create"
         );
-        assert_eq!(state["b"].depends_on, vec!["a".to_string()]);
+        assert_eq!(state["b"].depends_on(), vec!["a".to_string()]);
     }
 
     #[test]
@@ -409,7 +400,7 @@ mod tests {
         ];
         let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
         let a = &state["a"];
-        assert_eq!(a.depends_on, vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(a.depends_on(), vec!["b".to_string(), "c".to_string()]);
         assert_eq!(a.relationships["relates_to"], vec!["e".to_string()]);
     }
 
@@ -439,8 +430,7 @@ mod tests {
     fn mutations_overlay_the_baseline() {
         let baseline = vec![TaskState {
             id: "a".into(),
-            depends_on: vec!["x".into()],
-            relationships: BTreeMap::new(),
+            relationships: BTreeMap::from([("depends_on".to_string(), vec!["x".into()])]),
             custom_fields: fields(&[("status", json!("open"))]),
             create_time: None,
             update_time: None,
@@ -454,7 +444,7 @@ mod tests {
 
         assert_eq!(state["a"].custom_fields["status"], json!("done"));
         assert!(
-            state["a"].depends_on.is_empty(),
+            state["a"].depends_on().is_empty(),
             "dep removed from baseline task"
         );
     }
@@ -503,7 +493,7 @@ mod tests {
         ];
         let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
         assert_eq!(
-            state["a"].depends_on,
+            state["a"].depends_on(),
             vec!["b".to_string()],
             "no duplicate dep"
         );

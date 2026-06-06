@@ -213,3 +213,33 @@ fn compact_is_noop_below_threshold() {
         "baseline still empty"
     );
 }
+
+/// A baseline written in the OLD on-disk format — `depends_on` as a top-level
+/// field, before it was folded into the relationships map — still loads: the
+/// `#[serde(from)]` compat shim merges it into `relationships`, so the dep shows
+/// in the `deps` column and still gates readiness.
+#[test]
+fn legacy_baseline_depends_on_field_is_folded_into_relationships() {
+    let dir = fresh_dir("legacy-baseline");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    let baseline = dir.join(".taska").join("baseline.jsonl");
+    fs::write(
+        &baseline,
+        "{\"id\":\"a\",\"custom_fields\":{\"status\":\"open\"}}\n\
+         {\"id\":\"b\",\"depends_on\":[\"a\"],\"custom_fields\":{\"status\":\"open\"}}\n",
+    )
+    .unwrap();
+
+    // The legacy top-level depends_on surfaces as the `deps` column.
+    let json = ta(&dir, &["show", "b", "--format", "json"]);
+    assert!(
+        json.contains("\"deps\":[\"a\"]"),
+        "legacy dep folded: {json}"
+    );
+
+    // ...and it still gates readiness: `a` is ready, `b` is blocked by it.
+    let ready = ta(&dir, &["list", "--ready"]);
+    assert!(lists_task(&ready, "a"), "a ready: {ready}");
+    assert!(!lists_task(&ready, "b"), "b blocked by legacy dep: {ready}");
+}

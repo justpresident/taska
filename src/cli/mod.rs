@@ -410,12 +410,6 @@ pub(crate) fn relationship_edges(
 ) -> BTreeMap<String, BTreeSet<String>> {
     let mut display: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     if let Some(task) = state.get(id) {
-        if !task.depends_on.is_empty() {
-            display
-                .entry(DEPENDS_ON.to_string())
-                .or_default()
-                .extend(task.depends_on.iter().cloned());
-        }
         for (rel, targets) in &task.relationships {
             display
                 .entry(rel.clone())
@@ -428,9 +422,6 @@ pub(crate) fn relationship_edges(
             continue;
         }
         let mut hit_types: Vec<&str> = Vec::new();
-        if other.depends_on.iter().any(|t| t == id) {
-            hit_types.push(DEPENDS_ON);
-        }
         for (rel_type, targets) in &other.relationships {
             if targets.iter().any(|t| t == id) {
                 hit_types.push(rel_type);
@@ -626,13 +617,9 @@ fn dep_edge_exists(task: &TaskState, payload: &Map<String, Value>) -> bool {
         .get(DEP_TYPE_KEY)
         .and_then(Value::as_str)
         .unwrap_or(DEPENDS_ON);
-    if rel_type == DEPENDS_ON {
-        task.depends_on.iter().any(|d| d == target)
-    } else {
-        task.relationships
-            .get(rel_type)
-            .is_some_and(|targets| targets.iter().any(|d| d == target))
-    }
+    task.relationships
+        .get(rel_type)
+        .is_some_and(|targets| targets.iter().any(|d| d == target))
 }
 
 /// A parsed field list, split by operator: fields to **set** (`=`) and fields to

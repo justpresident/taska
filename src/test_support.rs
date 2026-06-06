@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::config::{Config, TimestampConfig};
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs, OutputFormat};
-use crate::model::{MutationEvent, TaskState};
+use crate::model::{MutationEvent, TaskState, DEPENDS_ON};
 use crate::storage::EventStore;
 
 /// In-memory [`EventStore`] fake: no disk, no locks, no git.
@@ -68,10 +68,16 @@ pub fn store_without_timestamps() -> InMemoryStore {
 
 /// Build a [`TaskState`] from an id, dependency ids, and `(key, value)` fields.
 pub fn task(id: &str, deps: &[&str], fields: &[(&str, Value)]) -> TaskState {
+    let mut relationships = std::collections::BTreeMap::new();
+    if !deps.is_empty() {
+        relationships.insert(
+            DEPENDS_ON.to_string(),
+            deps.iter().map(|d| (*d).to_string()).collect(),
+        );
+    }
     TaskState {
         id: id.to_string(),
-        depends_on: deps.iter().map(|d| (*d).to_string()).collect(),
-        relationships: std::collections::BTreeMap::new(),
+        relationships,
         custom_fields: fields
             .iter()
             .map(|(k, v)| ((*k).to_string(), v.clone()))

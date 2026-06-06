@@ -113,7 +113,7 @@ fn field_values(task: &TaskState, field: &str) -> Vec<Value> {
     match field {
         "id" => vec![Value::String(task.id.clone())],
         "deps" => task
-            .depends_on
+            .depends_on()
             .iter()
             .map(|d| Value::String(d.clone()))
             .collect(),
