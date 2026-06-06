@@ -53,7 +53,7 @@ $ cargo install --path taska
 
 ## Quick start
 
-Run `ta init` once per clone (inside a git repository) to create the `.taska/` store and register the merge driver in your **local** git config.
+Run `ta init` once per clone (inside a git repository) to create the `.taska/` store and register the merge driver in your **local** git config. Run from a subdirectory, it creates the store at the repo root (an existing store anywhere up the tree is reused).
 
 In the session below, only the lowercase verbs (`create`, `dep`, `list`, …) are literal taska syntax. Everything else is yours — task ids like `migrate-db` and fields like `status=open priority=3` are arbitrary, and taska defines none of them:
 

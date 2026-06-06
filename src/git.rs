@@ -75,16 +75,17 @@ fn ensure_gitattribute(repo_root: &Path, file: &str, driver: &str) -> Result<(),
 
 /// The SCM owning a directory: the nearest `.git` or `.hg` walking UP from
 /// `start` (the store's parent — which need not be the SCM root: a `.taska`
-/// nested deeper inside a repo is supported). `.git` may be a FILE (worktrees,
-/// submodules), so `exists()` not `is_dir()`. `None` means a plain directory.
-fn detect_scm(start: &Path) -> Option<Scm> {
+/// nested deeper inside a repo is supported), together with the checkout root
+/// it was found at. `.git` may be a FILE (worktrees, submodules), so `exists()`
+/// not `is_dir()`. `None` means a plain directory.
+fn detect_scm(start: &Path) -> Option<(Scm, &Path)> {
     let mut dir = start;
     loop {
         if dir.join(".git").exists() {
-            return Some(Scm::Git);
+            return Some((Scm::Git, dir));
         }
         if dir.join(".hg").is_dir() {
-            return Some(Scm::Mercurial);
+            return Some((Scm::Mercurial, dir));
         }
         dir = dir.parent()?;
     }
@@ -93,6 +94,15 @@ fn detect_scm(start: &Path) -> Option<Scm> {
 enum Scm {
     Git,
     Mercurial,
+}
+
+/// The root of the SCM checkout containing `start`, if any.
+///
+/// `ta init` places a NEW store here rather than at the invocation directory,
+/// so the store lands where it travels with the repo and every clone's walk-up
+/// discovery finds it.
+pub fn scm_root(start: &Path) -> Option<&Path> {
+    detect_scm(start).map(|(_, root)| root)
 }
 
 /// A health warning when the store's merge protection is incomplete, for the
@@ -109,7 +119,7 @@ enum Scm {
 /// resolves config from any directory inside the repo, so a nested store needs
 /// no special-casing) plus a file read.
 pub fn health_warning(repo_root: &Path) -> Option<String> {
-    match detect_scm(repo_root)? {
+    match detect_scm(repo_root)?.0 {
         Scm::Mercurial => Some(
             "mercurial repository detected; taska's merge protection currently \
              supports only git — merging concurrent .taska edits in hg can corrupt \

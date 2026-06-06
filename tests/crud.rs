@@ -198,6 +198,41 @@ fn init_from_subdirectory_reuses_existing_store() {
 }
 
 #[test]
+fn init_from_subdirectory_creates_a_new_store_at_the_scm_root() {
+    // No store anywhere yet: `ta init` from a repo SUBDIRECTORY must place the
+    // new .taska at the SCM root — committed there it travels with the repo —
+    // not at the invocation dir.
+    let dir = fresh_dir("init-at-root");
+    init_repo(&dir);
+    let sub = dir.join("src").join("deep");
+    fs::create_dir_all(&sub).unwrap();
+
+    let out = ta(&sub, &["init"]);
+    assert!(out.contains("Initialized taska store"), "got: {out}");
+    assert!(dir.join(".taska").is_dir(), "store at the SCM root");
+    assert!(
+        !sub.join(".taska").exists(),
+        "no store at the invocation dir"
+    );
+    assert!(
+        fs::read_to_string(dir.join(".gitattributes"))
+            .unwrap()
+            .contains("merge=taska-merge-driver"),
+        ".gitattributes at the root too"
+    );
+
+    // The store is immediately usable from the subdir (walk-up discovery), and
+    // healthy (drivers registered at init time — no warning).
+    ta(&sub, &["create", "t1", "title=x"]);
+    assert!(lists_task(&ta(&dir, &["list"]), "t1"), "usable from root");
+    let out = run(ta_bin(), &sub, &["list"]);
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("warning:"),
+        "healthy from the subdir"
+    );
+}
+
+#[test]
 fn crud_search_and_ready_workflow() {
     let dir = fresh_dir("crud");
     init_repo(&dir);
