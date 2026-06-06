@@ -551,3 +551,42 @@ fn concurrent_appends_merge_without_conflict() {
         "both appends present after merge: {json}"
     );
 }
+
+#[test]
+fn nested_store_merge_honors_the_configured_conflict_policy() {
+    // The store lives BELOW the repo root. Git runs the merge driver at the
+    // repo root, where walk-up discovery can't see the store — it must be
+    // located via %P (the merged file's path). Proof: the nested store
+    // configures on_conflict=theirs; an unfound store would fall back to the
+    // default `surface` and FAIL this merge.
+    let dir = fresh_dir("merge-nested");
+    let sub = dir.join("svc");
+    fs::create_dir_all(&sub).unwrap();
+    run(ta_bin(), &sub, &["init"]); // store first, in a plain subdir...
+    init_repo(&dir); // ...the repo appears ABOVE it
+    run(ta_bin(), &sub, &["init"]); // register the drivers in the new repo
+    ta(&sub, &["config", "set", "merge.on_conflict", "theirs"]);
+    ta(&sub, &["create", "t", "status=open"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    // Both branches set the SAME field to different values: a real conflict.
+    git(&dir, &["branch", "feature"]);
+    ta(&sub, &["update", "t", "status=main"]);
+    git(&dir, &["commit", "-aqm", "main edit"]);
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&sub, &["update", "t", "status=feature"]);
+    git(&dir, &["commit", "-aqm", "feature edit"]);
+
+    git(&dir, &["checkout", "-q", "main"]);
+    let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
+    assert!(
+        merge.status.success(),
+        "nested store's `theirs` policy must auto-resolve:\n{}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    assert!(
+        ta(&sub, &["show", "t", "--format", "json"]).contains(r#""status":"feature""#),
+        "theirs won, proving the driver read the nested config"
+    );
+}

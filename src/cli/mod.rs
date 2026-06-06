@@ -131,7 +131,9 @@ enum Commands {
         ancestor: String,
         current: String,
         incoming: String,
-        /// Original pathname (%P); accepted for Git compatibility, unused.
+        /// Original pathname (%P), repo-relative; locates the store (its
+        /// parent dir), which walk-up discovery from the repo root cannot do
+        /// for a store nested in a subdirectory.
         #[arg(default_value = "")]
         path: String,
     },
@@ -157,12 +159,13 @@ pub fn run() -> Result<(), DynError> {
             ancestor,
             current,
             incoming,
-            path: _,
+            path,
         } => {
-            // Git invokes the driver from the repo root; read the conflict policy
-            // and marker location from the store if it's discoverable, else fall
-            // back to defaults so a merge never fails merely for lack of config.
-            let store = FileStore::discover().ok();
+            // Read the conflict policy and marker location from the merged
+            // file's own store (resolved via %P — see `merge_driver_store`),
+            // falling back to defaults so a merge never fails merely for lack
+            // of config.
+            let store = merge_driver_store(&path);
             let on_conflict = store
                 .as_ref()
                 .map(|s| s.config().merge.on_conflict)
@@ -225,6 +228,20 @@ fn warn_scm_health(store: &FileStore) {
     if let Some(warning) = store.repo_root().and_then(crate::git::health_warning) {
         eprintln!("warning: {warning}");
     }
+}
+
+/// The store owning the file a merge driver was invoked on. Git runs drivers
+/// at the repo root and passes `%P`, the merged file's repo-relative path —
+/// its parent IS the store dir, so resolving via `%P` finds a store NESTED in
+/// a subdirectory, which walk-up discovery from the repo root cannot.
+/// Discovery remains the fallback for unusual invocations (e.g. an empty `%P`
+/// from an old driver registration).
+fn merge_driver_store(merged_path: &str) -> Option<FileStore> {
+    std::path::Path::new(merged_path)
+        .parent()
+        .filter(|d| d.is_dir())
+        .and_then(|d| FileStore::at(d.to_path_buf()).ok())
+        .or_else(|| FileStore::discover().ok())
 }
 
 /// Validate config on every store-backed command, so a bad config edit surfaces

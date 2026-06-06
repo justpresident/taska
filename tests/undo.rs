@@ -192,3 +192,34 @@ fn undo_committed_compensates_typed_edges() {
         "undoing a committed typed remove restores the edge"
     );
 }
+
+#[test]
+fn undo_compensates_committed_events_in_a_nested_store() {
+    // The store lives BELOW the repo root: the committed-count probe must
+    // resolve the blob path relative to the store's parent, or every committed
+    // event reads as uncommitted and undo TRUNCATES shared history.
+    let dir = fresh_dir("undo-nested");
+    let sub = dir.join("svc");
+    fs::create_dir_all(&sub).unwrap();
+    run(ta_bin(), &sub, &["init"]); // store first, in a plain subdir...
+    init_repo(&dir); // ...the repo appears ABOVE it
+    run(ta_bin(), &sub, &["init"]); // register the drivers in the new repo
+
+    ta(&sub, &["create", "a", "status=open"]);
+    ta(&sub, &["update", "a", "status=closed"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    let log = sub.join(".taska/mutations.jsonl");
+    let before = rows(&log);
+    ta(&sub, &["undo", "--force"]);
+    assert_eq!(
+        rows(&log),
+        before + 1,
+        "committed undo must compensate (log grows), never truncate"
+    );
+    assert!(
+        ta(&sub, &["show", "a", "--format", "json"]).contains(r#""status":"open""#),
+        "state walked back to the committed prior value"
+    );
+}

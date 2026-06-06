@@ -111,6 +111,10 @@ pub fn cmd_undo(
 /// Count non-empty lines in the git-committed `mutations.jsonl` (`HEAD:` blob).
 /// Returns 0 when the file is not committed yet or there is no `HEAD`, which the
 /// caller treats as "nothing committed", so every event is safe to truncate.
+/// The `./` prefix makes the blob path relative to the store's parent (`-C`)
+/// rather than the repo root, so a store NESTED below the root counts its
+/// committed events instead of reading as all-uncommitted (which would make
+/// undo truncate shared history).
 fn committed_mutation_count(store: &FileStore) -> usize {
     let Some(repo_root) = store.repo_root() else {
         return 0;
@@ -118,7 +122,7 @@ fn committed_mutation_count(store: &FileStore) -> usize {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(repo_root)
-        .args(["show", "HEAD:.taska/mutations.jsonl"])
+        .args(["show", "HEAD:./.taska/mutations.jsonl"])
         .output();
     match output {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)

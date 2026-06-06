@@ -66,9 +66,11 @@ pub struct FileStore {
 }
 
 impl FileStore {
-    /// Open the store at `base_dir`, loading its `config.toml` (defaults if the
-    /// file is absent).
-    fn at(base_dir: PathBuf) -> Result<Self, DynError> {
+    /// Open the store at exactly `base_dir` (no walk-up), loading its
+    /// `config.toml` (defaults if the file is absent). For callers that already
+    /// know the store dir — e.g. the merge driver deriving it from git's `%P`
+    /// argument, where a nested store is invisible to [`Self::discover`].
+    pub fn at(base_dir: PathBuf) -> Result<Self, DynError> {
         let config = Config::load(&base_dir.join("config.toml"))?;
         Ok(Self { base_dir, config })
     }
