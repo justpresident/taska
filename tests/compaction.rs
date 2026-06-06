@@ -234,7 +234,7 @@ fn legacy_baseline_depends_on_field_is_folded_into_relationships() {
     // The legacy top-level depends_on surfaces as the `deps` column.
     let json = ta(&dir, &["show", "b", "--format", "json"]);
     assert!(
-        json.contains("\"deps\":[\"a\"]"),
+        json.contains("\"deps\":{\"depends_on\":[\"a\"]}"),
         "legacy dep folded: {json}"
     );
 

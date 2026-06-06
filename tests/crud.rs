@@ -80,14 +80,17 @@ fn crud_search_and_ready_workflow() {
     ta(&dir, &["dep", "add", "api", "depends_on=db"]);
 
     // The human table lists ids; `--full --format json` exposes every field —
-    // priority coerced to a JSON number, and deps as a JSON array.
+    // priority coerced to a JSON number, and deps as the typed map.
     assert!(
         lists_task(&ta(&dir, &["list"]), "api"),
         "api should be listed"
     );
     let json = ta(&dir, &["list", "--full", "--format", "json"]);
     assert!(json.contains(r#""priority":3"#), "json: {json}");
-    assert!(json.contains(r#""deps":["db"]"#), "json: {json}");
+    assert!(
+        json.contains(r#""deps":{"depends_on":["db"]}"#),
+        "json: {json}"
+    );
 
     let search = ta(&dir, &["list", "status=open"]);
     assert!(lists_task(&search, "api"), "search: {search}");

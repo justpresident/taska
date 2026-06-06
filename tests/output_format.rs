@@ -464,3 +464,48 @@ fn output_to_a_closed_pipe_does_not_panic() {
         "ta panicked writing to a closed pipe: {stderr}"
     );
 }
+
+#[test]
+fn deps_column_groups_every_relationship_type() {
+    let dir = fresh_dir("deps-groups");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    for id in ["api", "db", "web", "infra"] {
+        ta(&dir, &["create", id, "status=open"]);
+    }
+    ta(
+        &dir,
+        &["dep", "add", "api", "depends_on=db", "depends_on=web"],
+    );
+    ta(&dir, &["dep", "add", "api", "relates_to=infra"]);
+
+    // The human table cell shows EVERY edge as labeled type groups joined by
+    // `;` — gating and informational types alike (styling is TTY-only).
+    let table = ta(&dir, &["list", "--full"]);
+    assert!(
+        table.contains("depends_on: db, web; relates_to: infra"),
+        "grouped cell: {table}"
+    );
+
+    // The record view (`show`) puts one type group per line under `deps:`,
+    // continuation lines indented.
+    let rec = ta(&dir, &["show", "api"]);
+    assert!(
+        rec.lines()
+            .any(|l| l.starts_with("deps:") && l.ends_with("depends_on: db, web")),
+        "first group on the label line: {rec}"
+    );
+    assert!(
+        rec.lines()
+            .any(|l| l.starts_with(' ') && l.trim() == "relates_to: infra"),
+        "next group indented: {rec}"
+    );
+
+    // json/jsonl carry the typed map itself; an edge-free task is `{}`.
+    let json = ta(&dir, &["list", "--format", "jsonl"]);
+    assert!(
+        json.contains(r#""deps":{"depends_on":["db","web"],"relates_to":["infra"]}"#),
+        "typed map in jsonl: {json}"
+    );
+    assert!(json.contains(r#""deps":{}"#), "edge-free task: {json}");
+}

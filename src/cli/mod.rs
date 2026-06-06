@@ -433,36 +433,25 @@ pub(crate) fn inject_computed_columns(
     }
 }
 
-/// A task's relationship edges for display: its forward edges (the `depends_on`
-/// field + the typed map) plus inverse edges — for every OTHER task with an edge
-/// pointing here, that edge's configured `inverse` name (an empty inverse is
-/// one-way and not surfaced). Keyed by display name → sorted target ids. Used by
-/// `show` to surface a task's relationships.
-pub(crate) fn relationship_edges(
+/// A task's INVERSE relationship edges for display: for every OTHER task with an
+/// edge pointing here, that edge's configured `inverse` name (an empty inverse
+/// is one-way and not surfaced). Keyed by display name → sorted target ids. The
+/// task's own forward edges are not included — the `deps` column carries them,
+/// grouped by type. Used by `show`.
+pub(crate) fn inverse_edges(
     state: &HashMap<String, TaskState>,
     id: &str,
     types: &BTreeMap<String, RelationshipDef>,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let mut display: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    if let Some(task) = state.get(id) {
-        for (rel, targets) in &task.relationships {
-            display
-                .entry(rel.clone())
-                .or_default()
-                .extend(targets.iter().cloned());
-        }
-    }
     for (other_id, other) in state {
         if other_id == id {
             continue;
         }
-        let mut hit_types: Vec<&str> = Vec::new();
         for (rel_type, targets) in &other.relationships {
-            if targets.iter().any(|t| t == id) {
-                hit_types.push(rel_type);
+            if !targets.iter().any(|t| t == id) {
+                continue;
             }
-        }
-        for rel_type in hit_types {
             if let Some(def) = types.get(rel_type) {
                 if !def.inverse.is_empty() {
                     display

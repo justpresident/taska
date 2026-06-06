@@ -31,10 +31,12 @@ pub fn cmd_list(
     let criteria = compile_criteria(criteria)?;
     let mut state = state_of(store)?;
     crate::cli::inject_computed_columns(store, &mut state, workflow, display, cfg);
+    // The readiness-gating types: `--ready` filters by them, and the human deps
+    // cell styles its type groups by them (gating bold, informational dim).
+    let blockers = store.config().relationships.blocker_types();
     // `--ready` restricts to the ready set (not done, deps satisfied); it already
     // implies not-done, so it subsumes `--open`. Computed once over the full map.
     let ready_set: Option<HashSet<String>> = if ready {
-        let blockers = store.config().relationships.blocker_types();
         let ids = graph::ready_tasks(
             &state,
             &workflow.status_field,
@@ -63,7 +65,7 @@ pub fn cmd_list(
     // Resolve the effective layout (flag, else `[display].list_layout`).
     let mut display = display.clone();
     display.layout = Some(display.layout.unwrap_or(cfg.list_layout));
-    print_tasks(tasks, &display, cfg, empty);
+    print_tasks(tasks, &display, cfg, &blockers, empty);
     Ok(())
 }
 
@@ -106,15 +108,18 @@ impl Criterion {
     }
 }
 
-/// The JSON value(s) a field offers for matching: the `id`, each dependency
-/// (`deps`), or a single custom field (empty when the task lacks it). Unifying
-/// the three lets every operator treat built-ins and custom fields alike.
+/// The JSON value(s) a field offers for matching: the `id`, each relationship
+/// target under ANY type (`deps` — so `deps=x` matches an info edge too, just
+/// like the column shows it), or a single custom field (empty when the task
+/// lacks it). Unifying the three lets every operator treat built-ins and custom
+/// fields alike.
 fn field_values(task: &TaskState, field: &str) -> Vec<Value> {
     match field {
         "id" => vec![Value::String(task.id.clone())],
         "deps" => task
-            .depends_on()
-            .iter()
+            .relationships
+            .values()
+            .flatten()
             .map(|d| Value::String(d.clone()))
             .collect(),
         _ => task.custom_fields.get(field).cloned().into_iter().collect(),

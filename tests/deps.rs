@@ -33,7 +33,7 @@ fn dep_remove_makes_a_blocked_task_ready() {
 
     // The dependency is gone from the materialized task, not just from `ready`.
     let json = ta(&dir, &["show", "api", "--format", "json"]);
-    assert!(json.contains(r#""deps":[]"#), "dep removed: {json}");
+    assert!(json.contains(r#""deps":{}"#), "dep removed: {json}");
 }
 
 #[test]
@@ -71,12 +71,12 @@ fn dep_command_adds_and_removes_typed_edges() {
     ta(&dir, &["create", "b"]);
     ta(&dir, &["create", "c"]);
 
-    // Add a depends_on edge (shows in the deps column) and a typed relates_to edge.
+    // Both the depends_on and the typed relates_to edge land in the deps map.
     ta(&dir, &["dep", "add", "a", "depends_on=b", "relates_to=c"]);
     let json = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(
-        json.contains(r#""deps":["b"]"#),
-        "depends_on shows in deps: {json}"
+        json.contains(r#""deps":{"depends_on":["b"],"relates_to":["c"]}"#),
+        "typed edges show in deps: {json}"
     );
     // The relates_to edge is recorded as a typed AddDep event.
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
@@ -85,11 +85,11 @@ fn dep_command_adds_and_removes_typed_edges() {
         "typed relates_to edge in the log: {log}"
     );
 
-    // Remove the depends_on edge.
+    // Remove the depends_on edge; the info edge stays in the map.
     ta(&dir, &["dep", "remove", "a", "depends_on=b"]);
     assert!(
-        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":[]"#),
-        "depends_on edge removed"
+        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":{"relates_to":["c"]}"#),
+        "depends_on edge removed, relates_to kept"
     );
 
     // An undeclared relationship type is rejected with a helpful error.
@@ -114,10 +114,11 @@ fn show_lists_forward_inverse_and_symmetric_relationships() {
     // `a depends_on b` (inverse `blocks`) and `a relates_to c` (self-inverse).
     ta(&dir, &["dep", "add", "a", "depends_on=b", "relates_to=c"]);
 
-    // `a` shows its own forward `relates_to` (depends_on is the `deps` built-in).
+    // `a`'s forward edges live in the deps map, grouped by type.
     assert!(
-        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""relates_to":["c"]"#),
-        "a forward relates_to"
+        ta(&dir, &["show", "a", "--format", "json"])
+            .contains(r#""deps":{"depends_on":["b"],"relates_to":["c"]}"#),
+        "a forward edges in deps"
     );
 
     // `b` never named `a`, but the inverse of `depends_on` surfaces as `blocks`.
@@ -147,7 +148,7 @@ fn dep_remove_by_inverse_name_drops_the_forward_edge() {
     // Remove the relationship from b's side using the inverse name `blocks`.
     ta(&dir, &["dep", "remove", "b", "blocks=a"]);
     assert!(
-        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":[]"#),
+        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":{}"#),
         "inverse removal dropped a's depends_on edge"
     );
     let b = ta(&dir, &["show", "b", "--format", "json"]);
@@ -538,12 +539,12 @@ fn show_surfaces_typed_relationships_forward_and_inverse() {
         "child mirrors subtask_of"
     );
 
-    // depends_on stays the `deps` built-in — never duplicated as a field; its
-    // inverse `blocks` surfaces on the depended-upon task.
+    // depends_on lives in the deps map — never duplicated as a top-level
+    // field; its inverse `blocks` surfaces on the depended-upon task.
     let aj = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(
-        aj.contains(r#""deps":["b"]"#) && !aj.contains("depends_on"),
-        "depends_on not duplicated: {aj}"
+        aj.contains(r#""deps":{"depends_on":["b"]}"#) && aj.matches("depends_on").count() == 1,
+        "depends_on only inside deps: {aj}"
     );
     assert!(
         ta(&dir, &["show", "b", "--format", "json"]).contains(r#""blocks":["a"]"#),

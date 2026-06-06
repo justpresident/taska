@@ -58,6 +58,12 @@ fn list_supports_regex_negation_and_combined_criteria() {
     );
     assert!(lists_task(&ta(&dir, &["list", "id~^a"]), "api"), "id regex");
 
+    // `deps=<x>` matches a target under ANY relationship type, info included —
+    // the filter sees exactly what the deps column shows.
+    ta(&dir, &["dep", "add", "web", "relates_to=db"]);
+    let info = ta(&dir, &["list", "deps=db"]);
+    assert!(lists_task(&info, "web"), "info edge matches deps=: {info}");
+
     // A malformed criterion or bad regex is rejected (non-zero exit).
     assert!(!run(ta_bin(), &dir, &["list", "nooperator"])
         .status

@@ -11,10 +11,11 @@ use serde_json::{Map, Value};
 /// The canonical name of the default blocker relationship.
 ///
 /// A declared relationship type stored in [`TaskState::relationships`] like any
-/// other (read via [`TaskState::depends_on`], surfaced as the `deps` column, and
-/// what the readiness gate walks). Defined once here so the string lives in a
-/// single place: internal logic compares against this constant, and the literal
-/// text surfaces only at parse / serialize / print boundaries.
+/// other (read via [`TaskState::depends_on`], shown in the `deps` column among
+/// the other types, and what the readiness gate walks). Defined once here so the
+/// string lives in a single place: internal logic compares against this
+/// constant, and the literal text surfaces only at parse / serialize / print
+/// boundaries.
 pub const DEPENDS_ON: &str = "depends_on";
 
 /// Payload key for the dependency target id in `AddDep`/`RemoveDep` events.
@@ -121,11 +122,11 @@ pub struct TaskState {
     pub id: String,
 
     /// Typed relationship edges, `type name → target ids` — including the default
-    /// blocker [`DEPENDS_ON`] (read via [`TaskState::depends_on`], surfaced as the
-    /// `deps` column, and what the readiness gate walks). Every declared type
-    /// (`depends_on`, `relates_to`, `blocks`, `duplicates`, …) lives here, so the
-    /// engine and graph treat them uniformly. `skip_serializing_if` keeps it off
-    /// the line for a task with no edges.
+    /// blocker [`DEPENDS_ON`]. This whole map IS the `deps` column (grouped by
+    /// type), and the readiness gate walks its blocker-kind entries. Every
+    /// declared type (`depends_on`, `relates_to`, `blocks`, `duplicates`, …)
+    /// lives here, so the engine and graph treat them uniformly.
+    /// `skip_serializing_if` keeps it off the line for a task with no edges.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub relationships: BTreeMap<String, Vec<String>>,
 
@@ -152,8 +153,8 @@ pub struct TaskState {
 
 impl TaskState {
     /// The `depends_on` edges — the default blocker relationship. Stored in
-    /// `relationships` like every other type; this is the read accessor the `deps`
-    /// column and readiness gate use.
+    /// `relationships` like every other type; this is the read accessor `undo`'s
+    /// dep-diffing uses (display reads the whole map — see the `deps` column).
     #[must_use]
     pub fn depends_on(&self) -> &[String] {
         self.relationships

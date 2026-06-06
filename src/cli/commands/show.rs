@@ -2,11 +2,10 @@
 
 use serde_json::Value;
 
-use crate::cli::{relationship_edges, state_of};
+use crate::cli::{inverse_edges, state_of};
 use crate::config::DisplayConfig;
 use crate::error::DynError;
 use crate::format::{full_columns, render_rows, DisplayArgs};
-use crate::model::DEPENDS_ON;
 use crate::storage::EventStore;
 
 /// Show a single task by id, defaulting to ALL of its fields (unlike `list`,
@@ -25,14 +24,12 @@ pub fn cmd_show(
         .get(id)
         .cloned()
         .ok_or_else(|| format!("no task `{id}`"))?;
-    // Surface the task's typed relationships (forward + inverse-mirrored) as
-    // ordinary array fields, so the record and json both show them.
-    // Skip `depends_on` — the `deps` built-in already shows it.
-    let types = store.config().relationships.types.clone();
-    for (name, targets) in relationship_edges(&state, id, &types) {
-        if name == DEPENDS_ON {
-            continue;
-        }
+    // Surface the INVERSE edges (other tasks' edges pointing here) as ordinary
+    // array fields under their configured inverse names, so the record and json
+    // both show them. The task's own forward edges are NOT injected — the `deps`
+    // built-in already carries them all, grouped by type.
+    let types = &store.config().relationships.types;
+    for (name, targets) in inverse_edges(&state, id, types) {
         let arr = targets.into_iter().map(Value::String).collect();
         task.custom_fields.insert(name, Value::Array(arr));
     }
@@ -47,7 +44,11 @@ pub fn cmd_show(
     // ignore it. The same `render_rows` path serves `list` and `show`.
     let mut display = display.clone();
     display.layout = Some(display.layout.unwrap_or(cfg.show_layout));
-    println!("{}", render_rows(&tasks, &columns, &display, cfg));
+    let blockers = store.config().relationships.blocker_types();
+    println!(
+        "{}",
+        render_rows(&tasks, &columns, &display, cfg, &blockers)
+    );
     Ok(())
 }
 

@@ -40,9 +40,14 @@ fn repair_migrate_types_legacy_dep_events() {
 
     // Migrate, then it reads and the dep is typed + gates readiness.
     assert!(ta(&dir, &["repair", "--migrate"]).contains("migrated"));
-    assert!(ta(&dir, &["show", "b", "--format", "json"]).contains("\"deps\":[\"a\"]"));
+    assert!(
+        ta(&dir, &["show", "b", "--format", "json"]).contains("\"deps\":{\"depends_on\":[\"a\"]}")
+    );
     let ready = ta(&dir, &["list", "--ready"]);
-    assert!(lists_task(&ready, "a") && !lists_task(&ready, "b"), "b blocked: {ready}");
+    assert!(
+        lists_task(&ready, "a") && !lists_task(&ready, "b"),
+        "b blocked: {ready}"
+    );
 
     // Idempotent.
     assert!(ta(&dir, &["repair", "--migrate"]).contains("up to date"));
