@@ -46,7 +46,10 @@ pub fn setup(repo_root: &Path) -> Result<(), DynError> {
     if log_ok && baseline_ok {
         println!("Configured git merge drivers for the taska event log");
     } else {
-        eprintln!("warning: could not configure git merge drivers (is this a git repo?)");
+        eprintln!(
+            "warning: git merge drivers not configured (not a git repository?); \
+             run `git init`, then `ta init` again to enable safe .taska merges"
+        );
     }
     Ok(())
 }
@@ -73,13 +76,16 @@ fn ensure_gitattribute(repo_root: &Path, file: &str, driver: &str) -> Result<(),
 /// Register one merge driver in local git config. Returns whether both config
 /// writes succeeded; messaging and error policy are left to the caller.
 fn register_driver(repo_root: &Path, name: &str, description: &str, driver_cmd: &str) -> bool {
+    // Capture the child's output rather than inheriting stderr: outside a git
+    // repo every `git config` call would otherwise leak its own `fatal: not in
+    // a git directory` to the terminal before `setup` prints its one warning.
     let git = |args: &[&str]| {
         std::process::Command::new("git")
             .current_dir(repo_root)
             .args(args)
-            .status()
+            .output()
     };
     let name_set = git(&["config", &format!("merge.{name}.name"), description]);
     let driver_set = git(&["config", &format!("merge.{name}.driver"), driver_cmd]);
-    matches!((name_set, driver_set), (Ok(a), Ok(b)) if a.success() && b.success())
+    matches!((name_set, driver_set), (Ok(a), Ok(b)) if a.status.success() && b.status.success())
 }

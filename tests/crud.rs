@@ -31,6 +31,38 @@ fn init_creates_config_and_registers_merge_driver() {
 }
 
 #[test]
+fn init_outside_git_is_quiet_and_actionable() {
+    // Deliberately NO `git init`: the store must still initialize, with ONE
+    // actionable warning — not the raw `fatal: not in a git directory` noise
+    // each `git config` child would leak if its stderr were inherited.
+    let dir = fresh_dir("init-no-git");
+    let out = run(ta_bin(), &dir, &["init"]);
+    assert!(out.status.success(), "init works in a plain directory");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("fatal:"), "no raw git stderr: {stderr}");
+    assert_eq!(
+        stderr.matches("warning:").count(),
+        1,
+        "exactly one warning: {stderr}"
+    );
+    assert!(
+        stderr.contains("git init"),
+        "warning names the remedy: {stderr}"
+    );
+
+    // After `git init`, re-running `ta init` configures the drivers cleanly.
+    init_repo(&dir);
+    let out = run(ta_bin(), &dir, &["init"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("Configured git merge drivers"),
+        "drivers configured once a repo exists: {stdout}"
+    );
+    assert!(!stderr.contains("warning:"), "no more warning: {stderr}");
+}
+
+#[test]
 fn reinit_is_idempotent_and_preserves_edited_config() {
     let dir = fresh_dir("reinit");
     init_repo(&dir);
