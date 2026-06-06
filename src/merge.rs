@@ -650,11 +650,8 @@ fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &m
         };
         let mut payload = Map::new();
         payload.insert(DEP_KEY.to_string(), Value::String(target.clone()));
-        // Carry the type so the resolution reconstructs the right edge; omit it
-        // for `depends_on` to keep legacy-shaped events.
-        if rel_type != DEPENDS_ON {
-            payload.insert(DEP_TYPE_KEY.to_string(), Value::String(rel_type.clone()));
-        }
+        // Every edge carries an explicit type now (no implicit `depends_on`).
+        payload.insert(DEP_TYPE_KEY.to_string(), Value::String(rel_type.clone()));
         // Label the edge by type unless it's the default `depends_on`.
         let label = if rel_type == DEPENDS_ON {
             target.clone()

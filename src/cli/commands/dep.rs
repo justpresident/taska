@@ -129,10 +129,8 @@ fn dep_write(
         .map(|(owner, rel_type, dep)| {
             let mut payload = Map::new();
             payload.insert(DEP_KEY.to_string(), Value::String(dep.clone()));
-            // `depends_on` omits the type to stay legacy-shaped.
-            if rel_type != DEPENDS_ON {
-                payload.insert(DEP_TYPE_KEY.to_string(), Value::String(rel_type.clone()));
-            }
+            // Every edge carries an explicit type now — no implicit `depends_on`.
+            payload.insert(DEP_TYPE_KEY.to_string(), Value::String(rel_type.clone()));
             MutationEvent::new(op.clone(), owner.clone(), payload)
         })
         .collect();

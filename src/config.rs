@@ -434,23 +434,24 @@ pub struct RelationshipConfig {
 
 impl RelationshipConfig {
     /// Relationship-type names that gate readiness, cycle detection, and the
-    /// dependency tree.
-    ///
-    /// Every declared `blocker` *or* `hierarchy` type (both gate), plus the
-    /// implicit `depends_on` when it isn't declared at all (legacy stores without
-    /// a `[relationships]` section still treat `depends_on` as a blocker). A
-    /// `depends_on` explicitly set to `info` is honored and excluded.
+    /// dependency tree: every declared `blocker` *or* `hierarchy` type (both
+    /// gate). Config is the sole source of truth — there is no implicit
+    /// `depends_on` (`Config::validate` requires at least one `blocker` type).
     pub fn blocker_types(&self) -> BTreeSet<String> {
-        let mut set: BTreeSet<String> = self
-            .types
+        self.types
             .iter()
             .filter(|(_, def)| matches!(def.kind, RelType::Blocker | RelType::Hierarchy))
             .map(|(name, _)| name.clone())
-            .collect();
-        if !self.types.contains_key(DEPENDS_ON) {
-            set.insert(DEPENDS_ON.to_string());
-        }
-        set
+            .collect()
+    }
+
+    /// The default blocker type new untyped edges and the legacy-event migration
+    /// resolve to: the first (by name) declared `blocker`-kind type, if any.
+    pub fn default_blocker(&self) -> Option<&str> {
+        self.types
+            .iter()
+            .find(|(_, def)| def.kind == RelType::Blocker)
+            .map(|(name, _)| name.as_str())
     }
 
     /// Relationship-type names whose edges are parent→child containment
@@ -534,6 +535,13 @@ impl Config {
                  events risks discarding history still needed to reconcile merges.",
                 self.compaction.keep_events, MIN_KEEP_EVENTS
             ));
+        }
+        if self.relationships.default_blocker().is_none() {
+            problems.push(
+                "[relationships] declares no `type = \"blocker\"` type. At least one blocking \
+                 dependency type is required (the default config declares `depends_on`)."
+                    .to_string(),
+            );
         }
     }
 
