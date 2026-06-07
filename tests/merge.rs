@@ -590,3 +590,41 @@ fn nested_store_merge_honors_the_configured_conflict_policy() {
         "theirs won, proving the driver read the nested config"
     );
 }
+
+#[test]
+fn concurrent_numeric_adds_commute_across_merge() {
+    let dir = fresh_dir("merge-add");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // Declare the schema so `+=` dispatches to the commutative Add op.
+    let cfg = dir.join(".taska/config.toml");
+    let mut text = fs::read_to_string(&cfg).unwrap();
+    text.push_str("\n[task_types.counter.fields]\npoints = \"uint\"\ntags = \"set<string>\"\n");
+    fs::write(&cfg, text).unwrap();
+    ta(&dir, &["create", "c", "type=counter", "points=0"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    // Each branch accumulates concurrently: numbers add, set elements insert.
+    git(&dir, &["branch", "feature"]);
+    ta(&dir, &["update", "c", "points+=2", "tags+=m"]);
+    git(&dir, &["commit", "-aqm", "main add"]);
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["update", "c", "points+=3", "tags+=f"]);
+    git(&dir, &["commit", "-aqm", "feature add"]);
+
+    // The merge must auto-resolve (accumulates never conflict) and SUM.
+    git(&dir, &["checkout", "-q", "main"]);
+    let merge = run("git", &dir, &["merge", "feature", "-m", "merge"]);
+    assert!(
+        merge.status.success(),
+        "accumulates merge cleanly:\n{}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    let shown = ta(&dir, &["show", "c", "--format", "json"]);
+    assert!(shown.contains(r#""points":5"#), "2+3 commute: {shown}");
+    assert!(
+        shown.contains(r#""tags":["f","m"]"#),
+        "set union in canonical order: {shown}"
+    );
+}

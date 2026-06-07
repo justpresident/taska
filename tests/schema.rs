@@ -144,3 +144,70 @@ fn schema_coercion_shapes_declared_values_on_the_real_binary() {
     );
     assert!(ta(&dir, &["show", "c2", "--format", "json"]).contains(r#""weight":2.5"#));
 }
+
+#[test]
+fn accumulate_operators_dispatch_by_declared_kind() {
+    let dir = fresh_dir("schema-accumulate");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    declare_schema(&dir);
+    ta(
+        &dir,
+        &[
+            "create",
+            "n1",
+            "type=bug",
+            "severity=low",
+            "points=3",
+            r#"tags=["b"]"#,
+        ],
+    );
+
+    // Numeric += / -= on a declared uint.
+    ta(&dir, &["update", "n1", "points+=2"]);
+    ta(&dir, &["update", "n1", "points-=1"]);
+    assert!(ta(&dir, &["show", "n1", "--format", "json"]).contains(r#""points":4"#));
+
+    // Set inserts/removes; re-adding a present element is a no-op write.
+    ta(&dir, &["update", "n1", "tags+=a"]);
+    assert!(ta(&dir, &["show", "n1", "--format", "json"]).contains(r#""tags":["a","b"]"#));
+    assert!(
+        ta(&dir, &["update", "n1", "tags+=a"]).contains("already up to date"),
+        "present element insert is a no-op"
+    );
+    ta(&dir, &["update", "n1", "tags-=b"]);
+    assert!(ta(&dir, &["show", "n1", "--format", "json"]).contains(r#""tags":["a"]"#));
+
+    // Adding 0 writes nothing; a uint underflow is rejected with the result.
+    assert!(ta(&dir, &["update", "n1", "points+=0"]).contains("already up to date"));
+    let out = run(ta_bin(), &dir, &["update", "n1", "points-=10"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("expected uint"),
+        "underflow rejected by the result check"
+    );
+
+    // `-=` needs a declared numeric/set field; `+=` rejects on enums.
+    assert!(!run(ta_bin(), &dir, &["update", "n1", "free-=1"])
+        .status
+        .success());
+    assert!(!run(ta_bin(), &dir, &["update", "n1", "severity+=high"])
+        .status
+        .success());
+
+    // Strings (and undeclared fields on open types) keep the text append.
+    ta(&dir, &["create", "n2", "type=feature", "owner=z"]);
+    ta(&dir, &["update", "n2", "log+=first"]);
+    ta(&dir, &["update", "n2", "log+=second"]);
+    assert!(
+        ta(&dir, &["show", "n2", "--format", "json"]).contains(r#""log":"first\nsecond""#),
+        "text accumulation unchanged"
+    );
+
+    // The new ops are on disk under their own names.
+    let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    assert!(
+        log.contains(r#""op":"Add""#) && log.contains(r#""op":"Remove""#),
+        "Add/Remove events logged: {log}"
+    );
+}

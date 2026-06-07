@@ -17,12 +17,20 @@ pub fn cmd_create(
     fields: &[String],
 ) -> Result<(), DynError> {
     // On a new task the field is absent, so `+=` (append) is just the initial
-    // value — fold the append map into the Create payload.
+    // value — fold the append map into the Create payload. `-=` has nothing to
+    // remove from yet.
     let FieldOps {
         set: mut payload,
         append,
+        subtract,
         mut raw,
     } = parse_field_ops(fields)?;
+    if let Some(key) = subtract.keys().next() {
+        return Err(format!(
+            "`{key}-=…` is meaningless on create: a new task has nothing to remove from"
+        )
+        .into());
+    }
     for (k, v) in append {
         payload.insert(k, v);
     }

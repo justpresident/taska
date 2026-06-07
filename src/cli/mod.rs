@@ -52,15 +52,18 @@ enum Commands {
         /// the value from a file, `key=@-` from stdin; `key=@@x` is a literal `@x`.
         fields: Vec<String>,
     },
-    /// Update a task: `=` sets a field, `+=` appends (e.g. `status=done log+=note`)
+    /// Update a task: `=` sets, `+=` accumulates, `-=` removes (e.g. `points+=2`)
     ///
-    /// The task must exist; setting a field to its current value is a no-op
-    /// (nothing is written), and `+=` is rejected on the single-valued status field.
+    /// The task must exist; a write that changes nothing is dropped (nothing is
+    /// logged), and `+=`/`-=` are rejected on the single-valued status field.
     Update {
         id: String,
-        /// `key=value` sets a field, `key+=value` appends (one entry per line;
-        /// concurrent appends merge conflict-free). Values parse as JSON-or-string;
-        /// `key=@FILE` / `key=@-` read from a file / stdin. At least one required.
+        /// `key=value` sets a field; `key+=value` appends text (string fields),
+        /// adds (declared numeric fields), or inserts elements (declared set<…>
+        /// fields); `key-=value` subtracts / removes elements (declared
+        /// numeric/set only). Accumulates merge conflict-free across branches.
+        /// Values parse as JSON-or-string; `key=@FILE` / `key=@-` read from a
+        /// file / stdin. At least one required.
         #[arg(required = true)]
         fields: Vec<String>,
     },
@@ -553,7 +556,10 @@ pub(crate) fn vet_events(
         // A field whose value is computed/injected (id, deps, the timestamp and
         // graph columns, relationship names) can't be set directly — a user value
         // of the same name is silently shadowed. Applies to ops carrying fields.
-        if matches!(draft.op, OpType::Create | OpType::Update | OpType::Append) {
+        if matches!(
+            draft.op,
+            OpType::Create | OpType::Update | OpType::Append | OpType::Add | OpType::Remove
+        ) {
             if let Some(bad) = draft.payload.keys().find(|k| reserved.contains(k.as_str())) {
                 return Err(format!(
                     "`{bad}` is a reserved or computed field and can't be set directly"
@@ -612,6 +618,12 @@ pub(crate) fn vet_events(
                 preview.insert(id.to_string(), Some(fields));
                 out.push(draft.clone()); // appends accumulate — never a no-op
             }
+            OpType::Add | OpType::Remove => {
+                let task = require_existing(state, id)?;
+                if vet_accumulate(draft, task, &mut preview)? {
+                    out.push(draft.clone());
+                }
+            }
             OpType::AddEdge => {
                 let task = require_existing(state, id)?;
                 let target = draft.payload.get(TARGET_KEY).and_then(Value::as_str);
@@ -643,6 +655,38 @@ pub(crate) fn vet_events(
     }
     enforce_schemas(&preview, config)?;
     Ok(out)
+}
+
+/// The `Add`/`Remove` arm of [`vet_events`]: reject accumulating into a
+/// single-valued field, apply onto the preview with the engine's own
+/// semantics, and report whether anything changed — an accumulate that changes
+/// nothing (inserting a present set element, removing an absent one, adding 0)
+/// is dropped rather than logged.
+fn vet_accumulate(
+    draft: &MutationEvent,
+    task: &TaskState,
+    preview: &mut HashMap<String, Option<Map<String, Value>>>,
+) -> Result<bool, DynError> {
+    if let Some(bad) = draft
+        .payload
+        .keys()
+        .find(|k| *k == STATUS_KEY || *k == TASK_TYPE_KEY)
+    {
+        return Err(
+            format!("can't accumulate (`+=`/`-=`) into `{bad}`: it holds a single value").into(),
+        );
+    }
+    let id = draft.task_id.as_str();
+    let mut fields = preview_entry(preview, id, Some(task));
+    let before = fields.clone();
+    crate::engine::apply_accumulate(
+        &mut fields,
+        draft.payload.clone(),
+        matches!(draft.op, OpType::Add),
+    );
+    let changed = fields != before;
+    preview.insert(id.to_string(), Some(fields));
+    Ok(changed)
 }
 
 /// Take a task's working field set out of the preview (falling back to its
@@ -896,10 +940,128 @@ fn coerce_sequence(
         scalar => vec![coerce_value(scalar, element, raw).unwrap_or_else(|| scalar.clone())],
     };
     if canonical_set {
-        items.sort_by(crate::format::cmp_json);
+        items.sort_by(crate::model::cmp_json);
         items.dedup_by(|a, b| a == b);
     }
     Value::Array(items)
+}
+
+/// Build the events for one `update`'s field operations, run under the store
+/// lock (the accumulate dispatch needs the task's type from live state). The
+/// `Update` (set) event comes first so `field=reset field+=more` applies the
+/// reset before accumulating, independent of token order; the schema-aware
+/// coercion then shapes the set values.
+pub(crate) fn build_field_events(
+    id: &str,
+    ops: &FieldOps,
+    state: &HashMap<String, TaskState>,
+    config: &Config,
+) -> Result<Vec<MutationEvent>, DynError> {
+    let (text, add, remove) = dispatch_accumulate(id, ops, state, config)?;
+    let mut events = Vec::new();
+    for (payload, op) in [
+        (ops.set.clone(), OpType::Update),
+        (text, OpType::Append),
+        (add, OpType::Add),
+        (remove, OpType::Remove),
+    ] {
+        if !payload.is_empty() {
+            events.push(MutationEvent::new(op, id, payload));
+        }
+    }
+    coerce_event_fields(&mut events, &ops.raw, state, config);
+    Ok(events)
+}
+
+/// [`dispatch_accumulate`]'s result: the `(Append, Add, Remove)` payloads.
+type AccumulatePayloads = (Map<String, Value>, Map<String, Value>, Map<String, Value>);
+
+/// Split the `+=`/`-=` maps into per-op payloads by each field's DECLARED kind
+/// — the keyboard vocabulary stays `{=, +=, -=}` while the event vocabulary
+/// dispatches:
+/// - `+=`: strings, `any`, undeclared fields, and unknown/missing types keep
+///   the text `Append` (the schema-agnostic floor); int/uint/float and
+///   `set<T>` become `Add` (set operands lift to element arrays, so replay's
+///   set path is unambiguous); bool/enum/datetime/`array<T>` reject.
+/// - `-=`: int/uint/float and `set<T>` become `Remove`; anything else rejects
+///   (`-=` has no meaning without subtraction or removal semantics).
+///
+/// The applicable schema: the set payload's (re)typed discriminator wins over
+/// the task's current type, mirroring [`coerce_event_fields`].
+fn dispatch_accumulate(
+    id: &str,
+    ops: &FieldOps,
+    state: &HashMap<String, TaskState>,
+    config: &Config,
+) -> Result<AccumulatePayloads, DynError> {
+    use crate::config::FieldKind;
+    let type_name = ops
+        .set
+        .get(TASK_TYPE_KEY)
+        .or_else(|| {
+            state
+                .get(id)
+                .and_then(|t| t.custom_fields.get(TASK_TYPE_KEY))
+        })
+        .and_then(Value::as_str);
+    let def = type_name.and_then(|n| config.task_types.types.get(n));
+    let declared_kind = |field: &str| -> Option<(&str, FieldKind)> {
+        def?.fields.iter().find_map(|(name, schema)| {
+            (declared_field_key(name, &config.workflow.status_field) == field)
+                .then(|| FieldKind::parse(schema.kind_str()).ok())
+                .flatten()
+                .map(|kind| (schema.kind_str(), kind))
+        })
+    };
+
+    let (mut text, mut add, mut remove) = (Map::new(), Map::new(), Map::new());
+    for (key, operand) in &ops.append {
+        match declared_kind(key) {
+            Some((_, kind @ (FieldKind::Int | FieldKind::Uint | FieldKind::Float))) => {
+                let operand = coerce_value(operand, &kind, None).unwrap_or_else(|| operand.clone());
+                add.insert(key.clone(), operand);
+            }
+            Some((_, FieldKind::Set(element))) => {
+                add.insert(key.clone(), coerce_sequence(operand, &element, None, true));
+            }
+            Some((kind_str, FieldKind::Bool | FieldKind::Enum | FieldKind::Datetime)) => {
+                return Err(format!(
+                    "`+=` is not defined for `{key}` (declared {kind_str}); set it with `{key}=`"
+                )
+                .into());
+            }
+            Some((kind_str, FieldKind::Array(_))) => {
+                return Err(format!(
+                    "`+=` is not defined for `{key}` (declared {kind_str}, which allows \
+                     duplicates and keeps order); set the whole value with `{key}=[…]`, or \
+                     declare it set<…> for element inserts"
+                )
+                .into());
+            }
+            // Strings, `any`, undeclared fields, unknown/missing type: text.
+            _ => {
+                text.insert(key.clone(), operand.clone());
+            }
+        }
+    }
+    for (key, operand) in &ops.subtract {
+        match declared_kind(key) {
+            Some((_, kind @ (FieldKind::Int | FieldKind::Uint | FieldKind::Float))) => {
+                let operand = coerce_value(operand, &kind, None).unwrap_or_else(|| operand.clone());
+                remove.insert(key.clone(), operand);
+            }
+            Some((_, FieldKind::Set(element))) => {
+                remove.insert(key.clone(), coerce_sequence(operand, &element, None, true));
+            }
+            _ => {
+                return Err(format!(
+                    "`-=` needs a field declared as a number or set<…> (`{key}` isn't)"
+                )
+                .into());
+            }
+        }
+    }
+    Ok((text, add, remove))
 }
 
 /// The full set of field names the write gate refuses: the static
@@ -972,8 +1134,13 @@ fn dep_edge_exists(task: &TaskState, payload: &Map<String, Value>) -> bool {
 pub(crate) struct FieldOps {
     /// Fields to **set** (`=`), values JSON-guessed.
     pub(crate) set: Map<String, Value>,
-    /// Fields to **append** to (`+=`), values JSON-guessed.
+    /// Fields to **accumulate** into (`+=`), values JSON-guessed. Dispatched by
+    /// declared kind at write time: text append for strings/undeclared, `Add`
+    /// for numeric and set fields.
     pub(crate) append: Map<String, Value>,
+    /// Fields to **remove** from (`-=`): numeric subtract or set-element
+    /// removal — requires a declared numeric/set field.
+    pub(crate) subtract: Map<String, Value>,
     /// The verbatim inline token text per SET key (always `Value::String`).
     /// Schema-aware coercion uses it to recover exact input the JSON guess
     /// mangles — `version=3.10` guesses the number 3.1, but a declared string
@@ -1036,16 +1203,23 @@ pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
     let mut ops = FieldOps {
         set: Map::new(),
         append: Map::new(),
+        subtract: Map::new(),
         raw: Map::new(),
     };
     for token in fields {
-        let (key_part, val) = token
-            .split_once('=')
-            .ok_or_else(|| format!("invalid field `{token}` (expected key=value or key+=value)"))?;
-        // `key+=value` appends; a trailing `+` on the key is the operator.
-        let (key, is_append) = key_part
-            .strip_suffix('+')
-            .map_or((key_part, false), |k| (k, true));
+        let (key_part, val) = token.split_once('=').ok_or_else(|| {
+            format!("invalid field `{token}` (expected key=value, key+=value, or key-=value)")
+        })?;
+        // `key+=value` accumulates, `key-=value` removes; the trailing `+`/`-`
+        // on the key is the operator.
+        let (key, operator) = key_part.strip_suffix('+').map_or_else(
+            || {
+                key_part
+                    .strip_suffix('-')
+                    .map_or((key_part, '='), |k| (k, '-'))
+            },
+            |k| (k, '+'),
+        );
         if key.is_empty() {
             return Err(format!("invalid field `{token}`: empty field name").into());
         }
@@ -1056,15 +1230,19 @@ pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
             .into());
         }
         let value = field_value(key, val)?;
-        if is_append {
-            ops.append.insert(key.to_string(), value);
-        } else {
-            if !val.starts_with('@') {
-                ops.raw
-                    .insert(key.to_string(), Value::String(val.to_string()));
+        match operator {
+            '+' => ops.append.insert(key.to_string(), value),
+            '-' => ops.subtract.insert(key.to_string(), value),
+            _ => {
+                // The verbatim token is kept for SET values only — it backs the
+                // declared-string coercion, which never applies to operands.
+                if !val.starts_with('@') {
+                    ops.raw
+                        .insert(key.to_string(), Value::String(val.to_string()));
+                }
+                ops.set.insert(key.to_string(), value)
             }
-            ops.set.insert(key.to_string(), value);
-        }
+        };
     }
     Ok(ops)
 }
@@ -1179,10 +1357,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_field_ops_splits_set_and_append_and_keeps_raw_tokens() {
-        let FieldOps { set, append, raw } = parse_field_ops(&[
+    fn parse_field_ops_splits_operators_and_keeps_raw_tokens() {
+        let FieldOps {
+            set,
+            append,
+            subtract,
+            raw,
+        } = parse_field_ops(&[
             "status=open".into(),
             "log+=first".into(),
+            "points-=2".into(),
             "priority=3".into(),
             "version=3.10".into(),
         ])
@@ -1190,8 +1374,11 @@ mod tests {
         assert_eq!(set["status"], serde_json::json!("open"));
         assert_eq!(set["priority"], serde_json::json!(3));
         assert_eq!(append["log"], serde_json::json!("first"));
+        assert_eq!(subtract["points"], serde_json::json!(2));
         assert!(
-            !set.contains_key("log") && !append.contains_key("status"),
+            !set.contains_key("log")
+                && !append.contains_key("status")
+                && !set.contains_key("points"),
             "each token lands in exactly one map"
         );
         // The guess loses "3.10" (-> 3.1); the raw token preserves it for
@@ -1362,6 +1549,168 @@ nums = "array<int>"
         let mut untouched = events.clone();
         coerce_event_fields(&mut untouched, &raw, &HashMap::new(), &Config::default());
         assert_eq!(untouched[0].payload, before);
+    }
+
+    #[test]
+    fn accumulate_dispatch_follows_declared_kinds() {
+        use crate::test_support::{state, task};
+        let config: Config = toml::from_str(
+            r#"
+[task_types.bug.fields]
+points = "uint"
+tags = "set<string>"
+notes = "string"
+flag = "bool"
+"#,
+        )
+        .unwrap();
+        let existing = state(&[task(
+            "t",
+            &[],
+            &[
+                ("task_type", serde_json::json!("bug")),
+                ("points", serde_json::json!(3)),
+                ("tags", serde_json::json!(["a"])),
+            ],
+        )]);
+        let ops = |append: &[(&str, Value)], subtract: &[(&str, Value)]| FieldOps {
+            set: Map::new(),
+            append: append
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect(),
+            subtract: subtract
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect(),
+            raw: Map::new(),
+        };
+
+        // `+=` dispatch: numeric -> Add (string operand parses), set -> Add
+        // (scalar lifts to an element array), string/undeclared -> Append.
+        let events = build_field_events(
+            "t",
+            &ops(
+                &[
+                    ("points", serde_json::json!("2")),
+                    ("tags", serde_json::json!("b")),
+                    ("notes", serde_json::json!("x")),
+                    ("free", serde_json::json!("y")),
+                ],
+                &[("points", serde_json::json!(1))],
+            ),
+            &existing,
+            &config,
+        )
+        .unwrap();
+        let by_op = |op: OpType| {
+            events
+                .iter()
+                .find(|e| e.op == op)
+                .map(|e| e.payload.clone())
+                .unwrap_or_default()
+        };
+        let add = by_op(OpType::Add);
+        assert_eq!(add["points"], serde_json::json!(2), "operand parsed");
+        assert_eq!(add["tags"], serde_json::json!(["b"]), "scalar lifted");
+        let append = by_op(OpType::Append);
+        assert!(
+            append.contains_key("notes") && append.contains_key("free"),
+            "strings and undeclared stay text appends"
+        );
+        assert_eq!(by_op(OpType::Remove)["points"], serde_json::json!(1));
+
+        // Rejections: `+=` on bool, `-=` without a numeric/set declaration.
+        let err = build_field_events(
+            "t",
+            &ops(&[("flag", serde_json::json!("true"))], &[]),
+            &existing,
+            &config,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not defined"), "{err}");
+        let err = build_field_events(
+            "t",
+            &ops(&[], &[("free", serde_json::json!(1))]),
+            &existing,
+            &config,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("declared as a number"), "{err}");
+
+        // No schema at all: `+=` is plain text append (the floor).
+        let events = build_field_events(
+            "t",
+            &ops(&[("points", serde_json::json!(2))], &[]),
+            &existing,
+            &Config::default(),
+        )
+        .unwrap();
+        assert_eq!(events[0].op, OpType::Append, "floor keeps text append");
+    }
+
+    #[test]
+    fn accumulate_no_ops_drop_and_results_validate() {
+        use crate::test_support::{state, task};
+        let config: Config =
+            toml::from_str("[task_types.bug.fields]\npoints = \"uint\"\ntags = \"set<string>\"\n")
+                .unwrap();
+        let existing = state(&[task(
+            "t",
+            &[],
+            &[
+                ("task_type", serde_json::json!("bug")),
+                ("points", serde_json::json!(3)),
+                ("tags", serde_json::json!(["a"])),
+            ],
+        )]);
+        let ops = |append: &[(&str, Value)], subtract: &[(&str, Value)]| FieldOps {
+            set: Map::new(),
+            append: append
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect(),
+            subtract: subtract
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect(),
+            raw: Map::new(),
+        };
+
+        // No-op accumulates are dropped by the gate: inserting a present set
+        // element and adding 0 write nothing.
+        let noop = build_field_events(
+            "t",
+            &ops(
+                &[
+                    ("tags", serde_json::json!("a")),
+                    ("points", serde_json::json!(0)),
+                ],
+                &[],
+            ),
+            &existing,
+            &config,
+        )
+        .unwrap();
+        assert!(
+            vet_events(&noop, &existing, &config).unwrap().is_empty(),
+            "no-op accumulates never reach the log"
+        );
+
+        // A uint underflow is rejected by whole-task validation of the
+        // previewed RESULT.
+        let underflow = build_field_events(
+            "t",
+            &ops(&[], &[("points", serde_json::json!(5))]),
+            &existing,
+            &config,
+        )
+        .unwrap();
+        let err = vet_events(&underflow, &existing, &config).unwrap_err();
+        assert!(
+            err.to_string().contains("expected uint"),
+            "underflow caught by the result check: {err}"
+        );
     }
 
     #[test]

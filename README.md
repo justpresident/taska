@@ -101,7 +101,7 @@ Commit `.taska/` and `.gitattributes` along with your code — they travel with 
 
 ## How it works
 
-Every command appends an immutable event (`Create`, `Update`, `Append`, `Delete`, `AddEdge`, `RemoveEdge`) to `.taska/mutations.jsonl`. The current state of every task is **materialized** by replaying that log in order; nothing is mutated in place.
+Every command appends an immutable event (`Create`, `Update`, `Append`, `Add`, `Remove`, `Delete`, `AddEdge`, `RemoveEdge`) to `.taska/mutations.jsonl`. The current state of every task is **materialized** by replaying that log in order; nothing is mutated in place. On the keyboard the field operators are just `=`, `+=`, and `-=`: `+=` appends text to string fields, adds numerically to declared numeric fields, and inserts elements into declared `set<…>` fields; `-=` subtracts or removes elements. The accumulating events commute, so concurrent `points+=2` and `points+=3` on different branches merge to `+5` — no conflict.
 
 Each event carries a store-minted, strictly increasing `seq`. That sequence — not the wall clock — is the authoritative order, which keeps replay deterministic even after branches with interleaved timestamps are merged.
 

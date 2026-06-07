@@ -81,6 +81,40 @@ pub const RESERVED_FIELD_KEYS: &[&str] = &[
     "subtasks",
 ];
 
+/// A total order over heterogeneous JSON scalars.
+///
+/// Numbers compare numerically, strings/bools by their natural order, and any
+/// mismatch falls back to a stable per-type rank then the value's string form —
+/// so mixed types still order deterministically. Shared by display sorting
+/// (`--sort`, filters) and the engine's canonical set form, so replay and
+/// presentation agree on order.
+#[must_use]
+pub fn cmp_json(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x
+            .as_f64()
+            .partial_cmp(&y.as_f64())
+            .unwrap_or(std::cmp::Ordering::Equal),
+        (Value::String(x), Value::String(y)) => x.cmp(y),
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        _ => value_rank(a)
+            .cmp(&value_rank(b))
+            .then_with(|| a.to_string().cmp(&b.to_string())),
+    }
+}
+
+/// Stable per-type ordinal so values of different JSON types compare consistently.
+const fn value_rank(v: &Value) -> u8 {
+    match v {
+        Value::Null => 0,
+        Value::Bool(_) => 1,
+        Value::Number(_) => 2,
+        Value::String(_) => 3,
+        Value::Array(_) => 4,
+        Value::Object(_) => 5,
+    }
+}
+
 /// An edge event's target id, accepting the legacy `dep` key until v1.
 #[must_use]
 pub fn edge_target(payload: &Map<String, Value>) -> Option<&str> {
@@ -108,8 +142,23 @@ pub enum OpType {
     /// Append text to a field (one entry per line) instead of overwriting it.
     /// Unlike `Update`, concurrent `Append`s to the same field commute — replay
     /// concatenates them in `seq` order — so a running notes/comments log
-    /// accumulates conflict-free across branches.
+    /// accumulates conflict-free across branches. FROZEN as text accumulation:
+    /// numeric/set `+=` is [`OpType::Add`], so old logs never re-materialize
+    /// differently across versions.
     Append,
+    /// Accumulate into a field (`+=` on numeric and set fields), with
+    /// kind-dispatched, config-free replay semantics defined from birth:
+    /// number onto number (or onto a missing field, as 0) adds arithmetically;
+    /// an ARRAY operand inserts its elements set-style — deduped, kept in the
+    /// canonical sorted order — so concurrent adds commute like `Append`;
+    /// any other shape is a deterministic no-op. The command layer emits this
+    /// only for declared numeric/set fields; scalars destined for a set are
+    /// lifted to singleton arrays so the set path is unambiguous.
+    Add,
+    /// The inverse of [`OpType::Add`] (`-=`): numbers subtract (a missing
+    /// field counts as 0), an array operand removes its elements from a set
+    /// (absent elements are a no-op); any other shape is a no-op.
+    Remove,
     Delete,
     /// Add a typed relationship edge (`target` + `rel` payload keys). The
     /// pre-rename op name `AddDep` still parses as an alias until v1;

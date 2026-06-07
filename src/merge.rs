@@ -287,12 +287,13 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
                 }
                 delta.last_change = Some(max_ts(delta.last_change, event.timestamp));
             }
-            OpType::Append => {
-                // Appends commute — two concurrent appends to the same field
+            OpType::Append | OpType::Add | OpType::Remove => {
+                // Accumulating ops commute — two concurrent appends (text),
+                // adds (numbers/set inserts), or removes to the same field
                 // accumulate at replay rather than contending — so they are NOT
-                // recorded as field writes (which would flag a false conflict and
-                // let a resolution event overwrite the accumulated text). They
-                // still count as a change for the delete-vs-change check.
+                // recorded as field writes (which would flag a false conflict
+                // and let a resolution event overwrite the accumulated value).
+                // They still count as a change for the delete-vs-change check.
                 delta.last_change = Some(max_ts(delta.last_change, event.timestamp));
             }
             OpType::Delete => delta.deleted = Some(event.timestamp),

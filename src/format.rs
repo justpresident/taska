@@ -14,7 +14,7 @@ use clap::{Args, ValueEnum};
 use serde_json::Value;
 
 use crate::config::{DisplayConfig, Layout};
-use crate::model::TaskState;
+use crate::model::{cmp_json, TaskState};
 
 /// Wrap `text` in an ANSI SGR sequence when `on`, else return it unchanged. Uses
 /// the terminal's NAMED 16-color palette (which the user's theme remaps for
@@ -321,36 +321,6 @@ fn deps_cell(
     }
     cell.push('…');
     (cell, used + 1)
-}
-
-/// A total order over heterogeneous JSON scalars: numbers compare numerically,
-/// strings/bools by their natural order, and any mismatch falls back to a stable
-/// per-type rank then the value's string form — so a column holding mixed types
-/// still sorts deterministically.
-pub(crate) fn cmp_json(a: &Value, b: &Value) -> Ordering {
-    match (a, b) {
-        (Value::Number(x), Value::Number(y)) => x
-            .as_f64()
-            .partial_cmp(&y.as_f64())
-            .unwrap_or(Ordering::Equal),
-        (Value::String(x), Value::String(y)) => x.cmp(y),
-        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
-        _ => value_rank(a)
-            .cmp(&value_rank(b))
-            .then_with(|| a.to_string().cmp(&b.to_string())),
-    }
-}
-
-/// Stable per-type ordinal so values of different JSON types compare consistently.
-const fn value_rank(v: &Value) -> u8 {
-    match v {
-        Value::Null => 0,
-        Value::Bool(_) => 1,
-        Value::Number(_) => 2,
-        Value::String(_) => 3,
-        Value::Array(_) => 4,
-        Value::Object(_) => 5,
-    }
 }
 
 /// The per-column truncation cap, one entry per column (0 = no limit, which

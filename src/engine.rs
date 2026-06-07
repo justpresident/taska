@@ -80,6 +80,74 @@ pub(crate) fn apply_append(fields: &mut Map<String, Value>, payload: Map<String,
     }
 }
 
+/// Apply an `Add` (`add` = true) or `Remove` payload — see [`OpType::Add`] for
+/// the contract. Config-free and shape-dispatched, so replay stays
+/// deterministic from the log alone:
+/// - number operand onto a number (or missing, as 0): arithmetic `±`;
+/// - array operand: set-style insert/remove on the current array (missing =
+///   empty), deduped and kept in [`crate::model::cmp_json`] order — the
+///   canonical form concurrent branches converge on;
+/// - anything else: a deterministic no-op.
+///
+/// `pub(crate)` for the write gate's preview, like [`apply_set`].
+pub(crate) fn apply_accumulate(
+    fields: &mut Map<String, Value>,
+    payload: Map<String, Value>,
+    add: bool,
+) {
+    for (k, operand) in payload {
+        match (&operand, fields.get(&k)) {
+            (Value::Number(n), current @ (None | Some(Value::Number(_)))) => {
+                if let Some(result) = accumulate_numbers(current, n, add) {
+                    fields.insert(k, result);
+                }
+            }
+            (Value::Array(elements), current @ (None | Some(Value::Array(_)))) => {
+                let mut items: Vec<Value> = current
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if add {
+                    items.extend(elements.iter().cloned());
+                    items.sort_by(crate::model::cmp_json);
+                    items.dedup_by(|a, b| a == b);
+                } else {
+                    items.retain(|item| !elements.contains(item));
+                }
+                fields.insert(k, Value::Array(items));
+            }
+            _ => {} // mismatched shapes: a deterministic no-op
+        }
+    }
+}
+
+/// `current ± operand` as the narrowest JSON number: exact `i64` math while
+/// both sides are integral (so `int`/`uint` fields keep their kind and
+/// precision), falling back to `f64`. `None` (overflowing integers whose float
+/// form is not representable, infinite results) means "leave the field
+/// unchanged" — a deterministic no-op, never a stored `null`.
+fn accumulate_numbers(
+    current: Option<&Value>,
+    operand: &serde_json::Number,
+    add: bool,
+) -> Option<Value> {
+    let current_int = current.map_or(Some(0), Value::as_i64);
+    if let (Some(c), Some(d)) = (current_int, operand.as_i64()) {
+        let result = if add {
+            c.checked_add(d)
+        } else {
+            c.checked_sub(d)
+        };
+        if let Some(result) = result {
+            return Some(Value::from(result));
+        }
+    }
+    let c = current.map_or(Some(0.0), Value::as_f64)?;
+    let d = operand.as_f64()?;
+    let result = if add { c + d } else { c - d };
+    serde_json::Number::from_f64(result).map(Value::Number)
+}
+
 /// Update `close_time` to reflect a task's CURRENT closure: set it on a
 /// transition INTO done (`was_done` → `now_done`), clear it whenever the task is
 /// currently not done. Staying done leaves the prior close time untouched — so it
@@ -190,6 +258,19 @@ impl Engine {
                         apply_append(&mut task.custom_fields, event.payload);
                         // Text accumulation touches the task but not its done
                         // status, so no close_time recompute.
+                        task.update_time = Some(ts);
+                    } else {
+                        orphans.push(event.seq);
+                    }
+                }
+                OpType::Add | OpType::Remove => {
+                    if let Some(task) = state_map.get_mut(&event.task_id) {
+                        apply_accumulate(
+                            &mut task.custom_fields,
+                            event.payload,
+                            matches!(event.op, OpType::Add),
+                        );
+                        // Numeric/set accumulation never touches the status.
                         task.update_time = Some(ts);
                     } else {
                         orphans.push(event.seq);
@@ -351,6 +432,29 @@ mod tests {
             "update overwrote create"
         );
         assert_eq!(state["b"].depends_on(), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn add_and_remove_accumulate_numbers_and_sets() {
+        let mutations = vec![
+            ev(OpType::Create, "a", serde_json::Map::new()),
+            // Numbers: a missing field counts as 0; integers stay exact.
+            ev(OpType::Add, "a", fields(&[("points", json!(5))])),
+            ev(OpType::Add, "a", fields(&[("points", json!(2))])),
+            ev(OpType::Remove, "a", fields(&[("points", json!(3))])),
+            ev(OpType::Add, "a", fields(&[("score", json!(1.5))])),
+            // Sets: array operands insert/remove elements; the stored form is
+            // canonical (sorted, deduped); removing an absent element no-ops.
+            ev(OpType::Add, "a", fields(&[("tags", json!(["b"]))])),
+            ev(OpType::Add, "a", fields(&[("tags", json!(["a", "b"]))])),
+            ev(OpType::Remove, "a", fields(&[("tags", json!(["b", "x"]))])),
+            // A shape mismatch (string operand onto a number) is a no-op.
+            ev(OpType::Add, "a", fields(&[("points", json!("nope"))])),
+        ];
+        let state = Engine::materialize_state(Vec::new(), mutations, "closed");
+        assert_eq!(state["a"].custom_fields["points"], json!(4));
+        assert_eq!(state["a"].custom_fields["score"], json!(1.5));
+        assert_eq!(state["a"].custom_fields["tags"], json!(["a"]));
     }
 
     #[test]
