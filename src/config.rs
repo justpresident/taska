@@ -772,6 +772,7 @@ impl Config {
             );
         }
         self.collect_workflow_name_problems(problems);
+        self.collect_name_collision_problems(problems);
         self.collect_task_type_problems(problems);
     }
 
@@ -794,43 +795,122 @@ impl Config {
 
     /// The configured display names (`status_field`, `type_field`) must be
     /// non-empty, distinct, and must not shadow another concept's name.
+    /// The configured display names (`status_field`, `type_field`) must be
+    /// non-empty; everything else about them is covered by the namespace pass.
     fn collect_workflow_name_problems(&self, problems: &mut Vec<String>) {
         let w = &self.workflow;
-        if w.status_field == w.type_field {
-            problems.push(format!(
-                "workflow.status_field and workflow.type_field are both `{}` — two concepts \
-                 can't share one display name",
-                w.status_field
-            ));
-        }
-        // Cross-canonical collisions: one concept's display name must not be the
-        // OTHER concept's storage key, or reads would garble them.
-        if w.status_field == crate::model::TASK_TYPE_KEY {
-            problems.push(format!(
-                "workflow.status_field = `{}` collides with the task-type storage key",
-                w.status_field
-            ));
-        }
-        if w.type_field == crate::model::STATUS_KEY {
-            problems.push(format!(
-                "workflow.type_field = `{}` collides with the status storage key",
-                w.type_field
-            ));
-        }
-        let rel_names = self.relationship_names();
         for (option, name) in [
             ("workflow.status_field", &w.status_field),
             ("workflow.type_field", &w.type_field),
         ] {
             if name.is_empty() {
                 problems.push(format!("{option} must not be empty"));
-            } else if crate::model::RESERVED_FIELD_KEYS.contains(&name.as_str()) {
+            }
+        }
+    }
+
+    /// Every configured name lives in ONE namespace: the canonical storage keys,
+    /// the workflow display names, the timestamp columns, and the relationship
+    /// type + inverse names all end up as field/column names, so a name claimed
+    /// by two roles — or by the static reserved list — garbles reads (a
+    /// timestamp clobbering the status, a relationship shadowed by the `deps`
+    /// built-in, …). Schema field declarations are checked separately,
+    /// membership-only: two task types sharing a field name is deliberate.
+    fn collect_name_collision_problems(&self, problems: &mut Vec<String>) {
+        fn claim<'a>(
+            claimed: &mut BTreeMap<&'a str, String>,
+            problems: &mut Vec<String>,
+            name: &'a str,
+            role: String,
+        ) {
+            if name.is_empty() {
+                return; // empty = disabled (timestamps) or reported separately
+            }
+            if crate::model::RESERVED_FIELD_KEYS.contains(&name) {
                 problems.push(format!(
-                    "{option} = `{name}` collides with a reserved/computed field name"
+                    "{role} `{name}` collides with a reserved/computed field name"
                 ));
-            } else if rel_names.contains(name.as_str()) {
+            } else if let Some(prev) = claimed.get(name) {
+                problems.push(format!("`{name}` is used by both {prev} and {role}"));
+            } else {
+                claimed.insert(name, role);
+            }
+        }
+        let mut claimed: BTreeMap<&str, String> = BTreeMap::new();
+        claim(
+            &mut claimed,
+            problems,
+            crate::model::STATUS_KEY,
+            "the status storage key".to_string(),
+        );
+        claim(
+            &mut claimed,
+            problems,
+            crate::model::TASK_TYPE_KEY,
+            "the task-type storage key".to_string(),
+        );
+        // A display name equal to its OWN canonical key is the identity mapping
+        // (the default), not a collision.
+        let w = &self.workflow;
+        if w.status_field != crate::model::STATUS_KEY {
+            claim(
+                &mut claimed,
+                problems,
+                &w.status_field,
+                "workflow.status_field".to_string(),
+            );
+        }
+        if w.type_field != crate::model::TASK_TYPE_KEY {
+            claim(
+                &mut claimed,
+                problems,
+                &w.type_field,
+                "workflow.type_field".to_string(),
+            );
+        }
+        let ts = &self.timestamps;
+        for (role, name) in [
+            ("timestamps.create_time", &ts.create_time),
+            ("timestamps.update_time", &ts.update_time),
+            ("timestamps.close_time", &ts.close_time),
+        ] {
+            claim(&mut claimed, problems, name, role.to_string());
+        }
+        for (name, def) in &self.relationships.types {
+            claim(
+                &mut claimed,
+                problems,
+                name,
+                format!("relationship type `{name}`"),
+            );
+            // A symmetric self-inverse is sanctioned; an inverse equal to a
+            // DIFFERENT declared type is reported by the dedicated ambiguity
+            // check below with a more actionable message.
+            if !def.inverse.is_empty()
+                && def.inverse != *name
+                && !self.relationships.types.contains_key(&def.inverse)
+            {
+                claim(
+                    &mut claimed,
+                    problems,
+                    &def.inverse,
+                    format!("the inverse of relationship `{name}`"),
+                );
+            }
+        }
+        // An inverse name colliding with a *different* declared type makes
+        // `ta dep` unable to tell the forward edge from the inverse one.
+        // (Structural, so it belongs here — every store command checks it.)
+        for (name, def) in &self.relationships.types {
+            if !def.inverse.is_empty()
+                && def.inverse != *name
+                && self.relationships.types.contains_key(&def.inverse)
+            {
                 problems.push(format!(
-                    "{option} = `{name}` collides with a relationship type or inverse name"
+                    "relationship `{name}` has inverse `{}`, which is also a declared type — \
+                     ambiguous (use a distinct inverse name, or set inverse = \"{name}\" to make \
+                     it symmetric)",
+                    def.inverse
                 ));
             }
         }
@@ -930,18 +1010,8 @@ impl Config {
             problems.push(format!("blocker dependency cycle: {shown}"));
         }
 
-        // 3. An inverse name must not collide with a *different* declared type, or
-        //    `ta dep` can't tell the forward edge from the inverse one.
-        for (name, def) in types {
-            if !def.inverse.is_empty() && def.inverse != *name && types.contains_key(&def.inverse) {
-                problems.push(format!(
-                    "relationship `{name}` has inverse `{}`, which is also a declared type — \
-                     ambiguous (use a distinct inverse name, or set inverse = \"{name}\" to make \
-                     it symmetric)",
-                    def.inverse
-                ));
-            }
-        }
+        // (The inverse-vs-declared-type ambiguity check is structural and lives
+        // in `collect_name_collision_problems`, so every store command runs it.)
 
         // 4. At most one blocking relationship between any two tasks.
         for (task, target, kinds) in crate::graph::duplicate_blocker_edges(state, &blockers) {
@@ -1090,7 +1160,7 @@ required = true
         };
         check(
             "[workflow]\nstatus_field = \"x\"\ntype_field = \"x\"\n",
-            "share one display name",
+            "used by both",
         );
         check(
             "[workflow]\ntype_field = \"status\"\n",
@@ -1103,6 +1173,56 @@ required = true
         check("[workflow]\nstatus_field = \"\"\n", "must not be empty");
         check("[workflow]\ntype_field = \"deps\"\n", "reserved");
         check("[workflow]\ntype_field = \"blocks\"\n", "relationship");
+    }
+
+    #[test]
+    fn name_namespace_collisions_are_rejected() {
+        let check = |toml_src: &str, needle: &str| {
+            let cfg: Config = toml::from_str(toml_src).unwrap();
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains(needle), "`{needle}` not in: {err}");
+        };
+        // The holes from the audit: a relationship (or inverse) shadowing the
+        // `deps` built-in; a timestamp clobbering the status; a relationship
+        // named after the canonical task-type key; duplicate timestamp names;
+        // two relationships sharing one inverse.
+        check("[relationships.deps]\nkind = \"info\"\n", "reserved");
+        check(
+            "[relationships.depends_on]\nkind = \"blocker\"\ninverse = \"deps\"\n",
+            "reserved",
+        );
+        check(
+            "[timestamps]\ncreate_time = \"status\"\n",
+            "status storage key",
+        );
+        check(
+            "[timestamps]\ncreate_time = \"when\"\nupdate_time = \"when\"\n",
+            "used by both",
+        );
+        check(
+            "[relationships.task_type]\nkind = \"info\"\n",
+            "task-type storage key",
+        );
+        check(
+            "[relationships.depends_on]\nkind = \"blocker\"\n\
+             [relationships.a]\nkind = \"info\"\ninverse = \"rev\"\n\
+             [relationships.b]\nkind = \"info\"\ninverse = \"rev\"\n",
+            "used by both",
+        );
+        // A symmetric self-inverse stays sanctioned.
+        let symmetric: Config = toml::from_str(
+            "[relationships.depends_on]\nkind = \"blocker\"\n\
+             [relationships.mirror]\nkind = \"info\"\ninverse = \"mirror\"\n",
+        )
+        .unwrap();
+        assert!(symmetric.validate().is_ok());
+        // The inverse-vs-type ambiguity now fires on PLAIN validate, with its
+        // actionable message.
+        check(
+            "[relationships.depends_on]\nkind = \"blocker\"\ninverse = \"has_subtask\"\n\
+             [relationships.has_subtask]\nkind = \"hierarchy\"\n",
+            "ambiguous",
+        );
     }
 
     #[test]
