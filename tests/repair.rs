@@ -122,10 +122,11 @@ fn repair_migrate_rekeys_display_named_status() {
     assert!(ta(&dir, &["repair", "--migrate"]).contains("up to date"));
 }
 
-/// `repair --schema` fixes everything lossless by direct rewrite — type
-/// backfill (single declared type), numeric strings, scalars to singletons,
-/// bool strings, date normalization — and lists the ambiguous remainder
-/// without guessing. Review surface is the git diff; no confirmation.
+/// `repair --schema` fixes everything lossless by direct rewrite — numeric
+/// strings, scalars to singletons, bool strings, date normalization — and
+/// lists the ambiguous remainder without guessing; typing untyped tasks
+/// happens only via the explicit `--set-type-if-none TYPE`. Review surface is
+/// the git diff; no confirmation.
 #[test]
 fn repair_schema_applies_lossless_fixes_and_reports_the_rest() {
     let dir = fresh_dir("repair-schema");
@@ -158,8 +159,24 @@ fn repair_schema_applies_lossless_fixes_and_reports_the_rest() {
     );
     fs::write(&cfg, text).unwrap();
 
-    let out = ta(&dir, &["repair", "--schema"]);
-    assert!(out.contains("backfilled `job`"), "type backfill: {out}");
+    // `--schema` alone NEVER types a task — typing is an explicit migration
+    // choice, even with a single declared type (the user may be migrating
+    // gradually or keeping tasks untyped).
+    let bare = ta(&dir, &["repair", "--schema"]);
+    assert!(
+        !bare.contains("typed") && bare.contains("missing the `type` field"),
+        "no inferred typing; untyped tasks stay in the remainder: {bare}"
+    );
+    // An undeclared type is rejected.
+    assert!(
+        !run(ta_bin(), &dir, &["repair", "--set-type-if-none", "ghost"])
+            .status
+            .success(),
+        "unknown type refused"
+    );
+
+    let out = ta(&dir, &["repair", "--schema", "--set-type-if-none", "job"]);
+    assert!(out.contains("typed `type` on"), "explicit backfill: {out}");
     assert!(out.contains("`points` on `a`"), "fix reported: {out}");
     assert!(
         out.contains("still don't conform") && out.contains("owner"),
@@ -212,7 +229,16 @@ fn repair_rename_moves_a_column_and_coerces_it() {
     text.push_str("\n[task_types.job.fields]\nseverity = \"uint\"\n");
     fs::write(&cfg, text).unwrap();
 
-    let out = ta(&dir, &["repair", "--rename", "severity=sev"]);
+    let out = ta(
+        &dir,
+        &[
+            "repair",
+            "--rename",
+            "severity=sev",
+            "--set-type-if-none",
+            "job",
+        ],
+    );
     assert!(
         out.contains("renamed `sev` -> `severity`"),
         "assignment-style spec: {out}"

@@ -135,13 +135,18 @@ enum Commands {
         migrate: bool,
         /// Rewrite log/baseline values losslessly toward the `[task_types]`
         /// schemas (numeric strings to numbers, scalars to singletons,
-        /// "true"/"false" to bools, common date formats to RFC 3339; the type
-        /// field backfills when exactly one type is declared). No
+        /// "true"/"false" to bools, common date formats to RFC 3339). No
         /// confirmation: review the change with `git diff`, revert with
         /// `git restore` before committing. Ambiguous violations are listed
         /// with suggested commands, never guessed.
         #[arg(long)]
         schema: bool,
+        /// Set this declared task type on every task that has NONE — an
+        /// explicit migration choice, never inferred (you may be migrating
+        /// gradually or keeping some tasks untyped). Runs the schema fixes
+        /// afterwards so the freshly typed tasks coerce too.
+        #[arg(long, value_name = "TYPE")]
+        set_type_if_none: Option<String>,
         /// Move a field to a new name across all events and the baseline,
         /// assignment-style — `--rename severity=sev` moves `sev`'s values
         /// under `severity` — coercing values toward the destination's
@@ -228,10 +233,17 @@ pub fn run() -> Result<(), DynError> {
             migrate,
             schema,
             rename,
+            set_type_if_none,
         } => {
             let store = FileStore::discover()?;
             enforce_config(store.config())?;
-            cmd_repair(&store, migrate, schema, rename.as_deref())
+            cmd_repair(
+                &store,
+                migrate,
+                schema,
+                rename.as_deref(),
+                set_type_if_none.as_deref(),
+            )
         }
 
         // Everything else resolves the store once and validates its config and its

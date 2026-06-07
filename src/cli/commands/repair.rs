@@ -24,19 +24,21 @@ pub fn cmd_repair(
     migrate: bool,
     schema: bool,
     rename: Option<&str>,
+    set_type_if_none: Option<&str>,
 ) -> Result<(), DynError> {
-    if !migrate && !schema && rename.is_none() {
+    if !migrate && !schema && rename.is_none() && set_type_if_none.is_none() {
         println!(
             "Nothing to do. Pass `--migrate` (on-disk format), `--schema` (lossless fixes \
-             toward the declared task types), and/or `--rename new=old`."
+             toward the declared task types), `--rename new=old`, and/or \
+             `--set-type-if-none TYPE`."
         );
         return Ok(());
     }
     if migrate {
         repair_migrate(store)?;
     }
-    if schema || rename.is_some() {
-        repair_schema(store, rename)?;
+    if schema || rename.is_some() || set_type_if_none.is_some() {
+        repair_schema(store, rename, set_type_if_none)?;
     }
     Ok(())
 }
@@ -64,11 +66,16 @@ fn repair_migrate(store: &impl EventStore) -> Result<(), DynError> {
     Ok(())
 }
 
-/// `--schema`/`--rename`: rename stray columns, then apply every LOSSLESS fix
-/// toward the declared schemas, rewriting the value where it is stored (the
-/// latest `Create`/`Update` that set it, else the baseline task). Remaining
+/// `--schema`/`--rename`/`--set-type-if-none`: rename stray columns, type the
+/// untyped where the user said to, then apply every LOSSLESS fix toward the
+/// declared schemas, rewriting the value where it is stored (the latest
+/// `Create`/`Update` that set it, else the baseline task). Remaining
 /// violations are listed with a pointer — never guessed.
-fn repair_schema(store: &impl EventStore, rename: Option<&str>) -> Result<(), DynError> {
+fn repair_schema(
+    store: &impl EventStore,
+    rename: Option<&str>,
+    set_type_if_none: Option<&str>,
+) -> Result<(), DynError> {
     let config = store.config();
     let mut log = store.load_mutations()?;
     let mut baseline = store.load_baseline()?;
@@ -82,12 +89,20 @@ fn repair_schema(store: &impl EventStore, rename: Option<&str>) -> Result<(), Dy
         None => 0,
     };
 
+    let typed = match set_type_if_none {
+        Some(type_name) => backfill_type(&mut log, &mut baseline, type_name, config)?,
+        None => Vec::new(),
+    };
+    for line in &typed {
+        println!("typed {line}");
+    }
+
     let fixes = apply_lossless_fixes(&mut log, &mut baseline, config);
     for line in &fixes {
         println!("fixed {line}");
     }
 
-    if renamed_count > 0 || !fixes.is_empty() {
+    if renamed_count > 0 || !typed.is_empty() || !fixes.is_empty() {
         store.compact(&baseline, &log)?;
     } else {
         println!("Nothing to fix.");
@@ -174,58 +189,79 @@ fn apply_rename(
     Ok((new.to_string(), old.to_string(), count))
 }
 
-/// Every deterministic, lossless fix toward the declared schemas, applied where
-/// the offending value is stored. Returns the human report lines. Two passes:
-/// - the task-type backfill, when a task has NO type and exactly ONE type is
-///   declared (unambiguous — with several types it stays a suggestion);
-/// - declared-field value coercions on the materialized value (numeric strings,
-///   scalars to singletons, bool strings, common date formats to RFC 3339).
+/// `--set-type-if-none`: stamp the user's chosen (declared) type onto every
+/// task that has NONE, written onto the task's first `Create` event (else the
+/// baseline task) so the log reads as if the task was always typed. An
+/// EXPLICIT migration choice — repair never infers a type, even when only one
+/// is declared: the user may be migrating gradually or keeping tasks untyped.
+fn backfill_type(
+    log: &mut [MutationEvent],
+    baseline: &mut [TaskState],
+    type_name: &str,
+    config: &Config,
+) -> Result<Vec<String>, DynError> {
+    if !config.task_types.types.contains_key(type_name) {
+        return Err(format!(
+            "`{type_name}` is not a declared task type (declared: {})",
+            config
+                .task_types
+                .types
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+        .into());
+    }
+    let mut report = Vec::new();
+    let state = Engine::materialize_state(
+        baseline.to_vec(),
+        log.to_vec(),
+        &config.workflow.done_status,
+    );
+    for task in state.values() {
+        if task.custom_fields.contains_key(TASK_TYPE_KEY) {
+            continue;
+        }
+        let target = log
+            .iter_mut()
+            .find(|e| matches!(e.op, OpType::Create) && e.task_id == task.id);
+        let backfilled = if let Some(event) = target {
+            event.payload.insert(
+                TASK_TYPE_KEY.to_string(),
+                Value::String(type_name.to_string()),
+            );
+            true
+        } else if let Some(base) = baseline.iter_mut().find(|t| t.id == task.id) {
+            base.custom_fields.insert(
+                TASK_TYPE_KEY.to_string(),
+                Value::String(type_name.to_string()),
+            );
+            true
+        } else {
+            false
+        };
+        if backfilled {
+            report.push(format!(
+                "`{}` on `{}`: set to `{type_name}`",
+                config.workflow.type_field, task.id
+            ));
+        }
+    }
+    Ok(report)
+}
+
+/// Every deterministic, lossless VALUE fix toward the declared schemas, applied
+/// where the offending value is stored: declared-field coercions on the
+/// materialized value (numeric strings, scalars to singletons, bool strings,
+/// common date formats to RFC 3339). Tasks without a type are untouched —
+/// typing them is `--set-type-if-none`'s explicit job.
 fn apply_lossless_fixes(
     log: &mut [MutationEvent],
     baseline: &mut [TaskState],
     config: &Config,
 ) -> Vec<String> {
     let mut report = Vec::new();
-
-    // Pass 1: unambiguous type backfill (single declared type only). Written
-    // onto the task's first Create event (else the baseline task), so the log
-    // reads as if the task was always typed.
-    if let Some(only_type) = single_declared_type(config) {
-        let state = Engine::materialize_state(
-            baseline.to_vec(),
-            log.to_vec(),
-            &config.workflow.done_status,
-        );
-        for task in state.values() {
-            if task.custom_fields.contains_key(TASK_TYPE_KEY) {
-                continue;
-            }
-            let target = log
-                .iter_mut()
-                .find(|e| matches!(e.op, OpType::Create) && e.task_id == task.id);
-            let backfilled = if let Some(event) = target {
-                event
-                    .payload
-                    .insert(TASK_TYPE_KEY.to_string(), Value::String(only_type.clone()));
-                true
-            } else if let Some(base) = baseline.iter_mut().find(|t| t.id == task.id) {
-                base.custom_fields
-                    .insert(TASK_TYPE_KEY.to_string(), Value::String(only_type.clone()));
-                true
-            } else {
-                false
-            };
-            if backfilled {
-                report.push(format!(
-                    "`{}` on `{}`: backfilled `{only_type}` (the only declared type)",
-                    config.workflow.type_field, task.id
-                ));
-            }
-        }
-    }
-
-    // Pass 2: declared-field value coercions against the (re-materialized,
-    // possibly freshly typed) state.
     let state = Engine::materialize_state(
         baseline.to_vec(),
         log.to_vec(),
@@ -260,15 +296,6 @@ fn apply_lossless_fixes(
         }
     }
     report
-}
-
-/// The single declared task type, when there is exactly one.
-fn single_declared_type(config: &Config) -> Option<String> {
-    let mut names = config.task_types.types.keys();
-    match (names.next(), names.next()) {
-        (Some(only), None) => Some(only.clone()),
-        _ => None,
-    }
 }
 
 /// A deterministic, lossless conversion of `value` toward `kind`, or `None`
