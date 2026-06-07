@@ -154,19 +154,19 @@ done_status = "closed"
 on_conflict = "surface"
 
 # Typed relationship edges. Each `[relationships.<name>]` declares a type usable
-# with `ta dep add/remove`. `type` is its semantics: "blocker" gates readiness and
+# with `ta dep add/remove`. `kind` is its semantics: "blocker" gates readiness and
 # cycle detection, "hierarchy" is a parent/child subtask edge (gates like a blocker
 # but renders distinctly), "info" is informational only. `inverse` names the reverse
 # edge `show` surfaces ("" = one-way). At least one "blocker" type must be declared;
 # `depends_on` is the default config's (there is no implicit blocker).
 [relationships.depends_on]
-type = "blocker"
+kind = "blocker"
 inverse = "blocks"
 [relationships.has_subtask]
-type = "hierarchy"
+kind = "hierarchy"
 inverse = "subtask_of"
 [relationships.relates_to]
-type = "info"
+kind = "info"
 inverse = "relates_to"   # symmetric
 
 [display]

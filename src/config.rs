@@ -121,12 +121,12 @@ update_time = "{update_time}"
 close_time = "{close_time}"
 
 # Relationship types. `ta dep <a> <type>=<b>` adds an edge; an undeclared type is
-# rejected. type = "blocker" makes the target a prerequisite (feeds `ta list
-# --ready` and cycle detection); "hierarchy" is a parent/child (subtask) edge
-# that gates like a blocker but renders distinctly; "info" is informational.
-# inverse names the reverse direction and is OPTIONAL — omit it for a one-way
-# type; the type's own name makes it symmetric (`a relates_to b` reads both
-# ways); else it labels the inverse.
+# rejected. Each type's `kind` says how it behaves: "blocker" makes the target a
+# prerequisite (feeds `ta list --ready` and cycle detection); "hierarchy" is a
+# parent/child (subtask) edge that gates like a blocker but renders distinctly;
+# "info" is informational. inverse names the reverse direction and is OPTIONAL —
+# omit it for a one-way type; the type's own name makes it symmetric
+# (`a relates_to b` reads both ways); else it labels the inverse.
 {relationships_toml}
 "#,
         min_keep = MIN_KEEP_EVENTS,
@@ -180,7 +180,7 @@ fn render_relationships(relationships: &RelationshipConfig) -> String {
                 format!("\ninverse = \"{}\"", k.inverse)
             };
             format!(
-                "[relationships.{name}]\ntype = \"{}\"{inverse}",
+                "[relationships.{name}]\nkind = \"{}\"{inverse}",
                 k.kind.as_str()
             )
         })
@@ -378,7 +378,7 @@ impl Default for TimestampConfig {
 /// SERIALIZATION CONTRACT: the lowercase names are config values users write.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum RelType {
+pub enum RelKind {
     /// `A <type> B` makes `B` a prerequisite of `A`: `A` is ready only once `B`
     /// is done. Feeds `ta list --ready` and cycle detection (the dependency DAG).
     Blocker,
@@ -392,7 +392,7 @@ pub enum RelType {
     Info,
 }
 
-impl RelType {
+impl RelKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Blocker => "blocker",
@@ -408,9 +408,9 @@ impl RelType {
 pub struct RelationshipDef {
     /// `blocker` (gates readiness/cycles), `hierarchy` (parent/child — gates like
     /// a blocker but renders as subtasks), or `info` (informational). The config
-    /// key is `type`.
-    #[serde(rename = "type")]
-    pub kind: RelType,
+    /// key is `kind`; the pre-rename key `type` still loads as an alias.
+    #[serde(alias = "type")]
+    pub kind: RelKind,
     /// Name the reverse edge is shown under. **Optional**; empty (the default)
     /// means a one-way relationship whose reverse isn't surfaced (e.g. a small
     /// task that `duplicates` part of a bigger one). The type's OWN name means
@@ -440,7 +440,7 @@ impl RelationshipConfig {
     pub fn blocker_types(&self) -> BTreeSet<String> {
         self.types
             .iter()
-            .filter(|(_, def)| matches!(def.kind, RelType::Blocker | RelType::Hierarchy))
+            .filter(|(_, def)| matches!(def.kind, RelKind::Blocker | RelKind::Hierarchy))
             .map(|(name, _)| name.clone())
             .collect()
     }
@@ -450,17 +450,17 @@ impl RelationshipConfig {
     pub fn default_blocker(&self) -> Option<&str> {
         self.types
             .iter()
-            .find(|(_, def)| def.kind == RelType::Blocker)
+            .find(|(_, def)| def.kind == RelKind::Blocker)
             .map(|(name, _)| name.as_str())
     }
 
     /// Relationship-type names whose edges are parent→child containment
-    /// (`type = "hierarchy"`). These gate like blockers but render distinctly as
+    /// (`kind = "hierarchy"`). These gate like blockers but render distinctly as
     /// subtasks, and a parent rolls up completion over them.
     pub fn hierarchy_types(&self) -> BTreeSet<String> {
         self.types
             .iter()
-            .filter(|(_, def)| def.kind == RelType::Hierarchy)
+            .filter(|(_, def)| def.kind == RelKind::Hierarchy)
             .map(|(name, _)| name.clone())
             .collect()
     }
@@ -477,13 +477,13 @@ impl Default for RelationshipConfig {
             // (reverse `subtask_of`); `relates_to` is symmetric (self-inverse);
             // `duplicates` is one-way (no inverse surfaced).
             types: [
-                (DEPENDS_ON.to_string(), def(RelType::Blocker, "blocks")),
+                (DEPENDS_ON.to_string(), def(RelKind::Blocker, "blocks")),
                 (
                     "has_subtask".to_string(),
-                    def(RelType::Hierarchy, "subtask_of"),
+                    def(RelKind::Hierarchy, "subtask_of"),
                 ),
-                ("relates_to".to_string(), def(RelType::Info, "relates_to")),
-                ("duplicates".to_string(), def(RelType::Info, "")),
+                ("relates_to".to_string(), def(RelKind::Info, "relates_to")),
+                ("duplicates".to_string(), def(RelKind::Info, "")),
             ]
             .into_iter()
             .collect(),
@@ -538,7 +538,7 @@ impl Config {
         }
         if self.relationships.default_blocker().is_none() {
             problems.push(
-                "[relationships] declares no `type = \"blocker\"` type. At least one blocking \
+                "[relationships] declares no `kind = \"blocker\"` type. At least one blocking \
                  dependency type is required (the default config declares `depends_on`)."
                     .to_string(),
             );
@@ -647,7 +647,7 @@ mod tests {
         let r = RelationshipConfig::default();
         assert_eq!(
             r.types["depends_on"].kind,
-            RelType::Blocker,
+            RelKind::Blocker,
             "depends_on blocks"
         );
         assert_eq!(
@@ -656,17 +656,21 @@ mod tests {
         );
         assert_eq!(
             r.types["relates_to"].kind,
-            RelType::Info,
+            RelKind::Info,
             "relates_to informational"
         );
         assert_eq!(
             r.types["relates_to"].inverse, "relates_to",
             "relates_to is symmetric (self-inverse)"
         );
-        // A `[relationships.x]` sub-table with only `type` defaults inverse="".
-        let parsed: Config = toml::from_str("[relationships.needs]\ntype = \"blocker\"\n").unwrap();
-        assert_eq!(parsed.relationships.types["needs"].kind, RelType::Blocker);
+        // A `[relationships.x]` sub-table with only `kind` defaults inverse="".
+        let parsed: Config = toml::from_str("[relationships.needs]\nkind = \"blocker\"\n").unwrap();
+        assert_eq!(parsed.relationships.types["needs"].kind, RelKind::Blocker);
         assert_eq!(parsed.relationships.types["needs"].inverse, "");
+        // The pre-rename key `type` still loads as an alias of `kind`.
+        let legacy: Config =
+            toml::from_str("[relationships.needs]\ntype = \"hierarchy\"\n").unwrap();
+        assert_eq!(legacy.relationships.types["needs"].kind, RelKind::Hierarchy);
     }
 
     #[test]
@@ -717,7 +721,7 @@ mod tests {
         cfg.relationships.types.insert(
             "blocks".to_string(),
             RelationshipDef {
-                kind: RelType::Info,
+                kind: RelKind::Info,
                 inverse: String::new(),
             },
         );

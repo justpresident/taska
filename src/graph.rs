@@ -39,7 +39,7 @@ impl<'a> IdIndex<'a> {
 /// A task's blocker edges as `(target, type)` pairs.
 ///
 /// These are the dependencies that gate readiness: every relationship whose type
-/// name is in `blockers` (i.e. configured `type = "blocker"`/`"hierarchy"`,
+/// name is in `blockers` (i.e. configured `kind = "blocker"`/`"hierarchy"`,
 /// which always includes the default `depends_on`). Informational relationships
 /// are skipped.
 pub fn blocker_edges<'a>(

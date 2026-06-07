@@ -210,7 +210,7 @@ fn custom_blocker_relationship_gates_readiness() {
     // Declare a second blocker-typed relationship beyond depends_on.
     let cfg = dir.join(".taska/config.toml");
     let mut text = fs::read_to_string(&cfg).unwrap();
-    text.push_str("\n[relationships.requires]\ntype = \"blocker\"\ninverse = \"required_by\"\n");
+    text.push_str("\n[relationships.requires]\nkind = \"blocker\"\ninverse = \"required_by\"\n");
     fs::write(&cfg, text).unwrap();
 
     ta(&dir, &["create", "a", "status=open"]);

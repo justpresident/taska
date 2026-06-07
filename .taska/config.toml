@@ -73,26 +73,27 @@ update_time = "update_time"
 close_time = "close_time"
 
 # Relationship types between tasks. `ta dep <a> <type>=<b>` adds an edge; a type
-# not declared here is rejected. type = "blocker" makes the target a prerequisite
-# of the source (feeds `ta list --ready` and cycle detection); type = "hierarchy"
+# not declared here is rejected. Each type's `kind` says how it behaves:
+# kind = "blocker" makes the target a prerequisite of the source (feeds `ta list
+# --ready` and cycle detection); kind = "hierarchy"
 # is a parent/child (subtask) edge that gates like a blocker but renders
-# distinctly; type = "info" is informational. inverse names the reverse direction
+# distinctly; kind = "info" is informational. inverse names the reverse direction
 # and is OPTIONAL — omit it for a one-way relationship; a type's OWN name means it
 # is symmetric (`a relates_to b` also reads as `b relates_to a`, removable from
 # either side); any other name labels the inverse (`depends_on`'s reverse is `blocks`).
 [relationships.depends_on]
-type = "blocker"
+kind = "blocker"
 inverse = "blocks"
 
 # Parent/child: `epic has_subtask child` (or `child subtask_of epic`).
 [relationships.has_subtask]
-type = "hierarchy"
+kind = "hierarchy"
 inverse = "subtask_of"
 
 [relationships.relates_to]
-type = "info"
+kind = "info"
 inverse = "relates_to"
 
 # One-way: `a duplicates b` (no reverse surfaced) — inverse omitted.
 [relationships.duplicates]
-type = "info"
+kind = "info"

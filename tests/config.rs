@@ -84,6 +84,8 @@ fn config_validate_flags_an_undeclared_relationship_type() {
     let cfg = dir.join(".taska/config.toml");
     fs::write(
         &cfg,
+        // Deliberately the LEGACY `type =` spelling: the pre-rename key must keep
+        // loading as an alias of `kind`.
         "[relationships.depends_on]\ntype = \"blocker\"\ninverse = \"blocks\"\n",
     )
     .unwrap();
