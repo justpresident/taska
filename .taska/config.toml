@@ -38,6 +38,12 @@ type_field = "type"
 # to their [task_types] schema (old data is read-tolerated by design; writes to
 # such a task must bring it into conformance). Set false to silence.
 warn_nonconforming = true
+# Tasks WITHOUT a type while [task_types] schemas are declared: "allow"
+# (sanctioned — untouched by schemas, never reported), "warn" (tolerated, but
+# counted in the non-conformance warning), or "deny" (a type is mandatory: any
+# write to an untyped task is rejected until one is set). A long migration
+# typically walks allow -> warn -> deny.
+untyped_tasks = "deny"
 
 [merge]
 # What to do when concurrent branches change the SAME field (or dependency) to

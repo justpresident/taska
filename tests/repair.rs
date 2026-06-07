@@ -249,11 +249,54 @@ fn repair_rename_moves_a_column_and_coerces_it() {
         "moved AND coerced to the declared uint: {log}"
     );
 
-    // Guards: reserved and canonical/display destinations are refused.
+    // Guards: reserved destinations and the status field are refused (the
+    // TYPE field is a legal destination — covered separately).
     assert!(!run(ta_bin(), &dir, &["repair", "--rename", "deps=sev"])
         .status
         .success());
-    assert!(!run(ta_bin(), &dir, &["repair", "--rename", "type=sev"])
+    assert!(!run(ta_bin(), &dir, &["repair", "--rename", "status=sev"])
         .status
         .success());
+}
+
+/// `--rename type=OLD` adopts a de-facto discriminator column as the task
+/// type — converting ONLY records whose value names a declared type (repair
+/// never writes data the schema would reject).
+#[test]
+fn repair_rename_adopts_a_type_column_only_for_declared_values() {
+    let dir = fresh_dir("repair-type-adopt");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "c1", "category=bug"]);
+    ta(&dir, &["create", "c2", "category=misc"]);
+    let cfg = dir.join(".taska/config.toml");
+    let mut text = fs::read_to_string(&cfg).unwrap();
+    text.push_str("\n[task_types.bug]\n[task_types.feature]\n");
+    fs::write(&cfg, text).unwrap();
+
+    let out = ta(&dir, &["repair", "--rename", "type=category"]);
+    assert!(
+        out.contains("renamed `category` -> `type`: 1 record(s)"),
+        "declared value converted: {out}"
+    );
+    assert!(
+        out.contains("kept `category` on 1 record(s)"),
+        "undeclared value kept, reported: {out}"
+    );
+
+    // c1 is typed (canonical key on disk, display name on read), its old
+    // column gone; c2 keeps the column, untyped, in the remainder.
+    let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    assert!(log.contains(r#""task_type":"bug""#), "canonical key: {log}");
+    let c1 = ta(&dir, &["show", "c1", "--format", "json"]);
+    assert!(
+        c1.contains(r#""type":"bug""#) && !c1.contains("category"),
+        "{c1}"
+    );
+    let c2 = ta(&dir, &["show", "c2", "--format", "json"]);
+    assert!(
+        c2.contains(r#""category":"misc""#) && !c2.contains(r#""type""#),
+        "{c2}"
+    );
+    assert!(out.contains("still don't conform"), "c2 reported: {out}");
 }

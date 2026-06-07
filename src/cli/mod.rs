@@ -127,31 +127,70 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Repair the store; `--migrate` updates the on-disk format, `--schema`
-    /// applies lossless fixes toward the declared task-type schemas
+    /// Repair the store: on-disk format migrations and schema data fixes
+    ///
+    /// Repair is the one command allowed to REWRITE existing log/baseline
+    /// records (everything else is append-only). It never prompts: review the
+    /// result with `git diff .taska`, revert with `git restore .taska` before
+    /// committing. Every fix is deterministic for a given store + config, so
+    /// two clones running the same repair produce identical bytes. Anything
+    /// ambiguous is reported with a suggested command — repair never guesses,
+    /// and never writes data the schemas would reject.
+    ///
+    /// Typical uses:
+    ///   ta repair --migrate                # after upgrading taska: update the on-disk format
+    ///   ta repair --schema                 # after declaring `[task_types]`: apply lossless data fixes
+    ///   ta repair --schema --set-type-if-none bug   # ...and type every untyped task as `bug`
+    ///   ta repair --rename severity=sev    # move a misnamed column under its declared name
+    ///   ta repair --rename type=category   # adopt a de-facto type column as the task type
+    ///
+    /// Flags combine. Order applied: --migrate, then --rename, then
+    /// --set-type-if-none, then the lossless schema fixes (which also run for
+    /// --rename/--set-type-if-none alone, so moved or freshly typed values
+    /// coerce in the same pass). Whatever still violates a schema afterwards
+    /// is listed with the `ta update` one-liner that fixes it.
+    #[command(verbatim_doc_comment)]
     Repair {
-        /// Migrate the event log and baseline to the current on-disk format
+        /// Migrate the event log and baseline to the current on-disk format.
+        ///
+        /// Runs every pending format migration in order (stores several
+        /// versions behind catch up in one go); a stale store is detected on
+        /// every command and pointed here. Idempotent.
         #[arg(long)]
         migrate: bool,
-        /// Rewrite log/baseline values losslessly toward the `[task_types]`
-        /// schemas (numeric strings to numbers, scalars to singletons,
-        /// "true"/"false" to bools, common date formats to RFC 3339). No
-        /// confirmation: review the change with `git diff`, revert with
-        /// `git restore` before committing. Ambiguous violations are listed
-        /// with suggested commands, never guessed.
+        /// Apply every LOSSLESS data fix toward the `[task_types]` schemas.
+        ///
+        /// Rewrites each offending value where it is stored: numeric strings
+        /// to numbers ("3" -> 3), bare scalars to singleton arrays/sets,
+        /// "true"/"false" strings to booleans, numbers to strings for string
+        /// fields, and common date formats (YYYY-MM-DD, with optional
+        /// HH:MM:SS) to RFC 3339. Never types an untyped task (see
+        /// --set-type-if-none) and never guesses: ambiguous values are listed
+        /// for a human/agent to fix per task. Idempotent.
         #[arg(long)]
         schema: bool,
-        /// Set this declared task type on every task that has NONE — an
-        /// explicit migration choice, never inferred (you may be migrating
-        /// gradually or keeping some tasks untyped). Runs the schema fixes
-        /// afterwards so the freshly typed tasks coerce too.
+        /// Set this declared task type on every task that has NONE.
+        ///
+        /// An explicit migration choice — never inferred, even when only one
+        /// type is declared (you may be migrating gradually or keeping some
+        /// tasks untyped; see also the `workflow.untyped_tasks` config ladder
+        /// allow -> warn -> deny). Rejected if TYPE isn't declared in
+        /// `[task_types]`. The schema fixes run afterwards, so freshly typed
+        /// tasks coerce in the same pass.
         #[arg(long, value_name = "TYPE")]
         set_type_if_none: Option<String>,
-        /// Move a field to a new name across all events and the baseline,
-        /// assignment-style — `--rename severity=sev` moves `sev`'s values
-        /// under `severity` — coercing values toward the destination's
-        /// declared kind. One pair per invocation; run repair again for
-        /// further variants.
+        /// Move a field to a new name everywhere, assignment-style: NEW=OLD.
+        ///
+        /// `--rename severity=sev` moves `sev`'s values under `severity`
+        /// across all events and the baseline, then the lossless fixes coerce
+        /// them toward the destination's declared kind. One pair per
+        /// invocation. The task-type field is a legal destination
+        /// (`--rename type=category`) for adopting an existing discriminator
+        /// column: only records whose value names a DECLARED type convert;
+        /// the rest keep the old column and are reported. Records already
+        /// carrying the destination keep it (values are never merged). The
+        /// status field and reserved/computed names are not valid
+        /// destinations.
         #[arg(long, value_name = "NEW=OLD")]
         rename: Option<String>,
     },
@@ -471,6 +510,13 @@ pub(crate) fn schema_conformance_report(
     let mut report: Vec<String> = state
         .values()
         .filter_map(|task| {
+            // Under `untyped_tasks = "allow"`, a typeless task is sanctioned —
+            // not reported anywhere. `warn` and `deny` both report it.
+            if !task.custom_fields.contains_key(TASK_TYPE_KEY)
+                && config.workflow.untyped_tasks == crate::config::UntypedTasks::Allow
+            {
+                return None;
+            }
             let violations = schema_violations(&task.custom_fields, config);
             let first = violations.first()?;
             let more = match violations.len() {
@@ -805,6 +851,14 @@ fn enforce_schemas(
     }
     for (id, fields) in preview {
         let Some(fields) = fields else { continue };
+        // The untyped-tasks policy: under `allow`/`warn`, a task with NO type
+        // is outside the schemas — writes proceed unvalidated (the migration
+        // ladder's lax rungs). Only `deny` makes the type mandatory here.
+        if !fields.contains_key(TASK_TYPE_KEY)
+            && config.workflow.untyped_tasks != crate::config::UntypedTasks::Deny
+        {
+            continue;
+        }
         let violations = schema_violations(fields, config);
         if !violations.is_empty() {
             return Err(format!(

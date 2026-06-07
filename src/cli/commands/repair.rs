@@ -82,9 +82,19 @@ fn repair_schema(
 
     let renamed_count = match rename {
         Some(spec) => {
-            let (new, old, count) = apply_rename(&mut log, &mut baseline, spec, config)?;
-            println!("renamed `{old}` -> `{new}`: {count} record(s)");
-            count
+            let outcome = apply_rename(&mut log, &mut baseline, spec, config)?;
+            println!(
+                "renamed `{}` -> `{}`: {} record(s)",
+                outcome.old, outcome.new, outcome.moved
+            );
+            if outcome.kept > 0 {
+                println!(
+                    "kept `{}` on {} record(s): the value doesn't name a declared task type \
+                     (repair never writes data the schema would reject)",
+                    outcome.old, outcome.kept
+                );
+            }
+            outcome.moved
         }
         None => 0,
     };
@@ -124,18 +134,35 @@ fn repair_schema(
     Ok(())
 }
 
+/// One `--rename` outcome: the (display) destination, the source, how many
+/// records moved, and how many were KEPT because converting them would have
+/// violated the schema (type destinations only).
+struct RenameOutcome {
+    new: String,
+    old: String,
+    moved: usize,
+    kept: usize,
+}
+
 /// Move one field to a new name across every event payload and baseline task.
 /// The spec is assignment-style `NEW=OLD` (`severity=sev` moves `sev`'s values
 /// under `severity`), one pair per invocation. A record already carrying `new`
 /// keeps it (the stray `old` is left for a human — merging values would be a
 /// guess). The destination's declared-kind coercion happens in the
 /// lossless-fix pass that always follows.
+///
+/// The TASK-TYPE field is a legal destination (either spelling; stored under
+/// the canonical key), for migrating a de-facto discriminator column
+/// (`category=bug`) into real task types — but only records whose value names
+/// a DECLARED type convert: repair never writes data the schema would reject.
+/// The status field stays guarded (every task already carries a status, so a
+/// rename there would mostly skip-and-confuse).
 fn apply_rename(
     log: &mut [MutationEvent],
     baseline: &mut [TaskState],
     spec: &str,
     config: &Config,
-) -> Result<(String, String, usize), DynError> {
+) -> Result<RenameOutcome, DynError> {
     let Some((new, old)) = spec
         .split_once('=')
         .filter(|(n, o)| !n.is_empty() && !o.is_empty())
@@ -145,48 +172,67 @@ fn apply_rename(
     if old == new {
         return Err(format!("`--rename {spec}`: old and new are the same name").into());
     }
-    if RESERVED_FIELD_KEYS.contains(&new) {
-        return Err(
-            format!("can't rename onto `{new}`: it is a reserved/computed field name").into(),
-        );
-    }
-    for (display, canonical) in crate::cli::canonical_field_pairs(&config.workflow) {
-        if new == canonical || new == display.as_str() {
+    let workflow = &config.workflow;
+    let to_type = new == TASK_TYPE_KEY || new == workflow.type_field;
+    if !to_type {
+        if RESERVED_FIELD_KEYS.contains(&new) {
+            return Err(
+                format!("can't rename onto `{new}`: it is a reserved/computed field name").into(),
+            );
+        }
+        if new == crate::model::STATUS_KEY || new == workflow.status_field {
             return Err(format!(
-                "can't rename onto `{new}`: it is the {} field — set it per task with \
-                 `ta update` instead",
-                if canonical == TASK_TYPE_KEY {
-                    "task-type"
-                } else {
-                    "status"
-                }
+                "can't rename onto `{new}`: it is the status field — set it per task with \
+                 `ta update` instead"
             )
             .into());
         }
     }
-    let mut count = 0;
+    // Type destination: store the canonical key, and convert only values that
+    // name a declared type — the rest keep their old column, reported.
+    let target = if to_type { TASK_TYPE_KEY } else { new };
+    let converts = |value: &Value| -> bool {
+        !to_type
+            || value
+                .as_str()
+                .is_some_and(|name| config.task_types.types.contains_key(name))
+    };
+    let (mut moved, mut kept) = (0, 0);
     for event in log.iter_mut() {
         if matches!(
             event.op,
             OpType::Create | OpType::Update | OpType::Append | OpType::Add | OpType::Remove
         ) && event.payload.contains_key(old)
-            && !event.payload.contains_key(new)
+            && !event.payload.contains_key(target)
         {
+            if !event.payload.get(old).is_some_and(&converts) {
+                kept += 1;
+                continue;
+            }
             if let Some(value) = event.payload.remove(old) {
-                event.payload.insert(new.to_string(), value);
-                count += 1;
+                event.payload.insert(target.to_string(), value);
+                moved += 1;
             }
         }
     }
     for task in baseline.iter_mut() {
-        if task.custom_fields.contains_key(old) && !task.custom_fields.contains_key(new) {
+        if task.custom_fields.contains_key(old) && !task.custom_fields.contains_key(target) {
+            if !task.custom_fields.get(old).is_some_and(&converts) {
+                kept += 1;
+                continue;
+            }
             if let Some(value) = task.custom_fields.remove(old) {
-                task.custom_fields.insert(new.to_string(), value);
-                count += 1;
+                task.custom_fields.insert(target.to_string(), value);
+                moved += 1;
             }
         }
     }
-    Ok((new.to_string(), old.to_string(), count))
+    Ok(RenameOutcome {
+        new: new.to_string(),
+        old: old.to_string(),
+        moved,
+        kept,
+    })
 }
 
 /// `--set-type-if-none`: stamp the user's chosen (declared) type onto every

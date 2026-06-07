@@ -283,3 +283,52 @@ fn nonconforming_tasks_are_read_tolerated_with_one_warning() {
         "conforming store is quiet"
     );
 }
+
+/// The `workflow.untyped_tasks` migration ladder: allow (sanctioned, silent),
+/// warn (tolerated, reported), deny (a type is mandatory — the default).
+#[test]
+fn untyped_tasks_policy_walks_allow_warn_deny() {
+    let dir = fresh_dir("schema-untyped-ladder");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    declare_schema(&dir);
+
+    // deny (default): untyped creations are rejected.
+    assert!(
+        !run(ta_bin(), &dir, &["create", "naked"]).status.success(),
+        "deny makes the type mandatory"
+    );
+
+    // allow: untyped tasks are fully sanctioned — created, written to, never
+    // reported anywhere.
+    ta(&dir, &["config", "set", "workflow.untyped_tasks", "allow"]);
+    ta(&dir, &["create", "free1", "priority=1"]);
+    ta(&dir, &["update", "free1", "priority=2"]);
+    let out = run(ta_bin(), &dir, &["list"]);
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("do not conform"),
+        "allow: silent"
+    );
+    assert!(
+        !ta(&dir, &["config", "validate"]).contains("not conforming"),
+        "allow: not even in the validate report"
+    );
+
+    // warn: still tolerated (creations and writes work), but reported.
+    ta(&dir, &["config", "set", "workflow.untyped_tasks", "warn"]);
+    ta(&dir, &["create", "free2", "note=x"]);
+    let out = run(ta_bin(), &dir, &["list"]);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("do not conform"),
+        "warn: reported"
+    );
+
+    // deny again: writes to the untyped tasks are blocked until typed.
+    ta(&dir, &["config", "set", "workflow.untyped_tasks", "deny"]);
+    assert!(
+        !run(ta_bin(), &dir, &["update", "free1", "priority=3"])
+            .status
+            .success(),
+        "deny blocks writes to untyped tasks"
+    );
+}

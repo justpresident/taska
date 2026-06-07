@@ -89,6 +89,12 @@ type_field = "{type_field}"
 # to their [task_types] schema (old data is read-tolerated by design; writes to
 # such a task must bring it into conformance). Set false to silence.
 warn_nonconforming = {warn_nonconforming}
+# Tasks WITHOUT a type while [task_types] schemas are declared: "allow"
+# (sanctioned — untouched by schemas, never reported), "warn" (tolerated, but
+# counted in the non-conformance warning), or "deny" (a type is mandatory: any
+# write to an untyped task is rejected until one is set). A long migration
+# typically walks allow -> warn -> deny.
+untyped_tasks = "{untyped_tasks}"
 
 [merge]
 # What to do when concurrent branches change the SAME field (or dependency) to
@@ -165,6 +171,7 @@ close_time = "{close_time}"
         default_status = workflow.default_status,
         type_field = workflow.type_field,
         warn_nonconforming = workflow.warn_nonconforming,
+        untyped_tasks = workflow.untyped_tasks.as_str(),
         on_conflict = on_conflict,
         columns = columns,
         max_width = display.max_width,
@@ -272,6 +279,36 @@ pub struct WorkflowConfig {
     /// data is read-tolerated by design; the warning is the signal to run the
     /// repair). `false` silences it.
     pub warn_nonconforming: bool,
+    /// Policy for tasks WITHOUT a task type while `[task_types]` schemas are
+    /// declared — the migration ladder: `allow` (sanctioned: untouched by
+    /// schemas, never reported), `warn` (tolerated, but counted in the
+    /// non-conformance report), `deny` (a type is mandatory: any write to an
+    /// untyped task is rejected until one is set).
+    pub untyped_tasks: UntypedTasks,
+}
+
+/// See [`WorkflowConfig::untyped_tasks`].
+///
+/// Typed tasks always validate fully — this only governs tasks missing the
+/// discriminator entirely (a task with an UNKNOWN type name is a violation
+/// under every policy).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UntypedTasks {
+    Allow,
+    Warn,
+    #[default]
+    Deny,
+}
+
+impl UntypedTasks {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Warn => "warn",
+            Self::Deny => "deny",
+        }
+    }
 }
 
 impl Default for WorkflowConfig {
@@ -282,6 +319,7 @@ impl Default for WorkflowConfig {
             default_status: "todo".to_string(),
             type_field: "type".to_string(),
             warn_nonconforming: true,
+            untyped_tasks: UntypedTasks::default(),
         }
     }
 }
