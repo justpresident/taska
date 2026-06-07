@@ -186,21 +186,17 @@ inverse = "relates_to"   # symmetric
 # store stays fully schema-agnostic). Once declared, the `type` field selects a
 # task's schema, enforced on every create/update (whole-task). Field kinds:
 # string, bool, int, uint, float, datetime, enum, any, array<T>, set<T>.
+# config.toml is TOML 1.1, so `fields` reads best as one multi-line inline
+# table (trailing comma allowed), one line per field; `default` is stamped at
+# create, healed onto writes, substituted at read for old data.
 [task_types.bug]
 closed = true                       # no fields beyond the declared ones
-[task_types.bug.fields]
-points = "uint"                     # shorthand: just the kind
-tags = "array<string>"
-[task_types.bug.fields.severity]    # long form when constraints are needed
-type = "enum"
-values = ["low", "medium", "high"]
-required = true
-default = "low"                     # stamped at create, healed onto writes,
-                                    # substituted at read for old data
-[task_types.bug.fields.estimate]
-type = "uint"
-min = 1
-max = 13
+fields = {
+  points   = "uint",                # shorthand: just the kind
+  tags     = "array<string>",
+  severity = { type = "enum", values = ["low", "medium", "high"], required = true, default = "low" },
+  estimate = { type = "uint", min = 1, max = 13 },
+}
 
 [display]
 # Columns for list/ready (and the field order used by --format json).

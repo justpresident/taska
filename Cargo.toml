@@ -29,9 +29,9 @@ harness = false
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
+toml = "1.1.2"
 # Comment-preserving TOML editing for `ta config set`.
-toml_edit = "0.22"
+toml_edit = "0.25.12"
 chrono = { version = "0.4", features = ["serde"] }
 petgraph = "0.8"
 # Per-field `~` regex criteria in `ta list`, and schema `pattern` constraints.

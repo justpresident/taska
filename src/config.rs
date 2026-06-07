@@ -155,21 +155,16 @@ close_time = "{close_time}"
 # bool, int, uint, float, datetime, enum, any, array<T>, set<T>. Long-form
 # constraints: required, default (stamped at create, healed onto writes,
 # substituted at read), min/max, pattern, min_len/max_len, min_items/max_items.
-# Example:
+# This file is TOML 1.1: `fields` reads best as one multi-line inline table
+# (trailing comma allowed), one line per field. Example:
 # [task_types.bug]
 # closed = true                       # no fields beyond the declared ones
-# [task_types.bug.fields]
-# points = "uint"                     # shorthand: just the kind
-# tags = "array<string>"
-# [task_types.bug.fields.severity]    # long form when constraints are needed
-# type = "enum"
-# values = ["low", "medium", "high"]
-# required = true
-# default = "low"
-# [task_types.bug.fields.estimate]
-# type = "uint"
-# min = 1
-# max = 13
+# fields = {{
+#   points   = "uint",                # shorthand: just the kind
+#   tags     = "array<string>",
+#   severity = {{ type = "enum", values = ["low", "medium", "high"], required = true, default = "low" }},
+#   estimate = {{ type = "uint", min = 1, max = 13 }},
+# }}
 "#,
         min_keep = MIN_KEEP_EVENTS,
         keep_events = compaction.keep_events,

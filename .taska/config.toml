@@ -121,24 +121,15 @@ kind = "info"
 # bool, int, uint, float, datetime, enum, any, array<T>, set<T>. Long-form
 # constraints: required, default (stamped at create, healed onto writes,
 # substituted at read), min/max, pattern, min_len/max_len, min_items/max_items.
+# This file is TOML 1.1: a long-form field reads best as a multi-line inline
+# table (trailing comma allowed).
 #
 # This repo's roadmap uses a single type: `ta create <id> type=task title=… notes=…`.
 [task_types.task]
 closed = true                         # no fields beyond the declared ones
-
-[task_types.task.fields]
-notes = { type = "string", required = true }
-
-[task_types.task.fields.title]
-type = "string"
-required = true
-min_len = 3
-
-[task_types.task.fields.status]
-type = "enum"
-values = ["todo", "in_progress", "closed"]
-required = true
-
-[task_types.task.fields.priority]
-type = "enum"
-values = ["low", "medium", "high"]
+fields = {
+  title    = { type = "string", required = true, min_len = 3 },
+  notes    = { type = "string", required = true },
+  status   = { type = "enum", values = ["todo", "in_progress", "closed"], required = true },
+  priority = { type = "enum", values = ["low", "medium", "high"] },
+}
