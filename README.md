@@ -150,6 +150,8 @@ keep_days = 30
 # `ta list --ready` treats a dependency as satisfied once it reaches done_status.
 status_field = "status"
 done_status = "closed"
+# Status stamped onto a new task when `ta create` doesn't set one ("" = off).
+default_status = "todo"
 # DISPLAY name of the task-type discriminator that selects a [task_types]
 # schema (stored canonically as `task_type`; renaming is free too).
 type_field = "type"

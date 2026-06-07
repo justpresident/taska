@@ -7,16 +7,17 @@ How taska stores tasks and reconciles concurrent edits. For *why* an event log
 
 Tasks are not stored as state. They live as an **append-only log of changes** in
 `.taska/mutations.jsonl` — one JSON event per line. Each event records an
-operation (`create`, `update`, `append`, `delete`, `add-dep`, `remove-dep`) on a task id,
-plus a store-minted **`seq`** number. The state you see (`ta list`, `ta show`) is
-*replayed* from the log on demand; it is never written back.
+operation (`Create`, `Update`, `Append`, `Add`, `Remove`, `Delete`, `AddEdge`,
+`RemoveEdge`) on a task id, plus a store-minted **`seq`** number. The state you
+see (`ta list`, `ta show`) is *replayed* from the log on demand; it is never
+written back.
 
 ```
-seq op      task   payload
-1   create  api    {"title":"Build API","status":"open"}
-2   create  db     {"status":"open"}
-3   add-dep api     db                 # api depends on db
-4   update  db     {"status":"closed"} # replay → db.status = closed
+seq op       task   payload
+1   Create   api    {"title":"Build API","status":"open"}
+2   Create   db     {"status":"open"}
+3   AddEdge  api    {"rel":"depends_on","target":"db"}   # api depends on db
+4   Update   db     {"status":"closed"}                  # replay → db.status = closed
 ```
 
 `seq` is the **authoritative order** — replay, compaction, and merge all key off
@@ -31,8 +32,8 @@ that loudly rather than silently re-sorting.
 
 ### Orphaned events
 
-An `update`/`delete`/dep event whose target task no longer exists (e.g. its
-`create` was reverted or merged away) is an **orphan**. Orphans are never fatal —
+Any non-`Create` event whose task no longer exists (e.g. its `Create` was
+reverted or merged away) is an **orphan**. Orphans are never fatal —
 replay counts them, every read warns about them, and `ta resolve` prunes them
 (dropping a no-op orphan can't change state).
 

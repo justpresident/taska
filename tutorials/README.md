@@ -57,14 +57,14 @@ $ TUTORIAL_NONINTERACTIVE=1 bash tutorials/run-all.sh
 
 | Script | What it teaches |
 |---|---|
-| `01-basics.sh` | Create tasks with arbitrary fields; `list` (aligned table), `--columns`, `--full`, `--format json`; `search`; `show <id>`. |
-| `02-dependencies.sh` | `block` to add dependency edges; `ready` showing only unblocked tasks; closing a dependency to unblock the dependent. |
+| `01-basics.sh` | Create tasks with arbitrary fields; `list` (aligned table), `--columns`, `--full`, `--format json`; filter criteria (`status=open`, `title~API`); `show <id>`. |
+| `02-dependencies.sh` | `dep add` to add `depends_on` edges; `dep tree`; `list --ready` showing only unblocked tasks; closing a dependency to unblock the dependent. |
 | `03-merge.sh` | Two branches editing concurrently: a clean auto-merge (different fields), a same-field conflict under `surface` (`ta resolve`), and the same conflict resolved silently under `theirs` / `latest`. |
 | `04-undo.sh` | `undo` of an uncommitted action (truncates) vs. a committed one (compensating event, with a before→after preview); `--count`, `--remove` (with its DANGER warning), and the confirmation prompt. |
 | `05-revert-convergence.sh` | `git revert` a commit of task events, then merge in both directions — the result is identical (reverts converge). |
 | `06-orphans.sh` | Manufacture an orphaned event, see the stderr warning on a read, then drop it with `ta resolve`. |
 | `07-compaction.sh` | Create more events than `keep_events`, `compact`, and watch the baseline grow while the log shrinks (task state unchanged). |
-| `08-null-unset.sh` | Set a field, then `update <id> field=null` to unset it; confirm it's gone from `list` / `show` / `search`. |
+| `08-null-unset.sh` | Set a field, then `update <id> field=null` to unset it; confirm it's gone from `show`, `list --full`, and filter criteria. |
 
 ## How the helpers work (`lib.sh`)
 
