@@ -5,6 +5,88 @@ All notable changes to `taska` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes bump the
 minor). History before 0.3.0 lives in the git log.
 
+## [0.5.0] - 2026-06-07
+
+This release adds opt-in **per-task-type schemas** — typed fields, constraints,
+and defaults enforced on every write — a **`ta repair`** command for store
+migrations and data fixes, and a cleaner on-disk event vocabulary (migrated
+automatically). Stores remain fully schema-agnostic until a schema is declared.
+
+### Added
+- **Per-task-type schemas** (`[task_types.<name>]` in config). A task's `type`
+  field selects its schema; field kinds are `string`, `bool`, `int`, `uint`,
+  `float`, `datetime`, `enum`, `any`, `array<T>`, `set<T>` — declared shorthand
+  (`points = "uint"`) or long form with constraints: `required`, `default`,
+  `min`/`max` (numbers, datetimes, strings), `pattern`, `min_len`/`max_len`,
+  `min_items`/`max_items`. `closed = true` rejects undeclared field names.
+  Enforcement is **whole-task on every create/update**, with every violation
+  reported in one error; retyping a task revalidates against the new type.
+- **Schema-aware value shaping.** Values coerce toward their declared kind at
+  write time: a declared string keeps its verbatim token (`version=3.10` stores
+  `"3.10"`, not `3.1`), numeric strings parse, a bare scalar lifts into a
+  declared array/set, and sets canonicalize to a sorted, deduped form so
+  concurrent inserts converge bytewise on merge.
+- **`+=` / `-=` on numbers and sets.** Declared numeric fields add/subtract and
+  `set<T>` fields insert/remove elements via new commutative `Add`/`Remove`
+  events — like text appends, they merge conflict-free across branches. Plain
+  text `+=` remains for strings and undeclared fields.
+- **Field defaults with a full life-cycle:** stamped at create, healed onto any
+  write that leaves the field absent, substituted at read for missing/invalid
+  stored values, and stamped by `ta repair --schema` — so `required` + `default`
+  never blocks a write.
+- **Read tolerance.** Reads never fail on non-conforming (grandfathered) data:
+  read commands print one warning (silence with
+  `[workflow] warn_nonconforming = false`), `ta config validate` lists every
+  violation, and writes to such a task must bring it into conformance. The
+  `[workflow] untyped_tasks = "allow" | "warn" | "deny"` knob is the migration
+  ladder for legacy untyped stores.
+- **`ta repair`** — the store fixer, and the one sanctioned command that
+  rewrites existing records (no prompt: review with `git diff`, revert with
+  `git restore` before committing). `--migrate` applies on-disk format
+  migrations; `--schema` applies every lossless fix toward the declared schemas
+  (value coercions, datetime normalization, required-default stamping) and
+  lists the ambiguous remainder with suggested commands; `--rename NEW=OLD`
+  moves a column under its declared name — including adopting a de-facto type
+  column, converting only values that name a declared type;
+  `--set-type-if-none TYPE` explicitly types every untyped task. All
+  idempotent.
+- **`ta list` filters by relationship names:** a declared type or inverse name
+  is a criterion field (`depends_on=db`, `blocks=api`, `subtask_of=epic`),
+  `deps=<id>` matches any edge, and computed columns work in criteria
+  (`unblocks=0`).
+- **Configurable `status`/`type` display names.** `[workflow] status_field` and
+  `type_field` rename what you see and type; storage always uses the canonical
+  keys (`status`, `task_type`), so renaming is free — no data migration — and
+  clones with different display configs merge cleanly.
+- **TOML 1.1 config.** `config.toml` accepts multi-line inline tables and
+  trailing commas; the template and docs now style a type's `fields`, the
+  relationship defs, and `column_max_width` as inline tables, and
+  `ta config set` edits inside them while preserving comments and formatting.
+
+### Changed
+- **On-disk event vocabulary** (breaking, migrated by `ta repair --migrate`; a
+  legacy store is detected and refused on read with instructions): edge ops are
+  `AddEdge`/`RemoveEdge` (were `AddDep`/`RemoveDep`) with payload keys
+  `rel`/`target` (were `type`/`dep`), and the type discriminator is stored as
+  `task_type`. The parser keeps accepting the legacy spellings until v1, so old
+  logs remain readable for migration and cross-branch merging.
+- **The `deps` column carries the whole typed relationship map**, grouped by
+  type in every format — labeled groups in human output (gating types bold,
+  informational dim), a `{type: [targets…]}` object in json/jsonl — instead of
+  a flat `depends_on` list.
+- `[relationships]` declarations use `kind = "blocker" | "hierarchy" | "info"`
+  (was `type =`; the old key is still accepted until v1).
+- **`ta init` works from anywhere in the repo:** a new store is created at the
+  SCM root (not the invocation directory), nested `.git`/`.taska` layouts are
+  fully supported, running outside any git repo prints one actionable warning
+  instead of raw git errors, and every store command warns when the clone's
+  merge-driver protection is missing or incomplete (pointing at `ta init`).
+- `ta undo` compensates **all** typed relationship edges, not just
+  `depends_on`.
+- Config validation enforces one namespace across every configured name —
+  field, relationship, timestamp, and computed-column names can't collide.
+- Upgraded `toml` to 1.1.2 and `toml_edit` to 0.25 (TOML spec 1.1).
+
 ## [0.4.0] - 2026-06-05
 
 This release adds a parent/child **subtask** hierarchy, makes every mutation
