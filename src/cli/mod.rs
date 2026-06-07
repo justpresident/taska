@@ -46,10 +46,12 @@ struct Cli {
 enum Commands {
     /// Initialize a taska repository environment
     Init,
-    /// Create a new schema-agnostic task: `ta create <id> [field=value ...]`
+    /// Create a new task: `ta create <id> [field=value ...]`
     ///
     /// Errors if `<id>` already exists or a field name is reserved/computed
     /// (`id`, `deps`, the timestamp/graph columns, relationship type names).
+    /// Fields are free-form until `[task_types]` declares schemas — then the
+    /// task must conform to its type (every violation reported in one error).
     Create {
         id: String,
         /// Fields as `key=value` (parsed as JSON when possible). `key=@FILE` reads
@@ -59,7 +61,8 @@ enum Commands {
     /// Update a task: `=` sets, `+=` accumulates, `-=` removes (e.g. `points+=2`)
     ///
     /// The task must exist; a write that changes nothing is dropped (nothing is
-    /// logged), and `+=`/`-=` are rejected on the single-valued status field.
+    /// logged), and `+=`/`-=` are rejected on the single-valued status and
+    /// task-type fields.
     Update {
         id: String,
         /// `key=value` sets a field; `key+=value` appends text (string fields),
