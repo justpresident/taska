@@ -158,7 +158,7 @@ fn undo_committed_compensates_typed_edges() {
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
-    // Undo the committed typed add: the log must GROW (typed RemoveDep
+    // Undo the committed typed add: the log must GROW (typed RemoveEdge
     // compensation appended) and the edge must be gone from state.
     let log = dir.join(".taska/mutations.jsonl");
     let before = rows(&log);
@@ -175,10 +175,10 @@ fn undo_committed_compensates_typed_edges() {
     let tail = std::fs::read_to_string(&log).unwrap();
     let last = tail.lines().last().unwrap();
     assert!(
-        last.contains(r#""op":"RemoveDep""#)
-            && last.contains(r#""type":"relates_to""#)
-            && last.contains(r#""dep":"b""#),
-        "compensation is a TYPED RemoveDep: {last}"
+        last.contains(r#""op":"RemoveEdge""#)
+            && last.contains(r#""rel":"relates_to""#)
+            && last.contains(r#""target":"b""#),
+        "compensation is a TYPED RemoveEdge: {last}"
     );
 
     // Now the inverse: commit a typed REMOVE, undo it, and the edge returns.

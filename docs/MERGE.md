@@ -122,12 +122,12 @@ materialized graph. Compaction bounds on-disk growth as history accumulates.
 
 The numbers below come from `cargo bench --bench perf` (a dependency-free
 `std::time` harness; release build, single core) over synthetic logs. Each log
-is ~¼ `Create`s; the rest are `Update`s and random `AddDep`s, with the dep share
+is ~¼ `Create`s; the rest are `Update`s and random `AddEdge`s, with the dep share
 varied to probe how a denser graph behaves (the `create / update / dep` column
 gives the actual mix). Treat them as orders of magnitude, not guarantees.
 
 **Replay / materialize** scales linearly with log length, and a denser
-dependency graph costs a little more — the per-task dedup on `AddDep` grows with
+dependency graph costs a little more — the per-task dedup on `AddEdge` grows with
 edges/task. The log is ~97 bytes/event on disk.
 
 | events  | create / update / dep | log size | replay   |

@@ -18,16 +18,44 @@ use serde_json::{Map, Value};
 /// boundaries.
 pub const DEPENDS_ON: &str = "depends_on";
 
-/// Payload key for the dependency target id in `AddDep`/`RemoveDep` events.
+/// Payload key for an edge's target task id in `AddEdge`/`RemoveEdge` events.
 ///
-/// Together with [`DEP_TYPE_KEY`] this is an on-disk event-schema contract: every
+/// Together with [`REL_KEY`] this is an on-disk event-schema contract: every
 /// reader (engine, merge) and writer (the `dep`/`undo` commands, merge
 /// resolutions) must agree, so the strings are named once here.
-pub const DEP_KEY: &str = "dep";
+pub const TARGET_KEY: &str = "target";
 
-/// Payload key for a dependency edge's relationship type (absent = the default
-/// [`DEPENDS_ON`]). See [`DEP_KEY`].
-pub const DEP_TYPE_KEY: &str = "type";
+/// Payload key for an edge's relationship type name (absent = the default
+/// [`DEPENDS_ON`], a pre-typed-relationships legacy). See [`TARGET_KEY`].
+pub const REL_KEY: &str = "rel";
+
+/// Pre-rename spelling of [`TARGET_KEY`]. Read-accepted (via [`edge_target`])
+/// until v1; `ta repair --migrate` rewrites it.
+pub const LEGACY_TARGET_KEY: &str = "dep";
+
+/// Pre-rename spelling of [`REL_KEY`]. Read-accepted (via [`edge_rel`]) until
+/// v1; `ta repair --migrate` rewrites it.
+pub const LEGACY_REL_KEY: &str = "type";
+
+/// An edge event's target id, accepting the legacy `dep` key until v1.
+#[must_use]
+pub fn edge_target(payload: &Map<String, Value>) -> Option<&str> {
+    payload
+        .get(TARGET_KEY)
+        .or_else(|| payload.get(LEGACY_TARGET_KEY))
+        .and_then(Value::as_str)
+}
+
+/// An edge event's relationship type name, accepting the legacy `type` key
+/// until v1. `None` only for pre-typed events; replay defaults those to
+/// [`DEPENDS_ON`].
+#[must_use]
+pub fn edge_rel(payload: &Map<String, Value>) -> Option<&str> {
+    payload
+        .get(REL_KEY)
+        .or_else(|| payload.get(LEGACY_REL_KEY))
+        .and_then(Value::as_str)
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum OpType {
@@ -39,8 +67,14 @@ pub enum OpType {
     /// accumulates conflict-free across branches.
     Append,
     Delete,
-    AddDep,
-    RemoveDep,
+    /// Add a typed relationship edge (`target` + `rel` payload keys). The
+    /// pre-rename op name `AddDep` still parses as an alias until v1;
+    /// serialization always emits the current name.
+    #[serde(alias = "AddDep")]
+    AddEdge,
+    /// Remove a typed relationship edge. Alias as for [`OpType::AddEdge`].
+    #[serde(alias = "RemoveDep")]
+    RemoveEdge,
 }
 
 /// A single append-only record in the mutation log.

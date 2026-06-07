@@ -27,7 +27,9 @@ use serde_json::{Map, Value};
 
 use crate::config::OnConflict;
 use crate::error::DynError;
-use crate::model::{MutationEvent, OpType, TaskState, DEPENDS_ON, DEP_KEY, DEP_TYPE_KEY};
+use crate::model::{
+    edge_rel, edge_target, MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, TARGET_KEY,
+};
 
 /// `ta git-merge %O %A %B` — reconcile diverged mutation logs into `current`.
 ///
@@ -294,18 +296,15 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
                 delta.last_change = Some(max_ts(delta.last_change, event.timestamp));
             }
             OpType::Delete => delta.deleted = Some(event.timestamp),
-            OpType::AddDep | OpType::RemoveDep => {
-                if let Some(dep) = event.payload.get(DEP_KEY).and_then(|v| v.as_str()) {
-                    // Absent type = the legacy/default `depends_on`.
-                    let dep_type = event
-                        .payload
-                        .get(DEP_TYPE_KEY)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(DEPENDS_ON);
+            OpType::AddEdge | OpType::RemoveEdge => {
+                // edge_target/edge_rel accept the legacy `dep`/`type` keys until
+                // v1; an absent rel is the pre-typed default `depends_on`.
+                if let Some(dep) = edge_target(&event.payload) {
+                    let dep_type = edge_rel(&event.payload).unwrap_or(DEPENDS_ON);
                     delta.deps.insert(
                         (dep_type.to_string(), dep.to_string()),
                         DepWrite {
-                            added: matches!(event.op, OpType::AddDep),
+                            added: matches!(event.op, OpType::AddEdge),
                             ts: event.timestamp,
                         },
                     );
@@ -644,14 +643,14 @@ fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &m
             Side::Theirs => (tw.added, tw.ts),
         };
         let op = if added {
-            OpType::AddDep
+            OpType::AddEdge
         } else {
-            OpType::RemoveDep
+            OpType::RemoveEdge
         };
         let mut payload = Map::new();
-        payload.insert(DEP_KEY.to_string(), Value::String(target.clone()));
+        payload.insert(TARGET_KEY.to_string(), Value::String(target.clone()));
         // Every edge carries an explicit type now (no implicit `depends_on`).
-        payload.insert(DEP_TYPE_KEY.to_string(), Value::String(rel_type.clone()));
+        payload.insert(REL_KEY.to_string(), Value::String(rel_type.clone()));
         // Label the edge by type unless it's the default `depends_on`.
         let label = if rel_type == DEPENDS_ON {
             target.clone()
@@ -1164,14 +1163,14 @@ mod tests {
         let anc = vec![ev(1, 0, OpType::Create, "X", &[])];
         let ours = [
             anc[0].clone(),
-            ev(2, 0, OpType::AddDep, "X", &[("dep", json!("Y"))]),
+            ev(2, 0, OpType::AddEdge, "X", &[("dep", json!("Y"))]),
         ];
         let theirs = vec![
             anc[0].clone(),
             ev(
                 2,
                 0,
-                OpType::AddDep,
+                OpType::AddEdge,
                 "X",
                 &[("dep", json!("Y")), ("type", json!("relates_to"))],
             ),

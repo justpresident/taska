@@ -47,7 +47,7 @@ impl Rng {
 }
 
 /// A synthetic log of `n` events at a given dependency density. ~¼ of the events
-/// are `Create`s; of the rest, `dep_pct`% are `AddDep` to a random task and the
+/// are `Create`s; of the rest, `dep_pct`% are `AddEdge` to a random task and the
 /// remainder are `Update`s. Seqs are `1..=n`, timestamps 1s apart; the PRNG seed
 /// is fixed per `(n, dep_pct)` so the log is identical across runs.
 fn gen_log(n: usize, dep_pct: usize) -> Vec<MutationEvent> {
@@ -63,8 +63,8 @@ fn gen_log(n: usize, dep_pct: usize) -> Vec<MutationEvent> {
                 payload.insert("title".into(), json!(format!("Task {i}")));
                 OpType::Create
             } else if rng.below(100) < dep_pct {
-                payload.insert("dep".into(), json!(format!("t{}", rng.below(tasks))));
-                OpType::AddDep
+                payload.insert("target".into(), json!(format!("t{}", rng.below(tasks))));
+                OpType::AddEdge
             } else {
                 payload.insert("priority".into(), json!(i % 5));
                 OpType::Update
@@ -155,7 +155,7 @@ fn op_mix(log: &[MutationEvent]) -> (usize, usize, usize) {
     for e in log {
         match e.op {
             OpType::Create => creates += 1,
-            OpType::AddDep => deps += 1,
+            OpType::AddEdge => deps += 1,
             _ => {}
         }
     }
@@ -176,7 +176,7 @@ fn write_log(path: &Path, log: &[MutationEvent]) {
 }
 
 fn bench_replay() {
-    // The `dep_pct` knob is the chance a *non-create* event is an `AddDep`; the
+    // The `dep_pct` knob is the chance a *non-create* event is an `AddEdge`; the
     // "create / update / dep" column reports the resulting whole-log mix (creates
     // are ~¼ of every log), so the composition is explicit rather than implied.
     println!("Replay / materialize — by log size and event mix:\n");
@@ -339,13 +339,13 @@ fn gen_rel_log(n: usize) -> Vec<MutationEvent> {
                 payload.insert("priority".into(), json!(i % 5));
                 OpType::Update
             } else {
-                payload.insert("dep".into(), json!(format!("t{}", rng.below(src))));
+                payload.insert("target".into(), json!(format!("t{}", rng.below(src))));
                 // 1-in-4 stays a plain depends_on; the rest become typed edges.
                 let k = rng.below(REL_TYPES.len() + 1);
                 if k < REL_TYPES.len() {
-                    payload.insert("type".into(), json!(REL_TYPES[k]));
+                    payload.insert("rel".into(), json!(REL_TYPES[k]));
                 }
-                OpType::AddDep
+                OpType::AddEdge
             };
             MutationEvent {
                 seq: (i + 1) as u64,

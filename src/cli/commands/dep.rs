@@ -11,7 +11,7 @@ use crate::cli::{materialize, state_of, vet_events};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::OutputArgs;
-use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, DEP_KEY, DEP_TYPE_KEY};
+use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, TARGET_KEY};
 use crate::storage::EventStore;
 
 /// `ta dep` subcommands. Edges are `type=target` tokens; `type` must be declared
@@ -72,7 +72,7 @@ pub enum DepAction {
 }
 
 /// Add or remove typed dependency edges. Each `type=target` edge's type is
-/// validated against the declared relationship types; an `AddDep`/`RemoveDep`
+/// validated against the declared relationship types; an `AddEdge`/`RemoveEdge`
 /// event is appended per edge (the `depends_on` type omits an explicit `type` to
 /// stay legacy-shaped on disk — it's stored in the dedicated `depends_on` field).
 pub fn cmd_dep_group(
@@ -82,10 +82,10 @@ pub fn cmd_dep_group(
 ) -> Result<(), DynError> {
     match action {
         DepAction::Add { task, edges } => {
-            dep_write(store, &task, &edges, &OpType::AddDep, "Added", types)
+            dep_write(store, &task, &edges, &OpType::AddEdge, "Added", types)
         }
         DepAction::Remove { task, edges } => {
-            dep_write(store, &task, &edges, &OpType::RemoveDep, "Removed", types)
+            dep_write(store, &task, &edges, &OpType::RemoveEdge, "Removed", types)
         }
         DepAction::Tree {
             tasks,
@@ -115,7 +115,7 @@ fn dep_write(
     verb: &str,
     types: &BTreeMap<String, RelationshipDef>,
 ) -> Result<(), DynError> {
-    let removing = matches!(op, OpType::RemoveDep);
+    let removing = matches!(op, OpType::RemoveEdge);
     let mut resolved: Vec<(String, String, String)> = Vec::new();
     for edge in edges {
         let (name, target) = edge
@@ -128,9 +128,9 @@ fn dep_write(
         .iter()
         .map(|(owner, rel_type, dep)| {
             let mut payload = Map::new();
-            payload.insert(DEP_KEY.to_string(), Value::String(dep.clone()));
+            payload.insert(TARGET_KEY.to_string(), Value::String(dep.clone()));
             // Every edge carries an explicit type now — no implicit `depends_on`.
-            payload.insert(DEP_TYPE_KEY.to_string(), Value::String(rel_type.clone()));
+            payload.insert(REL_KEY.to_string(), Value::String(rel_type.clone()));
             MutationEvent::new(op.clone(), owner.clone(), payload)
         })
         .collect();

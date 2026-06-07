@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value};
 
-use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, DEP_KEY, DEP_TYPE_KEY};
+use crate::model::{edge_rel, edge_target, is_done, MutationEvent, OpType, TaskState, DEPENDS_ON};
 
 pub struct Engine;
 
@@ -35,18 +35,16 @@ fn apply_set(fields: &mut Map<String, Value>, payload: Map<String, Value>) {
     }
 }
 
-/// Apply an `AddDep`/`RemoveDep` (`add` = true/false). The edge's `type` (absent
+/// Apply an `AddEdge`/`RemoveEdge` (`add` = true/false). The edge's `rel` (absent
 /// = the default [`DEPENDS_ON`]) keys it in the `relationships` map — every type,
 /// `depends_on` included, is stored uniformly. An emptied entry is dropped so the
-/// map stays clean.
+/// map stays clean. Reads via [`edge_target`]/[`edge_rel`], so legacy `dep`/`type`
+/// payload keys replay correctly until v1 drops them.
 fn apply_dep(task: &mut TaskState, payload: &Map<String, Value>, add: bool) {
-    let Some(dep_id) = payload.get(DEP_KEY).and_then(Value::as_str) else {
+    let Some(dep_id) = edge_target(payload) else {
         return;
     };
-    let rel_type = payload
-        .get(DEP_TYPE_KEY)
-        .and_then(Value::as_str)
-        .unwrap_or(DEPENDS_ON);
+    let rel_type = edge_rel(payload).unwrap_or(DEPENDS_ON);
 
     if add {
         let targets = task.relationships.entry(rel_type.to_string()).or_default();
@@ -114,7 +112,7 @@ impl Engine {
 
     /// Like [`Engine::materialize_state`], but also reports *orphaned* events:
     /// those whose target task did not exist when the event was applied, so the
-    /// event folded into nothing. These are `Update`/`Append`/`AddDep`/`RemoveDep`/
+    /// event folded into nothing. These are `Update`/`Append`/`AddEdge`/`RemoveEdge`/
     /// `Delete` events on a `task_id` absent from the state map at apply time
     /// (`Create` is never an orphan). The returned `Vec<u64>` holds their `seq`s in
     /// replay order.
@@ -193,7 +191,7 @@ impl Engine {
                         orphans.push(event.seq);
                     }
                 }
-                OpType::AddDep => {
+                OpType::AddEdge => {
                     if let Some(task) = state_map.get_mut(&event.task_id) {
                         apply_dep(task, &event.payload, true);
                         // A dep change touches the task but never its status.
@@ -202,7 +200,7 @@ impl Engine {
                         orphans.push(event.seq);
                     }
                 }
-                OpType::RemoveDep => {
+                OpType::RemoveEdge => {
                     if let Some(task) = state_map.get_mut(&event.task_id) {
                         apply_dep(task, &event.payload, false);
                         task.update_time = Some(ts);
@@ -336,7 +334,7 @@ mod tests {
             ev(OpType::Create, "a", fields(&[("status", json!("open"))])),
             ev(OpType::Create, "b", serde_json::Map::new()),
             ev(OpType::Update, "a", fields(&[("status", json!("done"))])),
-            ev(OpType::AddDep, "b", fields(&[("dep", json!("a"))])),
+            ev(OpType::AddEdge, "b", fields(&[("target", json!("a"))])),
             ev(OpType::Create, "c", serde_json::Map::new()),
             ev(OpType::Delete, "c", serde_json::Map::new()),
         ];
@@ -349,6 +347,38 @@ mod tests {
             "update overwrote create"
         );
         assert_eq!(state["b"].depends_on(), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn legacy_edge_op_aliases_and_payload_keys_replay() {
+        // Pre-rename logs: ops spelled `AddDep`/`RemoveDep` with `dep`/`type`
+        // payload keys. The op parses via its serde alias, the keys via the
+        // edge_target/edge_rel fallbacks — both tolerated until v1.
+        let raw = concat!(
+            r#"{"seq":1,"timestamp":"2026-01-01T00:00:00Z","op":"Create","task_id":"a"}"#,
+            "\n",
+            r#"{"seq":2,"timestamp":"2026-01-01T00:00:00Z","op":"Create","task_id":"b"}"#,
+            "\n",
+            r#"{"seq":3,"timestamp":"2026-01-01T00:00:00Z","op":"AddDep","task_id":"b","dep":"a","type":"relates_to"}"#,
+            "\n",
+            r#"{"seq":4,"timestamp":"2026-01-01T00:00:00Z","op":"AddDep","task_id":"a","dep":"b"}"#,
+        );
+        let mutations: Vec<MutationEvent> = raw
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(mutations[2].op, OpType::AddEdge, "alias parses as new op");
+        let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
+        assert_eq!(
+            state["b"].relationships["relates_to"],
+            vec!["a".to_string()],
+            "legacy typed edge lands under its rel"
+        );
+        assert_eq!(
+            state["a"].depends_on(),
+            vec!["b".to_string()],
+            "legacy untyped edge defaults to depends_on"
+        );
     }
 
     #[test]
@@ -375,27 +405,27 @@ mod tests {
         let mutations = vec![
             ev(OpType::Create, "a", serde_json::Map::new()),
             // Legacy untyped, and explicit depends_on, both land in depends_on.
-            ev(OpType::AddDep, "a", fields(&[("dep", json!("b"))])),
+            ev(OpType::AddEdge, "a", fields(&[("target", json!("b"))])),
             ev(
-                OpType::AddDep,
+                OpType::AddEdge,
                 "a",
-                fields(&[("dep", json!("c")), ("type", json!("depends_on"))]),
+                fields(&[("target", json!("c")), ("rel", json!("depends_on"))]),
             ),
             // A typed edge lands in the relationships map (not depends_on).
             ev(
-                OpType::AddDep,
+                OpType::AddEdge,
                 "a",
-                fields(&[("dep", json!("d")), ("type", json!("relates_to"))]),
+                fields(&[("target", json!("d")), ("rel", json!("relates_to"))]),
             ),
             ev(
-                OpType::AddDep,
+                OpType::AddEdge,
                 "a",
-                fields(&[("dep", json!("e")), ("type", json!("relates_to"))]),
+                fields(&[("target", json!("e")), ("rel", json!("relates_to"))]),
             ),
             ev(
-                OpType::RemoveDep,
+                OpType::RemoveEdge,
                 "a",
-                fields(&[("dep", json!("d")), ("type", json!("relates_to"))]),
+                fields(&[("target", json!("d")), ("rel", json!("relates_to"))]),
             ),
         ];
         let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
@@ -409,14 +439,14 @@ mod tests {
         let mutations = vec![
             ev(OpType::Create, "a", serde_json::Map::new()),
             ev(
-                OpType::AddDep,
+                OpType::AddEdge,
                 "a",
-                fields(&[("dep", json!("d")), ("type", json!("relates_to"))]),
+                fields(&[("target", json!("d")), ("rel", json!("relates_to"))]),
             ),
             ev(
-                OpType::RemoveDep,
+                OpType::RemoveEdge,
                 "a",
-                fields(&[("dep", json!("d")), ("type", json!("relates_to"))]),
+                fields(&[("target", json!("d")), ("rel", json!("relates_to"))]),
             ),
         ];
         let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
@@ -438,7 +468,7 @@ mod tests {
         }];
         let mutations = vec![
             ev(OpType::Update, "a", fields(&[("status", json!("done"))])),
-            ev(OpType::RemoveDep, "a", fields(&[("dep", json!("x"))])),
+            ev(OpType::RemoveEdge, "a", fields(&[("target", json!("x"))])),
         ];
         let state = Engine::materialize_state(baseline, mutations, "status", "closed");
 
@@ -461,7 +491,7 @@ mod tests {
             ev(OpType::Create, "b", serde_json::Map::new()),
             ev(OpType::Delete, "b", serde_json::Map::new()),
             // ...so events after its deletion apply to nothing: orphans.
-            ev(OpType::AddDep, "b", fields(&[("dep", json!("a"))])),
+            ev(OpType::AddEdge, "b", fields(&[("target", json!("a"))])),
             ev(OpType::Delete, "b", serde_json::Map::new()),
         ];
         // Assign seqs so the report identifies events by their authoritative order.
@@ -478,7 +508,7 @@ mod tests {
 
         assert_eq!(state.len(), 1, "only `a` survives");
         assert_eq!(state["a"].custom_fields["status"], json!("done"));
-        // Orphans: the ghost Update (seq 3), the AddDep (seq 6) and Delete (seq 7)
+        // Orphans: the ghost Update (seq 3), the AddEdge (seq 6) and Delete (seq 7)
         // after `b` was deleted, in replay order. The normal create/update and
         // the first delete of an existing task are not reported.
         assert_eq!(orphans, vec![3, 6, 7]);
@@ -488,8 +518,8 @@ mod tests {
     fn add_dep_is_idempotent() {
         let mutations = vec![
             ev(OpType::Create, "a", serde_json::Map::new()),
-            ev(OpType::AddDep, "a", fields(&[("dep", json!("b"))])),
-            ev(OpType::AddDep, "a", fields(&[("dep", json!("b"))])),
+            ev(OpType::AddEdge, "a", fields(&[("target", json!("b"))])),
+            ev(OpType::AddEdge, "a", fields(&[("target", json!("b"))])),
         ];
         let state = Engine::materialize_state(Vec::new(), mutations, "status", "closed");
         assert_eq!(

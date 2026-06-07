@@ -13,7 +13,9 @@
 use serde_json::Value;
 
 use crate::config::Config;
-use crate::model::{MutationEvent, OpType, TaskState, DEP_TYPE_KEY};
+use crate::model::{
+    MutationEvent, OpType, TaskState, LEGACY_REL_KEY, LEGACY_TARGET_KEY, REL_KEY, TARGET_KEY,
+};
 
 /// The mutable store contents the passes rewrite.
 pub struct Snapshot {
@@ -33,11 +35,18 @@ pub struct Migration {
 
 /// Every migration, oldest first. **Append new passes here** — never reorder or
 /// remove, since a store may be at any earlier version.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    id: "typed-dep-edges",
-    pending: pending_typed_dep_edges,
-    apply: apply_typed_dep_edges,
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        id: "typed-dep-edges",
+        pending: pending_typed_dep_edges,
+        apply: apply_typed_dep_edges,
+    },
+    Migration {
+        id: "edge-vocabulary",
+        pending: pending_edge_vocabulary,
+        apply: apply_edge_vocabulary,
+    },
+];
 
 /// The first thing a stale store needs, if any — for the read path to surface
 /// "run `ta repair --migrate`" before doing work, without rewriting anything.
@@ -58,11 +67,13 @@ pub fn run_all(snap: &mut Snapshot, config: &Config) -> Vec<(&'static str, usize
         .collect()
 }
 
-/// Whether an `AddDep`/`RemoveDep` event predates typed relationships: it carries
-/// no `type` key (an untyped edge historically meant the default blocker).
+/// Whether an edge event predates typed relationships: it carries a rel under
+/// neither the current `rel` key nor the legacy `type` key (an untyped edge
+/// historically meant the default blocker).
 fn is_untyped_dep_event(event: &MutationEvent) -> bool {
-    matches!(event.op, OpType::AddDep | OpType::RemoveDep)
-        && !event.payload.contains_key(DEP_TYPE_KEY)
+    matches!(event.op, OpType::AddEdge | OpType::RemoveEdge)
+        && !event.payload.contains_key(REL_KEY)
+        && !event.payload.contains_key(LEGACY_REL_KEY)
 }
 
 fn pending_typed_dep_edges(snap: &Snapshot, _config: &Config) -> Option<String> {
@@ -71,7 +82,9 @@ fn pending_typed_dep_edges(snap: &Snapshot, _config: &Config) -> Option<String> 
 }
 
 /// v1: stamp the configured default blocker type onto every untyped dependency
-/// event, so the log no longer relies on an implicit `depends_on`.
+/// event, so the log no longer relies on an implicit `depends_on`. Stamps the
+/// current `rel` key; pre-rename `type` stamps from older runs are converted by
+/// the `edge-vocabulary` pass that follows.
 fn apply_typed_dep_edges(snap: &mut Snapshot, config: &Config) -> usize {
     let Some(default) = config.relationships.default_blocker() else {
         return 0; // `Config::validate` requires one; be defensive.
@@ -82,9 +95,43 @@ fn apply_typed_dep_edges(snap: &mut Snapshot, config: &Config) -> usize {
         if is_untyped_dep_event(event) {
             event
                 .payload
-                .insert(DEP_TYPE_KEY.to_string(), Value::String(default.clone()));
+                .insert(REL_KEY.to_string(), Value::String(default.clone()));
             changed += 1;
         }
+    }
+    changed
+}
+
+/// Whether an edge event still uses the pre-rename payload vocabulary
+/// (`dep`/`type` instead of `target`/`rel`). The op NAME needs no detection:
+/// `AddDep`/`RemoveDep` parse as aliases and re-serialize canonically whenever
+/// the log is rewritten — including by this pass.
+fn has_legacy_edge_keys(event: &MutationEvent) -> bool {
+    matches!(event.op, OpType::AddEdge | OpType::RemoveEdge)
+        && (event.payload.contains_key(LEGACY_TARGET_KEY)
+            || event.payload.contains_key(LEGACY_REL_KEY))
+}
+
+fn pending_edge_vocabulary(snap: &Snapshot, _config: &Config) -> Option<String> {
+    let n = snap.log.iter().filter(|e| has_legacy_edge_keys(e)).count();
+    (n > 0).then(|| format!("{n} edge event(s) use the legacy `dep`/`type` payload keys"))
+}
+
+/// v2: rename the edge payload keys `dep` -> `target` and `type` -> `rel`
+/// (defensively keeping an already-present current key over a stray legacy
+/// duplicate). Re-serialization normalizes the op spellings in the same write.
+fn apply_edge_vocabulary(snap: &mut Snapshot, _config: &Config) -> usize {
+    let mut changed = 0;
+    for event in &mut snap.log {
+        if !has_legacy_edge_keys(event) {
+            continue;
+        }
+        for (legacy, current) in [(LEGACY_TARGET_KEY, TARGET_KEY), (LEGACY_REL_KEY, REL_KEY)] {
+            if let Some(value) = event.payload.remove(legacy) {
+                event.payload.entry(current.to_string()).or_insert(value);
+            }
+        }
+        changed += 1;
     }
     changed
 }

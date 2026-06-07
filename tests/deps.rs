@@ -78,10 +78,10 @@ fn dep_command_adds_and_removes_typed_edges() {
         json.contains(r#""deps":{"depends_on":["b"],"relates_to":["c"]}"#),
         "typed edges show in deps: {json}"
     );
-    // The relates_to edge is recorded as a typed AddDep event.
+    // The relates_to edge is recorded as a typed AddEdge event.
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        log.contains(r#""type":"relates_to""#) && log.contains(r#""dep":"c""#),
+        log.contains(r#""rel":"relates_to""#) && log.contains(r#""target":"c""#),
         "typed relates_to edge in the log: {log}"
     );
 
@@ -364,7 +364,7 @@ fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
 
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        log.contains(r#""type":"has_subtask""#) && log.contains(r#""dep":"wire-auth""#),
+        log.contains(r#""rel":"has_subtask""#) && log.contains(r#""target":"wire-auth""#),
         "inverse add stored as has_subtask on epic: {log}"
     );
 

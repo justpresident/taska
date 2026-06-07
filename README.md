@@ -101,7 +101,7 @@ Commit `.taska/` and `.gitattributes` along with your code — they travel with 
 
 ## How it works
 
-Every command appends an immutable event (`Create`, `Update`, `Append`, `Delete`, `AddDep`, `RemoveDep`) to `.taska/mutations.jsonl`. The current state of every task is **materialized** by replaying that log in order; nothing is mutated in place.
+Every command appends an immutable event (`Create`, `Update`, `Append`, `Delete`, `AddEdge`, `RemoveEdge`) to `.taska/mutations.jsonl`. The current state of every task is **materialized** by replaying that log in order; nothing is mutated in place.
 
 Each event carries a store-minted, strictly increasing `seq`. That sequence — not the wall clock — is the authoritative order, which keeps replay deterministic even after branches with interleaved timestamps are merged.
 

@@ -19,7 +19,7 @@ use crate::engine::Engine;
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs};
 use crate::merge;
-use crate::model::{MutationEvent, OpType, TaskState, DEPENDS_ON, DEP_KEY, DEP_TYPE_KEY};
+use crate::model::{MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, TARGET_KEY};
 use crate::storage::{EventStore, FileStore};
 
 mod commands;
@@ -366,7 +366,7 @@ pub(crate) fn materialize(
 
 /// Load and materialize the current task map from any store.
 ///
-/// Replay also reports *orphaned* events — `Update`/`Append`/`AddDep`/`RemoveDep`/
+/// Replay also reports *orphaned* events — `Update`/`Append`/`AddEdge`/`RemoveEdge`/
 /// `Delete` events whose target task no longer exists, which apply to nothing. They are a
 /// silent symptom of a dropped `Create` (from the merge driver's removal-union, a
 /// revert, or a manual edit), so every read command warns about them on STDERR
@@ -530,12 +530,12 @@ const RESERVED_FIELD_KEYS: &[&str] = &[
 /// - Setting a reserved/computed field name (the envelope keys, `id`/`deps`/`dep`,
 ///   the timestamp and graph columns, relationship names) is **rejected**.
 /// - `Create` of an existing id — or any op whose target task is absent (incl.
-///   `Delete`) — is **rejected**, as is an `AddDep` to itself or to a missing
+///   `Delete`) — is **rejected**, as is an `AddEdge` to itself or to a missing
 ///   target.
 /// - An `Update` keeps only the fields that actually change (a value already
 ///   equal, or a `null`-unset of an already-absent field, is dropped); an
 ///   `Update` left with no fields is dropped entirely.
-/// - `AddDep` of an existing edge and `RemoveDep` of an absent one are dropped as
+/// - `AddEdge` of an existing edge and `RemoveEdge` of an absent one are dropped as
 ///   no-ops.
 /// - `Append` (`+=`) never lands on a no-op, but is rejected on the single-valued
 ///   status field. This is where per-field type-schema checks will plug in later.
@@ -597,9 +597,9 @@ pub(crate) fn vet_events(
                 }
                 out.push(draft.clone()); // appends accumulate — never a no-op
             }
-            OpType::AddDep => {
+            OpType::AddEdge => {
                 let task = require_existing(state, id)?;
-                let target = draft.payload.get(DEP_KEY).and_then(Value::as_str);
+                let target = draft.payload.get(TARGET_KEY).and_then(Value::as_str);
                 if target == Some(id) {
                     return Err(format!("a task can't reference itself (`{id}`)").into());
                 }
@@ -612,7 +612,7 @@ pub(crate) fn vet_events(
                     out.push(draft.clone());
                 }
             }
-            OpType::RemoveDep => {
+            OpType::RemoveEdge => {
                 let task = require_existing(state, id)?;
                 if dep_edge_exists(task, &draft.payload) {
                     out.push(draft.clone());
@@ -678,14 +678,14 @@ fn changes_field(task: &TaskState, key: &str, value: &Value) -> bool {
     }
 }
 
-/// Whether `task` already has the edge described by an `AddDep`/`RemoveDep`
+/// Whether `task` already has the edge described by an `AddEdge`/`RemoveEdge`
 /// payload (`dep` target, optional `type`; absent type = [`DEPENDS_ON`]).
 fn dep_edge_exists(task: &TaskState, payload: &Map<String, Value>) -> bool {
-    let Some(target) = payload.get(DEP_KEY).and_then(Value::as_str) else {
+    let Some(target) = payload.get(TARGET_KEY).and_then(Value::as_str) else {
         return false;
     };
     let rel_type = payload
-        .get(DEP_TYPE_KEY)
+        .get(REL_KEY)
         .and_then(Value::as_str)
         .unwrap_or(DEPENDS_ON);
     task.relationships
