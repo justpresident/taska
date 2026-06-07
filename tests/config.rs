@@ -198,7 +198,7 @@ fn task_type_schemas_validate_and_the_discriminator_maps_canonically() {
 
     // The discriminator rides the canonical-storage mechanism: type=bug on the
     // keyboard and in output, task_type on disk.
-    ta(&dir, &["create", "t1", "type=bug"]);
+    ta(&dir, &["create", "t1", "type=bug", "severity=low"]);
     let shown = ta(&dir, &["show", "t1", "--format", "json"]);
     assert!(
         shown.contains(r#""type":"bug""#) && !shown.contains("task_type"),

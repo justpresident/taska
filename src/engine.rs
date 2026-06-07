@@ -27,7 +27,9 @@ fn append_text(v: &Value) -> String {
 
 /// Apply a `Create`/`Update` payload: set each field, or remove it when the value
 /// is JSON `null` (the field-unset convention — null never reaches state).
-fn apply_set(fields: &mut Map<String, Value>, payload: Map<String, Value>) {
+/// `pub(crate)` so the write gate can PREVIEW a draft's resulting fields with
+/// the same semantics replay will use — never a parallel implementation.
+pub(crate) fn apply_set(fields: &mut Map<String, Value>, payload: Map<String, Value>) {
     for (k, v) in payload {
         if v.is_null() {
             fields.remove(&k);
@@ -63,8 +65,8 @@ fn apply_dep(task: &mut TaskState, payload: &Map<String, Value>, add: bool) {
 
 /// Apply an `Append` payload: append each value's text to its field, one entry
 /// per line; a `null` value adds nothing, and the first write to an absent field
-/// simply sets it.
-fn apply_append(fields: &mut Map<String, Value>, payload: Map<String, Value>) {
+/// simply sets it. `pub(crate)` for the write gate's preview, like [`apply_set`].
+pub(crate) fn apply_append(fields: &mut Map<String, Value>, payload: Map<String, Value>) {
     for (k, v) in payload {
         if v.is_null() {
             continue;

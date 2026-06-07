@@ -542,6 +542,12 @@ pub(crate) fn vet_events(
 ) -> Result<Vec<MutationEvent>, DynError> {
     let reserved = reserved_field_names(config);
     let mut out = Vec::new();
+    // The would-be RESULTING fields of every task a surviving field-carrying
+    // draft touches, simulated with the engine's own apply functions — the
+    // schema gate validates WHOLE tasks (per the type-schemas decisions), not
+    // just the drafts, so a write to a non-conforming task surfaces every
+    // violation at once. `None` marks a task deleted within the batch.
+    let mut preview: HashMap<String, Option<Map<String, Value>>> = HashMap::new();
     for draft in drafts {
         let id = draft.task_id.as_str();
         // A field whose value is computed/injected (id, deps, the timestamp and
@@ -563,6 +569,9 @@ pub(crate) fn vet_events(
                     )
                     .into());
                 }
+                let mut fields = preview_entry(&mut preview, id, None);
+                crate::engine::apply_set(&mut fields, draft.payload.clone());
+                preview.insert(id.to_string(), Some(fields));
                 out.push(draft.clone());
             }
             OpType::Update => {
@@ -574,6 +583,9 @@ pub(crate) fn vet_events(
                     }
                 }
                 if !payload.is_empty() {
+                    let mut fields = preview_entry(&mut preview, id, Some(task));
+                    crate::engine::apply_set(&mut fields, payload.clone());
+                    preview.insert(id.to_string(), Some(fields));
                     let mut event = draft.clone();
                     event.payload = payload;
                     out.push(event);
@@ -594,6 +606,10 @@ pub(crate) fn vet_events(
                     )
                     .into());
                 }
+                let task = state.get(id);
+                let mut fields = preview_entry(&mut preview, id, task);
+                crate::engine::apply_append(&mut fields, draft.payload.clone());
+                preview.insert(id.to_string(), Some(fields));
                 out.push(draft.clone()); // appends accumulate — never a no-op
             }
             OpType::AddEdge => {
@@ -620,11 +636,154 @@ pub(crate) fn vet_events(
             OpType::Delete => {
                 // Deleting a missing task is a typo, like any other mutation on it.
                 require_existing(state, id)?;
+                preview.insert(id.to_string(), None);
                 out.push(draft.clone());
             }
         }
     }
+    enforce_schemas(&preview, config)?;
     Ok(out)
+}
+
+/// Take a task's working field set out of the preview (falling back to its
+/// current state, then to empty for a fresh create), for [`vet_events`] to
+/// apply the next draft onto.
+fn preview_entry(
+    preview: &mut HashMap<String, Option<Map<String, Value>>>,
+    id: &str,
+    base: Option<&TaskState>,
+) -> Map<String, Value> {
+    preview
+        .remove(id)
+        .flatten()
+        .or_else(|| base.map(|t| t.custom_fields.clone()))
+        .unwrap_or_default()
+}
+
+/// The schema gate tail of [`vet_events`]: whole-task conformance for every
+/// touched (and surviving) previewed task, with EVERY violation in one error so
+/// a user or LLM can fix them all in a single follow-up. Inert while
+/// `[task_types]` declares nothing (the schema-agnostic floor).
+fn enforce_schemas(
+    preview: &HashMap<String, Option<Map<String, Value>>>,
+    config: &Config,
+) -> Result<(), DynError> {
+    if config.task_types.types.is_empty() {
+        return Ok(());
+    }
+    for (id, fields) in preview {
+        let Some(fields) = fields else { continue };
+        let violations = schema_violations(fields, config);
+        if !violations.is_empty() {
+            return Err(format!(
+                "task `{id}` does not conform to its task-type schema:\n  - {}",
+                violations.join("\n  - ")
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// The stored key a DECLARED schema field name refers to: declarations use
+/// display names, storage is canonical — only the status field differs (the
+/// discriminator can't be declared; `Config::validate` enforces both rules).
+fn declared_field_key<'a>(name: &'a str, status_display: &str) -> &'a str {
+    if name == status_display {
+        STATUS_KEY
+    } else {
+        name
+    }
+}
+
+/// Every way `fields` (a task's would-be stored fields) violates the declared
+/// `[task_types]` schemas: a missing/non-string/unknown discriminator, a missing
+/// required field, a value not matching its declared kind, or an undeclared
+/// field on a `closed` type. Field names in declarations are DISPLAY names
+/// (the status field may be declared under its configured name); stored keys
+/// are canonical, so names resolve through the same pairs the write/read
+/// boundaries use. Empty = conforming.
+fn schema_violations(fields: &Map<String, Value>, config: &Config) -> Vec<String> {
+    let w = &config.workflow;
+    let types = &config.task_types.types;
+    let declared_types = || types.keys().cloned().collect::<Vec<_>>().join(", ");
+    let mut violations = Vec::new();
+
+    // Resolve the task's type by the canonical key (drafts are canonical here).
+    let Some(type_value) = fields.get(TASK_TYPE_KEY) else {
+        violations.push(format!(
+            "missing the `{}` field (declared task types: {})",
+            w.type_field,
+            declared_types()
+        ));
+        return violations;
+    };
+    let Some(type_name) = type_value.as_str() else {
+        violations.push(format!(
+            "`{}` must be a string naming a task type (one of: {})",
+            w.type_field,
+            declared_types()
+        ));
+        return violations;
+    };
+    let Some(def) = types.get(type_name) else {
+        violations.push(format!(
+            "unknown task type `{type_name}` (declared: {})",
+            declared_types()
+        ));
+        return violations;
+    };
+
+    for (name, schema) in &def.fields {
+        // validate() guarantees the kind parses; stay defensive anyway.
+        let Ok(kind) = crate::config::FieldKind::parse(schema.kind_str()) else {
+            continue;
+        };
+        match fields.get(declared_field_key(name, &w.status_field)) {
+            None => {
+                if schema.required() {
+                    let hint = if schema.values().is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (one of: {})", schema.values().join(", "))
+                    };
+                    violations.push(format!("missing required field `{name}`{hint}"));
+                }
+            }
+            Some(value) => {
+                if !kind.matches_value(value, schema.values()) {
+                    let hint = if schema.values().is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (one of: {})", schema.values().join(", "))
+                    };
+                    violations.push(format!(
+                        "`{name}`: expected {}{hint}, got {value}",
+                        schema.kind_str()
+                    ));
+                }
+            }
+        }
+    }
+
+    if def.closed {
+        let allowed: BTreeSet<&str> = def
+            .fields
+            .keys()
+            .map(|name| declared_field_key(name, &w.status_field))
+            .chain([TASK_TYPE_KEY, STATUS_KEY])
+            .collect();
+        for key in fields.keys() {
+            if !allowed.contains(key.as_str()) {
+                violations.push(format!(
+                    "undeclared field `{key}` (task type `{type_name}` is closed; declared \
+                     fields: {})",
+                    def.fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
+    }
+    violations
 }
 
 /// The full set of field names the write gate refuses: the static
@@ -916,6 +1075,181 @@ mod tests {
         );
         assert!(parse_field_ops(&["+=x".into()]).is_err(), "empty key");
         assert!(parse_field_ops(&["noeq".into()]).is_err(), "no operator");
+    }
+
+    #[test]
+    fn schema_gate_validates_whole_tasks_and_lists_every_violation() {
+        let config: Config = toml::from_str(
+            r#"
+[task_types.bug]
+closed = true
+[task_types.bug.fields]
+points = "uint"
+tags = "set<string>"
+[task_types.bug.fields.severity]
+type = "enum"
+values = ["low", "high"]
+required = true
+[task_types.feature.fields.owner]
+type = "string"
+required = true
+"#,
+        )
+        .unwrap();
+        let create = |id: &str, fields: &[(&str, Value)]| {
+            let payload: Map<String, Value> = fields
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect();
+            MutationEvent::new(OpType::Create, id, payload)
+        };
+        let empty = HashMap::new();
+
+        // Missing discriminator: rejected naming the display field and options.
+        let err = vet_events(&[create("t", &[])], &empty, &config).unwrap_err();
+        assert!(
+            err.to_string().contains("missing the `type` field")
+                && err.to_string().contains("bug, feature"),
+            "{err}"
+        );
+
+        // EVERY violation in one error: missing required + wrong kind + closed.
+        let err = vet_events(
+            &[create(
+                "t",
+                &[
+                    ("task_type", serde_json::json!("bug")),
+                    ("points", serde_json::json!("abc")),
+                    ("extra", serde_json::json!(1)),
+                ],
+            )],
+            &empty,
+            &config,
+        )
+        .unwrap_err()
+        .to_string();
+        for needle in [
+            "missing required field `severity` (one of: low, high)",
+            "`points`: expected uint",
+            "undeclared field `extra`",
+        ] {
+            assert!(err.contains(needle), "`{needle}` in: {err}");
+        }
+
+        // A conforming create passes; set<string> rejects duplicates.
+        let ok = create(
+            "t",
+            &[
+                ("task_type", serde_json::json!("bug")),
+                ("severity", serde_json::json!("low")),
+                ("tags", serde_json::json!(["a", "b"])),
+            ],
+        );
+        assert!(vet_events(&[ok], &empty, &config).is_ok());
+        let dup = create(
+            "t",
+            &[
+                ("task_type", serde_json::json!("bug")),
+                ("severity", serde_json::json!("low")),
+                ("tags", serde_json::json!(["a", "a"])),
+            ],
+        );
+        let err = vet_events(&[dup], &empty, &config).unwrap_err();
+        assert!(err.to_string().contains("expected set<string>"), "{err}");
+
+        // No [task_types] declared: the gate is inert (schema-agnostic floor).
+        assert!(vet_events(&[create("t", &[])], &empty, &Config::default()).is_ok());
+    }
+
+    #[test]
+    fn schema_gate_revalidates_on_retype() {
+        use crate::test_support::{state, task};
+        let config: Config = toml::from_str(
+            r#"
+[task_types.bug.fields.severity]
+type = "enum"
+values = ["low", "high"]
+required = true
+[task_types.feature.fields.owner]
+type = "string"
+required = true
+"#,
+        )
+        .unwrap();
+        // Whole-task on update: retyping revalidates against the NEW type, and
+        // one update can fix everything at once.
+        let existing = state(&[task(
+            "t",
+            &[],
+            &[
+                ("task_type", serde_json::json!("bug")),
+                ("severity", serde_json::json!("low")),
+            ],
+        )]);
+        let retype = MutationEvent::new(
+            OpType::Update,
+            "t",
+            std::iter::once(("task_type".to_string(), serde_json::json!("feature"))).collect(),
+        );
+        let err = vet_events(&[retype], &existing, &config).unwrap_err();
+        assert!(
+            err.to_string().contains("missing required field `owner`"),
+            "{err}"
+        );
+        let retype_fixed = MutationEvent::new(
+            OpType::Update,
+            "t",
+            [
+                ("task_type".to_string(), serde_json::json!("feature")),
+                ("owner".to_string(), serde_json::json!("bob")),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert!(vet_events(&[retype_fixed], &existing, &config).is_ok());
+    }
+
+    #[test]
+    fn schema_gate_resolves_renamed_status_display_name() {
+        use crate::test_support::{state, task};
+        // The schema declares the status under its DISPLAY name `state`; the
+        // stored key is canonical `status` — the gate must match them up.
+        let config: Config = toml::from_str(
+            r#"
+[workflow]
+status_field = "state"
+[task_types.job.fields.state]
+type = "enum"
+values = ["todo", "done"]
+required = true
+"#,
+        )
+        .unwrap();
+        let existing = state(&[task(
+            "j",
+            &[],
+            &[
+                ("task_type", serde_json::json!("job")),
+                ("status", serde_json::json!("todo")), // canonical storage
+            ],
+        )]);
+        let touch = MutationEvent::new(
+            OpType::Update,
+            "j",
+            std::iter::once(("note".to_string(), serde_json::json!("x"))).collect(),
+        );
+        assert!(
+            vet_events(&[touch], &existing, &config).is_ok(),
+            "declared display name matches canonical storage"
+        );
+        // And a bad stored status is reported under the DECLARED name.
+        let bad = MutationEvent::new(
+            OpType::Update,
+            "j",
+            std::iter::once(("status".to_string(), serde_json::json!("nope"))).collect(),
+        );
+        let err = vet_events(&[bad], &existing, &config).unwrap_err();
+        assert!(err.to_string().contains("`state`: expected enum"), "{err}");
     }
 
     #[test]

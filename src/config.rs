@@ -140,9 +140,9 @@ close_time = "{close_time}"
 
 # Per-type task schemas — OFF while no [task_types.<name>] is declared (the
 # store stays fully schema-agnostic). Once declared, the `type` field (see
-# workflow.type_field) selects a task's schema; enforcement arrives with the
-# schema write gate. Field kinds: string, bool, int, uint, float, datetime,
-# enum, any, array<T>, set<T>. Example:
+# workflow.type_field) selects a task's schema, enforced on every create/update
+# (whole-task: every violation reported in one error). Field kinds: string,
+# bool, int, uint, float, datetime, enum, any, array<T>, set<T>. Example:
 # [task_types.bug]
 # closed = true                       # no fields beyond the declared ones
 # [task_types.bug.fields]
@@ -598,6 +598,38 @@ impl FieldKind {
         match self {
             Self::Array(element) | Self::Set(element) => element,
             other => other,
+        }
+    }
+
+    /// Whether a stored JSON value conforms to this kind. `values` holds the
+    /// declared enum values (consulted when [`Self::base`] is `Enum`). The
+    /// shared check behind the schema write gate and (later) schema-aware
+    /// coercion. `int`/`uint` reject fractional numbers; `float` accepts any
+    /// number; `datetime` is an RFC 3339 string; `set<T>` additionally requires
+    /// unique elements (compared by their compact JSON form).
+    #[must_use]
+    pub fn matches_value(&self, value: &serde_json::Value, values: &[String]) -> bool {
+        match self {
+            Self::String => value.is_string(),
+            Self::Bool => value.is_boolean(),
+            Self::Int => value.is_i64(),
+            Self::Uint => value.is_u64(),
+            Self::Float => value.is_number(),
+            Self::Datetime => value
+                .as_str()
+                .is_some_and(|s| chrono::DateTime::parse_from_rfc3339(s).is_ok()),
+            Self::Enum => value
+                .as_str()
+                .is_some_and(|s| values.iter().any(|v| v == s)),
+            Self::Any => true,
+            Self::Array(element) => value
+                .as_array()
+                .is_some_and(|items| items.iter().all(|i| element.matches_value(i, values))),
+            Self::Set(element) => value.as_array().is_some_and(|items| {
+                let unique: BTreeSet<String> = items.iter().map(ToString::to_string).collect();
+                unique.len() == items.len()
+                    && items.iter().all(|i| element.matches_value(i, values))
+            }),
         }
     }
 }

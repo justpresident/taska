@@ -13,7 +13,7 @@ A local-first, **git-native** task & dependency tracker for human and agent work
 
 No assumptions about your workflow. Only a bare minimum of fields is fixed — `id` and `deps`. Everything else is arbitrary `key=value` fields that you define yourself. Even the `status` field, which carries a lot of meaning for dependency tracking, can be renamed in the config. You can also configure the value that signals a task is finished — name it `closed`, `done`, or whatever you're used to; taska defines no fixed schema, so you grow your own conventions. That also keeps the filtering and manipulation commands simple and flexible: no dozens of custom flags pinned to a reserved field name.
 
-TODO: task schema validation will be implemented soon. You'll be able to enforce a schema for your tasks. And of course it will be highly configurable — you'd be able to define a different schema per task type.
+And when you do want guarantees, declare per-task-type schemas in `[task_types]`: typed fields (`uint`, `enum`, `datetime`, `array<T>`, `set<T>`, …), required fields, and closed types — enforced on every write, with every violation reported in one error. Tasks stay schema-agnostic until you declare a type.
 
 ### An append-only log, not a snapshot
 
@@ -175,7 +175,7 @@ inverse = "relates_to"   # symmetric
 
 # Per-type task schemas — OFF while no [task_types.<name>] is declared (the
 # store stays fully schema-agnostic). Once declared, the `type` field selects a
-# task's schema; enforcement arrives with the schema write gate. Field kinds:
+# task's schema, enforced on every create/update (whole-task). Field kinds:
 # string, bool, int, uint, float, datetime, enum, any, array<T>, set<T>.
 [task_types.bug]
 closed = true                       # no fields beyond the declared ones
