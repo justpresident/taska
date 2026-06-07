@@ -63,6 +63,60 @@ fn list_supports_regex_negation_and_combined_criteria() {
     ta(&dir, &["dep", "add", "web", "relates_to=db"]);
     let info = ta(&dir, &["list", "deps=db"]);
     assert!(lists_task(&info, "web"), "info edge matches deps=: {info}");
+}
+
+#[test]
+fn relationship_names_and_computed_columns_filter() {
+    let dir = fresh_dir("rel-filters");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    for id in ["epic", "c1", "c2", "other"] {
+        ta(&dir, &["create", id, "status=open"]);
+    }
+    ta(
+        &dir,
+        &["dep", "add", "epic", "has_subtask=c1", "has_subtask=c2"],
+    );
+    ta(&dir, &["dep", "add", "c2", "depends_on=c1"]);
+    ta(&dir, &["dep", "add", "c1", "relates_to=other"]);
+
+    // Forward: a declared type name filters by that type's edges.
+    let dependents = ta(&dir, &["list", "depends_on=c1"]);
+    assert!(
+        lists_task(&dependents, "c2") && !lists_task(&dependents, "epic"),
+        "only the depends_on edge matches: {dependents}"
+    );
+
+    // Inverse names resolve the reverse direction: children of the umbrella,
+    // and what a task blocks — the queries from the motivating session.
+    let children = ta(&dir, &["list", "subtask_of=epic", "--sort", "id"]);
+    assert!(
+        lists_task(&children, "c1")
+            && lists_task(&children, "c2")
+            && !lists_task(&children, "other"),
+        "subtask_of finds the children: {children}"
+    );
+    let blockers = ta(&dir, &["list", "blocks=c2"]);
+    assert!(
+        lists_task(&blockers, "c1") && !lists_task(&blockers, "epic"),
+        "blocks resolves what c2 depends on: {blockers}"
+    );
+
+    // Symmetric relates_to matches from both sides of the stored edge.
+    assert!(lists_task(&ta(&dir, &["list", "relates_to=other"]), "c1"));
+    assert!(lists_task(&ta(&dir, &["list", "relates_to=c1"]), "other"));
+
+    // Regex operators compose with edge fields.
+    let re = ta(&dir, &["list", "subtask_of~^ep"]);
+    assert!(lists_task(&re, "c1") && lists_task(&re, "c2"), "{re}");
+
+    // A computed column used ONLY as a filter is injected: c1 transitively
+    // unblocks c2 and epic (no --columns/--sort needed to make this work).
+    let unblocks = ta(&dir, &["list", "unblocks=2"]);
+    assert!(
+        lists_task(&unblocks, "c1") && !lists_task(&unblocks, "other"),
+        "computed column filters without being displayed: {unblocks}"
+    );
 
     // A malformed criterion or bad regex is rejected (non-zero exit).
     assert!(!run(ta_bin(), &dir, &["list", "nooperator"])

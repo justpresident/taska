@@ -72,7 +72,9 @@ enum Commands {
     List {
         /// Filter criteria, all of which must match: `field=value` (exact),
         /// `field~regex`, `field!=value`, `field!~regex`. `field` may be a task
-        /// field, `id`, or `deps`. With none given, lists every task.
+        /// field, `id`, `deps` (any edge), a relationship type (`depends_on=x`)
+        /// or inverse name (`subtask_of=epic`, `blocks=x`), or a computed
+        /// column (`unblocks=0`). With none given, lists every task.
         criteria: Vec<String>,
         /// Only tasks that are not done (status is not the configured done value)
         #[arg(long)]
@@ -408,9 +410,10 @@ fn inject_time(fields: &mut Map<String, Value>, name: &str, value: Option<DateTi
 }
 
 /// Inject the computed columns onto `state`, but only when the display references
-/// them (as a shown column or the sort key) — so default, `--full`, and json
-/// output stay unchanged unless asked. They are graph-derived and surfaced as
-/// ordinary fields, so `cell_value`/`--sort`/`--columns` handle them with no
+/// them (as a shown column, the sort key, or — via `extra_refs` — a filter
+/// criterion's field) — so default, `--full`, and json output stay unchanged
+/// unless asked. They are graph-derived and surfaced as ordinary fields, so
+/// `cell_value`/`--sort`/`--columns`/filtering handle them with no
 /// special-casing. Used by `list` (including `--ready`):
 ///
 /// - `unblocks`/`blocked_by` — transitive not-done dependents / prerequisites
@@ -422,9 +425,10 @@ pub(crate) fn inject_computed_columns(
     workflow: &crate::config::WorkflowConfig,
     display: &DisplayArgs,
     cfg: &crate::config::DisplayConfig,
+    extra_refs: &[String],
 ) {
     let refs = crate::format::referenced_columns(display, cfg);
-    let wants = |name: &str| refs.iter().any(|c| c == name);
+    let wants = |name: &str| refs.iter().any(|c| c == name) || extra_refs.iter().any(|c| c == name);
 
     if wants("unblocks") || wants("blocked_by") {
         let blockers = store.config().relationships.blocker_types();

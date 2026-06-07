@@ -5,12 +5,12 @@
 //! `!=` not-equal, `!~` regex-no-match — plus the `--open` shortcut (not done)
 //! and `--ready` (the former `ta ready`: not done and every dependency done).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::Value;
 
 use crate::cli::state_of;
-use crate::config::{DisplayConfig, WorkflowConfig};
+use crate::config::{DisplayConfig, RelationshipDef, WorkflowConfig};
 use crate::error::DynError;
 use crate::format::{print_tasks, DisplayArgs};
 use crate::graph;
@@ -30,7 +30,29 @@ pub fn cmd_list(
     // we touch the store.
     let criteria = compile_criteria(criteria)?;
     let mut state = state_of(store)?;
-    crate::cli::inject_computed_columns(store, &mut state, workflow, display, cfg);
+    // Criteria fields count as referenced, so a filter on a computed column
+    // (`unblocks=0`) injects it without needing --columns/--sort to name it.
+    let criteria_fields: Vec<String> = criteria.iter().map(|c| c.field.clone()).collect();
+    crate::cli::inject_computed_columns(
+        store,
+        &mut state,
+        workflow,
+        display,
+        cfg,
+        &criteria_fields,
+    );
+    // Filtering context: declared relationship types resolve as filter fields
+    // (forward by type name, reverse by inverse name — see `field_values`); the
+    // reverse index is built only when a criterion actually names an inverse.
+    let types = &store.config().relationships.types;
+    let rev = criteria
+        .iter()
+        .any(|c| is_inverse_name(&c.field, types))
+        .then(|| inverse_index(&state, types));
+    let ctx = FilterCtx {
+        types,
+        rev: rev.as_ref(),
+    };
     // The readiness-gating types: `--ready` filters by them, and the human deps
     // cell styles its type groups by them (gating bold, informational dim).
     let blockers = store.config().relationships.blocker_types();
@@ -51,7 +73,7 @@ pub fn cmd_list(
         .values()
         .filter(|t| !open || !is_done(t, &workflow.status_field, &workflow.done_status))
         .filter(|t| ready_set.as_ref().is_none_or(|s| s.contains(&t.id)))
-        .filter(|t| criteria.iter().all(|c| c.matches(t)))
+        .filter(|t| criteria.iter().all(|c| c.matches(t, &ctx)))
         .collect();
     // A bare `list` shows "(no tasks)"; `--ready` with nothing actionable reads as
     // "(nothing ready)"; any other filter that matched nothing as "(no matches)".
@@ -92,13 +114,54 @@ enum Matcher {
     NotRe(regex::Regex),
 }
 
+/// What a criterion's field resolves against beyond the task itself: the
+/// declared relationship types (forward edges by type name) and, when a
+/// criterion names an inverse, the prebuilt reverse index.
+struct FilterCtx<'a> {
+    types: &'a BTreeMap<String, RelationshipDef>,
+    rev: Option<&'a HashMap<String, BTreeMap<String, Vec<String>>>>,
+}
+
+/// Whether `field` is some declared type's inverse display name (a symmetric
+/// type's own name included).
+fn is_inverse_name(field: &str, types: &BTreeMap<String, RelationshipDef>) -> bool {
+    types.values().any(|def| def.inverse == field)
+}
+
+/// Per-task inverse-direction edges under their inverse display names:
+/// `rev[target][inverse] = owners pointing at target`. One pass over the state;
+/// the same direction semantics as the inverse fields `show` injects, so
+/// `ta list blocks=X` and `show X`'s `blocks:` line agree.
+fn inverse_index(
+    state: &HashMap<String, TaskState>,
+    types: &BTreeMap<String, RelationshipDef>,
+) -> HashMap<String, BTreeMap<String, Vec<String>>> {
+    let mut rev: HashMap<String, BTreeMap<String, Vec<String>>> = HashMap::new();
+    for (owner, task) in state {
+        for (rel, targets) in &task.relationships {
+            let Some(def) = types.get(rel) else { continue };
+            if def.inverse.is_empty() {
+                continue; // one-way type: no reverse surface
+            }
+            for target in targets {
+                rev.entry(target.clone())
+                    .or_default()
+                    .entry(def.inverse.clone())
+                    .or_default()
+                    .push(owner.clone());
+            }
+        }
+    }
+    rev
+}
+
 impl Criterion {
     /// Whether `task` satisfies this criterion. A field offers zero or more
     /// candidate values (a custom field is absent→none; `deps` is one per edge);
     /// equality/regex pass if ANY candidate matches. The negated forms are the
     /// logical NOT, so they also hold when the field is absent.
-    fn matches(&self, task: &TaskState) -> bool {
-        let values = field_values(task, &self.field);
+    fn matches(&self, task: &TaskState, ctx: &FilterCtx) -> bool {
+        let values = field_values(task, &self.field, ctx);
         match &self.matcher {
             Matcher::Eq(q) => values.iter().any(|v| v == q),
             Matcher::Ne(q) => !values.iter().any(|v| v == q),
@@ -108,12 +171,15 @@ impl Criterion {
     }
 }
 
-/// The JSON value(s) a field offers for matching: the `id`, each relationship
+/// The JSON value(s) a field offers for matching: the `id`; each relationship
 /// target under ANY type (`deps` — so `deps=x` matches an info edge too, just
-/// like the column shows it), or a single custom field (empty when the task
-/// lacks it). Unifying the three lets every operator treat built-ins and custom
-/// fields alike.
-fn field_values(task: &TaskState, field: &str) -> Vec<Value> {
+/// like the column shows it); a declared relationship type or inverse name (the
+/// edge targets of that type, resp. the tasks whose edge of that type points
+/// here — a symmetric type is both, so both directions union); or a single
+/// custom field (empty when the task lacks it). Relationship names are reserved
+/// as field names, so the dispatch is unambiguous. Unifying these lets every
+/// operator treat built-ins, edges, and custom fields alike.
+fn field_values(task: &TaskState, field: &str, ctx: &FilterCtx) -> Vec<Value> {
     match field {
         "id" => vec![Value::String(task.id.clone())],
         "deps" => task
@@ -122,7 +188,29 @@ fn field_values(task: &TaskState, field: &str) -> Vec<Value> {
             .flatten()
             .map(|d| Value::String(d.clone()))
             .collect(),
-        _ => task.custom_fields.get(field).cloned().into_iter().collect(),
+        _ => {
+            let forward = ctx.types.contains_key(field);
+            let inverse = is_inverse_name(field, ctx.types);
+            if !forward && !inverse {
+                return task.custom_fields.get(field).cloned().into_iter().collect();
+            }
+            let mut values = Vec::new();
+            if forward {
+                if let Some(targets) = task.relationships.get(field) {
+                    values.extend(targets.iter().map(|t| Value::String(t.clone())));
+                }
+            }
+            if inverse {
+                if let Some(owners) = ctx
+                    .rev
+                    .and_then(|rev| rev.get(&task.id))
+                    .and_then(|names| names.get(field))
+                {
+                    values.extend(owners.iter().map(|o| Value::String(o.clone())));
+                }
+            }
+            values
+        }
     }
 }
 
@@ -206,7 +294,12 @@ mod tests {
                 ("priority", serde_json::json!(3)),
             ],
         );
-        let matches = |s: &str| compile_criterion(s).unwrap().matches(&t);
+        let types = crate::config::RelationshipConfig::default().types;
+        let ctx = FilterCtx {
+            types: &types,
+            rev: None,
+        };
+        let matches = |s: &str| compile_criterion(s).unwrap().matches(&t, &ctx);
 
         // Exact (JSON-coerced: number 3, not "3"), regex, negation.
         assert!(matches("status=open"));
@@ -235,5 +328,50 @@ mod tests {
         // The first operator wins, so a regex value may contain operators.
         let (field, _, value) = split_criterion("title~a=b").unwrap();
         assert_eq!((field, value), ("title", "a=b"));
+    }
+
+    #[test]
+    fn relationship_type_and_inverse_names_resolve_as_filter_fields() {
+        // epic has_subtask child; child depends_on lib; child relates_to other.
+        let mut epic = task("epic", &[], &[]);
+        epic.relationships
+            .insert("has_subtask".to_string(), vec!["child".to_string()]);
+        let mut child = task("child", &["lib"], &[]);
+        child
+            .relationships
+            .insert("relates_to".to_string(), vec!["other".to_string()]);
+        let lib = task("lib", &[], &[]);
+        let other = task("other", &[], &[]);
+
+        let types = crate::config::RelationshipConfig::default().types;
+        let state: HashMap<String, TaskState> = [&epic, &child, &lib, &other]
+            .into_iter()
+            .map(|t| (t.id.clone(), t.clone()))
+            .collect();
+        let rev = inverse_index(&state, &types);
+        let ctx = FilterCtx {
+            types: &types,
+            rev: Some(&rev),
+        };
+        let matches = |t: &TaskState, s: &str| compile_criterion(s).unwrap().matches(t, &ctx);
+
+        // Forward: the type name yields that type's targets, operators compose.
+        assert!(matches(&child, "depends_on=lib"));
+        assert!(!matches(&epic, "depends_on=lib"), "epic has no such edge");
+        assert!(matches(&epic, "has_subtask=child"));
+        assert!(matches(&child, r"depends_on~^li"), "regex over targets");
+
+        // Inverse names resolve the reverse direction (as `show` surfaces them).
+        assert!(matches(&child, "subtask_of=epic"), "child's parent");
+        assert!(matches(&lib, "blocks=child"), "lib blocks child");
+        assert!(!matches(&other, "blocks=child"));
+
+        // Symmetric relates_to matches from BOTH sides of the stored edge.
+        assert!(matches(&child, "relates_to=other"), "forward direction");
+        assert!(matches(&other, "relates_to=child"), "mirrored direction");
+
+        // Negation keeps its absent-passes logic for edge fields too.
+        assert!(matches(&lib, "subtask_of!=epic"), "lib is no subtask");
+        assert!(!matches(&child, "subtask_of!=epic"));
     }
 }
