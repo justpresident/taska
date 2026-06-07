@@ -127,11 +127,28 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Repair the store; `--migrate` brings the on-disk format up to date
+    /// Repair the store; `--migrate` updates the on-disk format, `--schema`
+    /// applies lossless fixes toward the declared task-type schemas
     Repair {
         /// Migrate the event log and baseline to the current on-disk format
         #[arg(long)]
         migrate: bool,
+        /// Rewrite log/baseline values losslessly toward the `[task_types]`
+        /// schemas (numeric strings to numbers, scalars to singletons,
+        /// "true"/"false" to bools, common date formats to RFC 3339; the type
+        /// field backfills when exactly one type is declared). No
+        /// confirmation: review the change with `git diff`, revert with
+        /// `git restore` before committing. Ambiguous violations are listed
+        /// with suggested commands, never guessed.
+        #[arg(long)]
+        schema: bool,
+        /// Move a field to a new name across all events and the baseline,
+        /// assignment-style — `--rename severity=sev` moves `sev`'s values
+        /// under `severity` — coercing values toward the destination's
+        /// declared kind. One pair per invocation; run repair again for
+        /// further variants.
+        #[arg(long, value_name = "NEW=OLD")]
+        rename: Option<String>,
     },
     /// Git event-log merge driver entrypoint (invoked by Git, not humans)
     #[command(name = "git-merge", hide = true)]
@@ -205,12 +222,16 @@ pub fn run() -> Result<(), DynError> {
         // the very command that fixes it. `set` validates the *result* itself.
         Commands::Config { action } => cmd_config(&FileStore::discover()?, action),
 
-        // Repair is the format fixer, so it bypasses the format gate (but still
-        // needs a valid config — it reads the default blocker type to migrate to).
-        Commands::Repair { migrate } => {
+        // Repair is the format/data fixer, so it bypasses the format gate (but
+        // still needs a valid config — migrations and schema fixes read it).
+        Commands::Repair {
+            migrate,
+            schema,
+            rename,
+        } => {
             let store = FileStore::discover()?;
             enforce_config(store.config())?;
-            cmd_repair(&store, migrate)
+            cmd_repair(&store, migrate, schema, rename.as_deref())
         }
 
         // Everything else resolves the store once and validates its config and its
@@ -464,8 +485,9 @@ fn warn_nonconforming(state: &HashMap<String, TaskState>, config: &Config) {
     if let Some(example) = report.first() {
         eprintln!(
             "taska: warning: {} task(s) do not conform to their task-type schema (e.g. \
-             {example}) — `ta config validate` lists them; writes to such a task must bring \
-             it into conformance. Silence with `workflow.warn_nonconforming = false`.",
+             {example}) — `ta config validate` lists them, `ta repair --schema` applies the \
+             lossless fixes; writes to such a task must bring it into conformance. Silence \
+             with `workflow.warn_nonconforming = false`.",
             report.len()
         );
     }
