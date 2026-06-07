@@ -99,13 +99,17 @@ make sure the artifact is correct *before* it goes out.
 ## Create the GitHub release
 
 13. Create a GitHub release for the tag, using the new `CHANGELOG.md` section as
-    the notes. Preferred (automated, via the `gh` CLI):
+    the notes. Write that section to a **temporary** scratch file at
+    `docs/release-notes-v0.3.0.md` — `docs/` keeps it out of the crate package
+    (`exclude = ["/docs"]`), but it is still a scratch file: **never commit it,
+    and delete it as soon as the release exists**. Preferred (automated, via the
+    `gh` CLI):
     ```bash
-    gh release create v0.3.0 --title "v0.3.0" --notes-file release-notes.md
+    gh release create v0.3.0 --title "v0.3.0" --notes-file docs/release-notes-v0.3.0.md
+    rm docs/release-notes-v0.3.0.md   # done with it — remove, don't commit
     ```
-    where `release-notes.md` holds just this version's changelog section (a scratch
-    file you can delete afterwards). If you'd rather have GitHub draft the notes
-    from merged commits/PRs instead, use `--generate-notes`. If `gh` is unavailable
-    or unauthenticated, create it manually: GitHub → **Releases** → **Draft a new
+    If you'd rather have GitHub draft the notes from merged commits/PRs instead,
+    use `--generate-notes` (no scratch file needed). If `gh` is unavailable or
+    unauthenticated, create it manually: GitHub → **Releases** → **Draft a new
     release** → choose the existing `v0.3.0` tag → paste the changelog section →
-    **Publish release**.
+    **Publish release** — then delete the scratch file.
