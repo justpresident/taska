@@ -2,7 +2,9 @@
 
 use serde_json::Value;
 
-use crate::cli::{canonicalize_fields, materialize, parse_field_ops, vet_events};
+use crate::cli::{
+    canonicalize_fields, coerce_event_fields, materialize, parse_field_ops, vet_events, FieldOps,
+};
 use crate::config::WorkflowConfig;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType, STATUS_KEY};
@@ -16,14 +18,19 @@ pub fn cmd_create(
 ) -> Result<(), DynError> {
     // On a new task the field is absent, so `+=` (append) is just the initial
     // value — fold the append map into the Create payload.
-    let (mut payload, append) = parse_field_ops(fields)?;
+    let FieldOps {
+        set: mut payload,
+        append,
+        mut raw,
+    } = parse_field_ops(fields)?;
     for (k, v) in append {
         payload.insert(k, v);
     }
     // Display names map onto their canonical storage keys before anything is
     // stamped or vetted (so the event stores `status` whatever the field is
-    // called on screen).
+    // called on screen); `raw` keeps its keys aligned for the coercion below.
     canonicalize_fields(&mut payload, workflow)?;
+    canonicalize_fields(&mut raw, workflow)?;
     // Stamp the configured default status unless the caller named the status
     // field themselves (even as JSON `null`, the explicit-unset convention) or
     // defaults are turned off with an empty `default_status`.
@@ -33,14 +40,17 @@ pub fn cmd_create(
             Value::String(workflow.default_status.clone()),
         );
     }
-    // Verify-then-append under the store lock: rejects a duplicate `create`
-    // (the task already exists) atomically, so two concurrent creates can't both
-    // win. A create is never a no-op, so on success it always wrote.
+    // Verify-then-append under the store lock: schema-aware coercion first,
+    // then vetting — which rejects a duplicate `create` (the task already
+    // exists) atomically, so two concurrent creates can't both win. A create
+    // is never a no-op, so on success it always wrote.
     let draft = MutationEvent::new(OpType::Create, id, payload);
     let config = store.config().clone();
     store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
-        vet_events(std::slice::from_ref(&draft), &state, &config)
+        let mut events = vec![draft.clone()];
+        coerce_event_fields(&mut events, &raw, &state, &config);
+        vet_events(&events, &state, &config)
     })?;
     println!("Created task `{id}`");
     Ok(())

@@ -327,7 +327,7 @@ fn deps_cell(
 /// strings/bools by their natural order, and any mismatch falls back to a stable
 /// per-type rank then the value's string form — so a column holding mixed types
 /// still sorts deterministically.
-fn cmp_json(a: &Value, b: &Value) -> Ordering {
+pub(crate) fn cmp_json(a: &Value, b: &Value) -> Ordering {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => x
             .as_f64()

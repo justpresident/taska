@@ -786,6 +786,122 @@ fn schema_violations(fields: &Map<String, Value>, config: &Config) -> Vec<String
     violations
 }
 
+/// Schema-aware value coercion for `Create`/`Update` payloads, run under the
+/// store lock (where the task's type is known) just before [`vet_events`].
+///
+/// Best-effort lifting toward each DECLARED field's kind — the write gate
+/// stays the enforcer with its messages:
+/// - declared string: a guessed scalar reverts to its verbatim token (`raw`)
+///   or stringifies, so `version=3.10` stores `"3.10"`, not the number 3.1;
+/// - declared int/uint/float: a (quoted) numeric string parses to a number;
+/// - declared bool: the strings "true"/"false" parse;
+/// - declared array<T>/set<T>: a bare scalar lifts to a singleton, elements
+///   coerce per T, and a set canonicalizes to its STORED form — deduped and
+///   sorted (`cmp_json` order) — so concurrent inserts converge bytewise and
+///   re-adding an element is a no-op, like relationship edges.
+///
+/// Undeclared fields, unknown/missing types, and `Append` payloads keep the
+/// JSON-or-string guess (the schema-agnostic floor; `+=` semantics arrive with
+/// schema-numeric-append). The payload's own (re)typed discriminator wins over
+/// the task's current type, so retype + fields coerce against the new schema.
+pub(crate) fn coerce_event_fields(
+    events: &mut [MutationEvent],
+    raw: &Map<String, Value>,
+    state: &HashMap<String, TaskState>,
+    config: &Config,
+) {
+    if config.task_types.types.is_empty() {
+        return;
+    }
+    for event in events.iter_mut() {
+        if !matches!(event.op, OpType::Create | OpType::Update) {
+            continue;
+        }
+        let type_name = event
+            .payload
+            .get(TASK_TYPE_KEY)
+            .or_else(|| {
+                state
+                    .get(&event.task_id)
+                    .and_then(|t| t.custom_fields.get(TASK_TYPE_KEY))
+            })
+            .and_then(Value::as_str);
+        let Some(def) = type_name.and_then(|n| config.task_types.types.get(n)) else {
+            continue;
+        };
+        for (name, schema) in &def.fields {
+            let key = declared_field_key(name, &config.workflow.status_field);
+            let Some(value) = event.payload.get(key) else {
+                continue;
+            };
+            if value.is_null() {
+                continue; // the unset convention is never coerced
+            }
+            let Ok(kind) = crate::config::FieldKind::parse(schema.kind_str()) else {
+                continue; // validate() reports the bad declaration
+            };
+            if let Some(coerced) = coerce_value(value, &kind, raw.get(key)) {
+                event.payload.insert(key.to_string(), coerced);
+            }
+        }
+    }
+}
+
+/// One value's lift toward `kind` (see [`coerce_event_fields`]); `None` = leave
+/// it for the gate to judge as-is.
+fn coerce_value(
+    value: &Value,
+    kind: &crate::config::FieldKind,
+    raw: Option<&Value>,
+) -> Option<Value> {
+    use crate::config::FieldKind as K;
+    match kind {
+        K::String => match value {
+            Value::Number(_) | Value::Bool(_) => Some(
+                raw.cloned()
+                    .unwrap_or_else(|| Value::String(value.to_string())),
+            ),
+            _ => None,
+        },
+        K::Int | K::Uint | K::Float => value
+            .as_str()
+            .and_then(|s| serde_json::from_str::<Value>(s.trim()).ok())
+            .filter(Value::is_number),
+        K::Bool => match value.as_str() {
+            Some("true") => Some(Value::Bool(true)),
+            Some("false") => Some(Value::Bool(false)),
+            _ => None,
+        },
+        K::Datetime | K::Enum | K::Any => None,
+        K::Array(element) => Some(coerce_sequence(value, element, raw, false)),
+        K::Set(element) => Some(coerce_sequence(value, element, raw, true)),
+    }
+}
+
+/// Coerce toward `array<element>`/`set<element>`: lift a bare scalar to a
+/// singleton (its `raw` token still applies), coerce each element, and give a
+/// set its canonical stored form — sorted (`cmp_json`) and deduped (by compact
+/// JSON) — the bytewise form concurrent writers converge on.
+fn coerce_sequence(
+    value: &Value,
+    element: &crate::config::FieldKind,
+    raw: Option<&Value>,
+    canonical_set: bool,
+) -> Value {
+    let mut items: Vec<Value> = match value {
+        Value::Array(items) => items
+            .iter()
+            .map(|item| coerce_value(item, element, None).unwrap_or_else(|| item.clone()))
+            .collect(),
+        scalar => vec![coerce_value(scalar, element, raw).unwrap_or_else(|| scalar.clone())],
+    };
+    if canonical_set {
+        items.sort_by(crate::format::cmp_json);
+        items.dedup_by(|a, b| a == b);
+    }
+    Value::Array(items)
+}
+
 /// The full set of field names the write gate refuses: the static
 /// [`RESERVED_FIELD_KEYS`] plus the config-dependent computed/injected names —
 /// the configured timestamp columns and the relationship type names + inverses
@@ -853,7 +969,19 @@ fn dep_edge_exists(task: &TaskState, payload: &Map<String, Value>) -> bool {
 
 /// A parsed field list, split by operator: fields to **set** (`=`) and fields to
 /// **append** to (`+=`).
-pub(crate) type FieldOps = (Map<String, Value>, Map<String, Value>);
+pub(crate) struct FieldOps {
+    /// Fields to **set** (`=`), values JSON-guessed.
+    pub(crate) set: Map<String, Value>,
+    /// Fields to **append** to (`+=`), values JSON-guessed.
+    pub(crate) append: Map<String, Value>,
+    /// The verbatim inline token text per SET key (always `Value::String`).
+    /// Schema-aware coercion uses it to recover exact input the JSON guess
+    /// mangles — `version=3.10` guesses the number 3.1, but a declared string
+    /// field wants "3.10". `@file`/`@-` values are already verbatim strings and
+    /// have no entry. A `Map<String, Value>` (not strings) so the same
+    /// [`canonicalize_fields`] keeps its keys aligned with `set`.
+    pub(crate) raw: Map<String, Value>,
+}
 
 /// The `(display name, canonical storage key)` pairs of the config-renamable
 /// fields: the workflow status and the task-type discriminator. Shared by the
@@ -905,17 +1033,21 @@ pub(crate) fn canonicalize_fields(
 /// trailing newline trimmed) — the way to pass long or shell-hostile text without
 /// fighting argv quoting; `@@text` escapes to the literal `@text`.
 pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
-    let (mut set, mut append) = (Map::new(), Map::new());
-    for raw in fields {
-        let (key_part, val) = raw
+    let mut ops = FieldOps {
+        set: Map::new(),
+        append: Map::new(),
+        raw: Map::new(),
+    };
+    for token in fields {
+        let (key_part, val) = token
             .split_once('=')
-            .ok_or_else(|| format!("invalid field `{raw}` (expected key=value or key+=value)"))?;
+            .ok_or_else(|| format!("invalid field `{token}` (expected key=value or key+=value)"))?;
         // `key+=value` appends; a trailing `+` on the key is the operator.
         let (key, is_append) = key_part
             .strip_suffix('+')
             .map_or((key_part, false), |k| (k, true));
         if key.is_empty() {
-            return Err(format!("invalid field `{raw}`: empty field name").into());
+            return Err(format!("invalid field `{token}`: empty field name").into());
         }
         if RESERVED_FIELD_KEYS.contains(&key) {
             return Err(format!(
@@ -925,12 +1057,16 @@ pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
         }
         let value = field_value(key, val)?;
         if is_append {
-            append.insert(key.to_string(), value);
+            ops.append.insert(key.to_string(), value);
         } else {
-            set.insert(key.to_string(), value);
+            if !val.starts_with('@') {
+                ops.raw
+                    .insert(key.to_string(), Value::String(val.to_string()));
+            }
+            ops.set.insert(key.to_string(), value);
         }
     }
-    Ok((set, append))
+    Ok(ops)
 }
 
 /// Resolve one `key=value` value: `@file`/`@-` (file or stdin, verbatim string),
@@ -1043,11 +1179,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_field_ops_splits_set_and_append() {
-        let (set, append) = parse_field_ops(&[
+    fn parse_field_ops_splits_set_and_append_and_keeps_raw_tokens() {
+        let FieldOps { set, append, raw } = parse_field_ops(&[
             "status=open".into(),
             "log+=first".into(),
             "priority=3".into(),
+            "version=3.10".into(),
         ])
         .unwrap();
         assert_eq!(set["status"], serde_json::json!("open"));
@@ -1057,6 +1194,10 @@ mod tests {
             !set.contains_key("log") && !append.contains_key("status"),
             "each token lands in exactly one map"
         );
+        // The guess loses "3.10" (-> 3.1); the raw token preserves it for
+        // declared-string coercion.
+        assert_eq!(set["version"], serde_json::json!(3.1));
+        assert_eq!(raw["version"], serde_json::json!("3.10"));
     }
 
     #[test]
@@ -1159,6 +1300,68 @@ required = true
 
         // No [task_types] declared: the gate is inert (schema-agnostic floor).
         assert!(vet_events(&[create("t", &[])], &empty, &Config::default()).is_ok());
+    }
+
+    #[test]
+    fn schema_coercion_lifts_declared_values() {
+        let config: Config = toml::from_str(
+            r#"
+[task_types.bug.fields]
+version = "string"
+points = "uint"
+flag = "bool"
+tags = "set<string>"
+nums = "array<int>"
+"#,
+        )
+        .unwrap();
+        let raw: Map<String, Value> =
+            std::iter::once(("version".to_string(), serde_json::json!("3.10"))).collect();
+        let payload: Map<String, Value> = [
+            ("task_type", serde_json::json!("bug")),
+            ("version", serde_json::json!(3.1)),
+            ("points", serde_json::json!("5")),
+            ("flag", serde_json::json!("true")),
+            ("tags", serde_json::json!(["b", "a", "b"])),
+            ("nums", serde_json::json!(7)),
+            ("free", serde_json::json!("kept")),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let mut events = vec![MutationEvent::new(OpType::Create, "t", payload)];
+        coerce_event_fields(&mut events, &raw, &HashMap::new(), &config);
+        let p = &events[0].payload;
+        assert_eq!(
+            p["version"],
+            serde_json::json!("3.10"),
+            "raw token wins for a declared string (the guess said 3.1)"
+        );
+        assert_eq!(p["points"], serde_json::json!(5), "numeric string parses");
+        assert_eq!(p["flag"], serde_json::json!(true));
+        assert_eq!(
+            p["tags"],
+            serde_json::json!(["a", "b"]),
+            "set canonical form: sorted + deduped"
+        );
+        assert_eq!(
+            p["nums"],
+            serde_json::json!([7]),
+            "bare scalar lifts to a singleton"
+        );
+        assert_eq!(
+            p["free"],
+            serde_json::json!("kept"),
+            "undeclared fields keep the guess"
+        );
+        // The coerced create then passes the gate.
+        assert!(vet_events(&events, &HashMap::new(), &config).is_ok());
+
+        // Without [task_types] nothing is touched (the schema-agnostic floor).
+        let before = events[0].payload.clone();
+        let mut untouched = events.clone();
+        coerce_event_fields(&mut untouched, &raw, &HashMap::new(), &Config::default());
+        assert_eq!(untouched[0].payload, before);
     }
 
     #[test]

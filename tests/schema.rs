@@ -7,8 +7,8 @@ fn declare_schema(dir: &Path) {
     let mut cfg = fs::read_to_string(&cfg_path).unwrap();
     cfg.push_str(
         "\n[task_types.bug]\nclosed = true\n[task_types.bug.fields]\npoints = \"uint\"\n\
-         tags = \"set<string>\"\n[task_types.bug.fields.severity]\ntype = \"enum\"\n\
-         values = [\"low\", \"high\"]\nrequired = true\n\
+         tags = \"set<string>\"\nversion = \"string\"\n[task_types.bug.fields.severity]\n\
+         type = \"enum\"\nvalues = [\"low\", \"high\"]\nrequired = true\n\
          [task_types.feature.fields.owner]\ntype = \"string\"\nrequired = true\n",
     );
     fs::write(&cfg_path, cfg).unwrap();
@@ -58,13 +58,13 @@ fn write_gate_enforces_whole_task_schemas() {
     assert!(!run(ta_bin(), &dir, &["update", "t1", "severity=urgent"])
         .status
         .success());
+    // CLI input canonicalizes: a set dedups and sorts on write (the gate's
+    // uniqueness check still guards non-CLI writers).
+    ta(&dir, &["update", "t1", r#"tags=["b","a","b"]"#]);
     assert!(
-        !run(ta_bin(), &dir, &["update", "t1", r#"tags=["a","a"]"#])
-            .status
-            .success(),
-        "set<string> rejects duplicates"
+        ta(&dir, &["show", "t1", "--format", "json"]).contains(r#""tags":["a","b"]"#),
+        "set stored in canonical form"
     );
-    ta(&dir, &["update", "t1", r#"tags=["a","b"]"#]);
 
     // Unsetting a required field is rejected (null-unset convention).
     assert!(!run(ta_bin(), &dir, &["update", "t1", "severity=null"])
@@ -100,4 +100,47 @@ fn write_gate_enforces_whole_task_schemas() {
     // Edges are not schema fields: linking nonconforming tasks stays possible.
     ta(&dir, &["create", "t2", "type=feature", "owner=cy"]);
     ta(&dir, &["dep", "add", "t2", "depends_on=t1"]);
+}
+
+#[test]
+fn schema_coercion_shapes_declared_values_on_the_real_binary() {
+    let dir = fresh_dir("schema-coerce");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    declare_schema(&dir);
+
+    // version is a declared string: "3.10" survives verbatim (the JSON guess
+    // would store the number 3.1); points parses the quoted numeric string;
+    // tags lifts a bare scalar to a singleton set.
+    ta(
+        &dir,
+        &[
+            "create",
+            "c1",
+            "type=bug",
+            "severity=low",
+            "version=3.10",
+            "points=7",
+            "tags=urgent",
+        ],
+    );
+    let shown = ta(&dir, &["show", "c1", "--format", "json"]);
+    assert!(shown.contains(r#""version":"3.10""#), "verbatim: {shown}");
+    assert!(shown.contains(r#""points":7"#), "number: {shown}");
+    assert!(shown.contains(r#""tags":["urgent"]"#), "singleton: {shown}");
+
+    // The canonical set form reaches DISK (what merges converge on).
+    ta(&dir, &["update", "c1", r#"tags=["z","a","z"]"#]);
+    let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    assert!(
+        log.contains(r#""tags":["a","z"]"#),
+        "sorted+deduped on disk: {log}"
+    );
+
+    // An undeclared field on an OPEN type keeps the JSON-or-string guess.
+    ta(
+        &dir,
+        &["create", "c2", "type=feature", "owner=ann", "weight=2.5"],
+    );
+    assert!(ta(&dir, &["show", "c2", "--format", "json"]).contains(r#""weight":2.5"#));
 }
