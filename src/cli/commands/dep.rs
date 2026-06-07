@@ -7,11 +7,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use clap::Subcommand;
 use serde_json::{Map, Value};
 
-use crate::cli::{materialize, state_of, vet_events};
+use crate::cli::{materialize, state_of};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::OutputArgs;
 use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, TARGET_KEY};
+use crate::schema::vet_events;
 use crate::storage::EventStore;
 
 /// `ta dep` subcommands. Edges are `type=target` tokens; `type` must be declared

@@ -2,9 +2,10 @@
 
 use serde_json::Map;
 
-use crate::cli::{materialize, vet_events};
+use crate::cli::materialize;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType};
+use crate::schema::vet_events;
 use crate::storage::EventStore;
 
 pub fn cmd_delete(store: &impl EventStore, id: &str) -> Result<(), DynError> {

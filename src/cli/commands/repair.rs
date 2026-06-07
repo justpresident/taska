@@ -11,12 +11,12 @@
 
 use serde_json::Value;
 
-use crate::cli::schema_conformance_report;
 use crate::config::{Config, FieldKind};
 use crate::engine::Engine;
 use crate::error::DynError;
 use crate::migrate::{run_all, Snapshot};
 use crate::model::{MutationEvent, OpType, TaskState, RESERVED_FIELD_KEYS, TASK_TYPE_KEY};
+use crate::schema::schema_conformance_report;
 use crate::storage::EventStore;
 
 pub fn cmd_repair(
@@ -335,7 +335,7 @@ fn apply_lossless_fixes(
             continue;
         };
         for (name, schema) in &def.fields {
-            let key = crate::cli::declared_field_key(name, &config.workflow.status_field);
+            let key = crate::schema::declared_field_key(name, &config.workflow.status_field);
             let Some(value) = task.custom_fields.get(key) else {
                 // A missing REQUIRED field with a declared default is stamped
                 // (onto the establishing record, like the type backfill) —
@@ -374,7 +374,7 @@ fn apply_lossless_fixes(
 /// (ambiguous — never guess). The schema-aware write coercions cover most of
 /// it; repair adds normalizing common date formats to RFC 3339.
 fn lossless_fix(value: &Value, kind: &FieldKind, values: &[String]) -> Option<Value> {
-    if let Some(coerced) = crate::cli::coerce_value(value, kind, None) {
+    if let Some(coerced) = crate::schema::coerce_value(value, kind, None) {
         if kind.matches_value(&coerced, values) {
             return Some(coerced);
         }

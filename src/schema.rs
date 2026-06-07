@@ -1,20 +1,28 @@
 //! Schema law and the write gate: event vetting, `[task_types]` enforcement,
 //! and schema-aware value shaping.
 //!
+//! This is **domain law, not frontend code** — every frontend (the bundled
+//! CLI, a TUI, a library consumer) must funnel its writes through
+//! [`vet_events`] or it can corrupt a schema'd store. Presentation stays out:
+//! nothing here prints — reports come back as data
+//! ([`schema_conformance_report`]) for the frontend to surface its own way.
+//!
 //! Everything here implements one law — **schemas are write-time law only**:
 //! [`vet_events`] is the gate every draft batch passes through (no-op
 //! dropping, reserved names, whole-task schema conformance), while the
-//! read side stays tolerant ([`warn_nonconforming`] reports, never errors,
-//! and [`substitute_schema_defaults`] papers over missing/invalid values
-//! display-only). [`coerce_event_fields`] and [`dispatch_accumulate`] shape
-//! values toward their declared kinds *before* the gate so it can stay the
-//! single enforcer.
+//! read side stays tolerant ([`schema_conformance_report`] reports, never
+//! errors, and [`substitute_schema_defaults`] papers over missing/invalid
+//! values display-only). [`coerce_event_fields`] and [`dispatch_accumulate`]
+//! shape values toward their declared kinds *before* the gate so it can stay
+//! the single enforcer. [`FieldOps`] is the frontend-neutral description of
+//! one write (set / accumulate / remove maps); how a frontend produces it —
+//! the CLI's `key=value` grammar, a TUI form — is its own business.
 
 use std::collections::{BTreeSet, HashMap};
+use std::hash::BuildHasher;
 
 use serde_json::{Map, Value};
 
-use super::FieldOps;
 use crate::config::Config;
 use crate::error::DynError;
 use crate::model::{
@@ -22,14 +30,40 @@ use crate::model::{
     TARGET_KEY, TASK_TYPE_KEY,
 };
 
+/// A parsed field list, split by operator — the frontend-neutral description
+/// of one write.
+///
+/// The CLI builds it from `key=value` / `key+=value` / `key-=value` tokens
+/// (`cli::parse_field_ops`); any other frontend can construct it directly.
+pub struct FieldOps {
+    /// Fields to **set** (`=`), values JSON-guessed.
+    pub set: Map<String, Value>,
+    /// Fields to **accumulate** into (`+=`), values JSON-guessed. Dispatched by
+    /// declared kind at write time: text append for strings/undeclared, `Add`
+    /// for numeric and set fields.
+    pub append: Map<String, Value>,
+    /// Fields to **remove** from (`-=`): numeric subtract or set-element
+    /// removal — requires a declared numeric/set field.
+    pub subtract: Map<String, Value>,
+    /// The verbatim inline token text per SET key (always `Value::String`).
+    /// Schema-aware coercion uses it to recover exact input the JSON guess
+    /// mangles — `version=3.10` guesses the number 3.1, but a declared string
+    /// field wants "3.10". `@file`/`@-` values are already verbatim strings and
+    /// have no entry. A `Map<String, Value>` (not strings) so the same
+    /// `cli::canonicalize_fields` keeps its keys aligned with `set`.
+    pub raw: Map<String, Value>,
+}
+
 /// The grandfathered-data report: every task whose RAW stored fields violate
-/// its `[task_types]` schema, each as one `task `id`: first violation (+N
-/// more)` line. Empty while schemas are off. Shared by `state_of`'s one-line
-/// warning and `ta config validate`'s detailed listing — reads stay tolerant
-/// (this is a report, never an error), while any WRITE to such a task must
-/// bring it into conformance (the whole-task gate).
-pub fn schema_conformance_report(
-    state: &HashMap<String, TaskState>,
+/// its `[task_types]` schema, one line each.
+///
+/// A line reads `task `id`: first violation (+N more)`. Empty while schemas
+/// are off. Shared by the CLI's one-line read warning and `ta config
+/// validate`'s detailed listing — reads stay tolerant (this is a report,
+/// never an error), while any WRITE to such a task must bring it into
+/// conformance (the whole-task gate).
+pub fn schema_conformance_report<S: BuildHasher>(
+    state: &HashMap<String, TaskState, S>,
     config: &Config,
 ) -> Vec<String> {
     if config.task_types.types.is_empty() {
@@ -58,27 +92,6 @@ pub fn schema_conformance_report(
     report
 }
 
-/// Print (never fail on) the ONE-line non-conformance warning for a read
-/// command, pointing at the detail surface. Gated by
-/// `[workflow] warn_nonconforming` and active only while `[task_types]`
-/// declares schemas. Runs on RAW state — before the display renames and
-/// timestamp injection that would skew the check.
-pub fn warn_nonconforming(state: &HashMap<String, TaskState>, config: &Config) {
-    if !config.workflow.warn_nonconforming {
-        return;
-    }
-    let report = schema_conformance_report(state, config);
-    if let Some(example) = report.first() {
-        eprintln!(
-            "taska: warning: {} task(s) do not conform to their task-type schema (e.g. \
-             {example}) — `ta config validate` lists them, `ta repair --schema` applies the \
-             lossless fixes; writes to such a task must bring it into conformance. Silence \
-             with `workflow.warn_nonconforming = false`.",
-            report.len()
-        );
-    }
-}
-
 /// Validate a batch of draft events against the current `state` and drop the
 /// redundant ones, returning exactly the events worth appending.
 ///
@@ -100,9 +113,9 @@ pub fn warn_nonconforming(state: &HashMap<String, TaskState>, config: &Config) {
 /// - Finally, [`enforce_schemas`] validates every touched task's RESULTING
 ///   field set against its `[task_types]` schema — whole-task, every
 ///   violation in one error.
-pub fn vet_events(
+pub fn vet_events<S: BuildHasher>(
     drafts: &[MutationEvent],
-    state: &HashMap<String, TaskState>,
+    state: &HashMap<String, TaskState, S>,
     config: &Config,
 ) -> Result<Vec<MutationEvent>, DynError> {
     let reserved = reserved_field_names(config);
@@ -251,12 +264,14 @@ fn vet_accumulate(
     Ok(changed)
 }
 
-/// The declared defaults a write should stamp: every field of the effective
-/// task type (the payload's discriminator wins over the current one) that has
-/// a `default`, is absent from the current task, and is not being set, unset,
-/// or accumulated by this very write. Used by `create` (stamp into the
-/// payload) and `update` (heal the task on any write), so a task with
-/// defaulted required fields conforms without spelling them out.
+/// The declared defaults a write should stamp.
+///
+/// Every field of the effective task type (the payload's discriminator wins
+/// over the current one) that has a `default`, is absent from the current
+/// task, and is not being set, unset, or accumulated by this very write.
+/// Used by `create` (stamp into the payload) and `update` (heal the task on
+/// any write), so a task with defaulted required fields conforms without
+/// spelling them out.
 pub fn schema_default_stamps(
     current: Option<&Map<String, Value>>,
     payload: &Map<String, Value>,
@@ -288,12 +303,17 @@ pub fn schema_default_stamps(
 }
 
 /// Read-side default substitution (display-only, like the timestamp
-/// injection): a declared field that is MISSING or whose stored value is
-/// invalid (wrong kind or constraint-violating) reads as its declared
-/// `default`. The stored log/baseline are untouched — the non-conformance
-/// warning and `ta repair --schema` remain the signals to actually fix the
-/// data. Runs on RAW state, before the display renames.
-pub fn substitute_schema_defaults(state: &mut HashMap<String, TaskState>, config: &Config) {
+/// injection).
+///
+/// A declared field that is MISSING or whose stored value is invalid (wrong
+/// kind or constraint-violating) reads as its declared `default`. The stored
+/// log/baseline are untouched — the non-conformance report and `ta repair
+/// --schema` remain the signals to actually fix the data. Runs on RAW state,
+/// before the display renames.
+pub fn substitute_schema_defaults<S: BuildHasher>(
+    state: &mut HashMap<String, TaskState, S>,
+    config: &Config,
+) {
     if config.task_types.types.is_empty() {
         return;
     }
@@ -377,9 +397,11 @@ fn enforce_schemas(
     Ok(())
 }
 
-/// The stored key a DECLARED schema field name refers to: declarations use
-/// display names, storage is canonical — only the status field differs (the
-/// discriminator can't be declared; `Config::validate` enforces both rules).
+/// The stored key a DECLARED schema field name refers to.
+///
+/// Declarations use display names, storage is canonical — only the status
+/// field differs (the discriminator can't be declared; `Config::validate`
+/// enforces both rules).
 pub fn declared_field_key<'a>(name: &'a str, status_display: &str) -> &'a str {
     if name == status_display {
         STATUS_KEY
@@ -503,10 +525,10 @@ fn schema_violations(fields: &Map<String, Value>, config: &Config) -> Vec<String
 /// by [`dispatch_accumulate`] instead). The payload's own (re)typed
 /// discriminator wins over the task's current type, so retype + fields coerce
 /// against the new schema.
-pub fn coerce_event_fields(
+pub fn coerce_event_fields<S: BuildHasher>(
     events: &mut [MutationEvent],
     raw: &Map<String, Value>,
-    state: &HashMap<String, TaskState>,
+    state: &HashMap<String, TaskState, S>,
     config: &Config,
 ) {
     if config.task_types.types.is_empty() {
@@ -602,14 +624,15 @@ fn coerce_sequence(
 }
 
 /// Build the events for one `update`'s field operations, run under the store
-/// lock (the accumulate dispatch needs the task's type from live state). The
-/// `Update` (set) event comes first so `field=reset field+=more` applies the
-/// reset before accumulating, independent of token order; the schema-aware
-/// coercion then shapes the set values.
-pub fn build_field_events(
+/// lock (the accumulate dispatch needs the task's type from live state).
+///
+/// The `Update` (set) event comes first so `field=reset field+=more` applies
+/// the reset before accumulating, independent of token order; the
+/// schema-aware coercion then shapes the set values.
+pub fn build_field_events<S: BuildHasher>(
     id: &str,
     ops: &FieldOps,
-    state: &HashMap<String, TaskState>,
+    state: &HashMap<String, TaskState, S>,
     config: &Config,
 ) -> Result<Vec<MutationEvent>, DynError> {
     let (text, add, remove) = dispatch_accumulate(id, ops, state, config)?;
@@ -657,10 +680,10 @@ type AccumulatePayloads = (Map<String, Value>, Map<String, Value>, Map<String, V
 ///
 /// The applicable schema: the set payload's (re)typed discriminator wins over
 /// the task's current type, mirroring [`coerce_event_fields`].
-fn dispatch_accumulate(
+fn dispatch_accumulate<S: BuildHasher>(
     id: &str,
     ops: &FieldOps,
-    state: &HashMap<String, TaskState>,
+    state: &HashMap<String, TaskState, S>,
     config: &Config,
 ) -> Result<AccumulatePayloads, DynError> {
     use crate::config::FieldKind;
@@ -764,8 +787,8 @@ fn reserved_field_names(config: &Config) -> BTreeSet<String> {
 /// The task `id` in `state`, or an error if it doesn't exist — so a mutation
 /// against a typo'd/absent task is rejected at write time rather than becoming a
 /// silent orphan. (Replay still tolerates orphans from merges/reverts.)
-fn require_existing<'a>(
-    state: &'a HashMap<String, TaskState>,
+fn require_existing<'a, S: BuildHasher>(
+    state: &'a HashMap<String, TaskState, S>,
     id: &str,
 ) -> Result<&'a TaskState, DynError> {
     state
@@ -802,7 +825,6 @@ fn dep_edge_exists(task: &TaskState, payload: &Map<String, Value>) -> bool {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::cli::FieldOps;
 
     #[test]
     fn schema_gate_validates_whole_tasks_and_lists_every_violation() {

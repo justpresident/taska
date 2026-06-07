@@ -33,6 +33,7 @@ pub mod graph;
 pub mod merge;
 pub mod migrate;
 pub mod model;
+pub mod schema;
 pub mod storage;
 
 #[cfg(test)]

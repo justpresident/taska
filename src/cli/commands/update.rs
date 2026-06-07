@@ -1,9 +1,8 @@
 //! `ta update` — set (`=`), accumulate (`+=`), or remove (`-=`) fields on a task.
 
-use crate::cli::{
-    build_field_events, canonicalize_fields, materialize, parse_field_ops, vet_events,
-};
+use crate::cli::{canonicalize_fields, materialize, parse_field_ops};
 use crate::error::DynError;
+use crate::schema::{build_field_events, vet_events};
 use crate::storage::EventStore;
 
 pub fn cmd_update(store: &impl EventStore, id: &str, fields: &[String]) -> Result<(), DynError> {

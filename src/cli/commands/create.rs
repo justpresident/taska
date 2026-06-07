@@ -2,12 +2,11 @@
 
 use serde_json::Value;
 
-use crate::cli::{
-    canonicalize_fields, coerce_event_fields, materialize, parse_field_ops, vet_events, FieldOps,
-};
+use crate::cli::{canonicalize_fields, materialize, parse_field_ops};
 use crate::config::WorkflowConfig;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType, STATUS_KEY};
+use crate::schema::{coerce_event_fields, vet_events, FieldOps};
 use crate::storage::EventStore;
 
 pub fn cmd_create(
@@ -50,7 +49,7 @@ pub fn cmd_create(
     }
     // And the schema defaults of the declared task type (same convention: an
     // explicit value — or null — in the payload wins over the default).
-    let stamps = crate::cli::schema_default_stamps(
+    let stamps = crate::schema::schema_default_stamps(
         None,
         &payload,
         &std::collections::BTreeSet::default(),

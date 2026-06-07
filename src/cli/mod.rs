@@ -5,9 +5,12 @@
 //! materializing state ([`state_of`]/[`replay`]), parsing `key=value` fields
 //! ([`parse_field_ops`]), and confirming destructive actions ([`confirm`]) — live
 //! here so the handlers stay thin. The write gate and `[task_types]` schema law
-//! (event vetting, conformance, coercion) live in the `schema` submodule.
-//! Handlers depend on the [`EventStore`] abstraction rather than the concrete
-//! [`FileStore`], so they can be exercised against any store.
+//! (event vetting, conformance, coercion) are NOT here — they live in the
+//! crate-level [`crate::schema`] module, the frontend-agnostic domain layer
+//! every frontend funnels writes through; this module only adds the CLI's
+//! presentation (e.g. printing the non-conformance warning). Handlers depend
+//! on the [`EventStore`] abstraction rather than the concrete [`FileStore`],
+//! so they can be exercised against any store.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -29,11 +32,7 @@ use commands::{
     cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction, DepAction,
 };
 
-mod schema;
-pub(crate) use schema::{
-    build_field_events, coerce_event_fields, coerce_value, declared_field_key,
-    schema_conformance_report, schema_default_stamps, vet_events,
-};
+use crate::schema::{schema_conformance_report, FieldOps};
 
 #[derive(Parser)]
 #[command(name = "ta", version, about)]
@@ -472,11 +471,11 @@ pub(crate) fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskSt
     // (grandfathered by a schema change, merged in, restored by undo) always
     // materialize — but every read command says so ONCE, before the display
     // renames below would skew the check. Silenceable via config.
-    schema::warn_nonconforming(&state, store.config());
+    warn_nonconforming(&state, store.config());
     // Then the default substitution: missing/invalid declared fields READ as
     // their declared default (after the warning, so the report reflects the
     // stored truth; display-only, like everything below).
-    schema::substitute_schema_defaults(&mut state, store.config());
+    crate::schema::substitute_schema_defaults(&mut state, store.config());
     // Surface the computed timestamps as ordinary (RFC 3339 string) fields under
     // their configured names, so list/show/--sort treat them like any
     // other column. This is display-only: the raw Option<DateTime> stays on
@@ -503,6 +502,28 @@ pub(crate) fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskSt
         }
     }
     Ok(state)
+}
+
+/// Print (never fail on) the ONE-line non-conformance warning for a read
+/// command, pointing at the detail surface — the CLI's presentation of
+/// [`schema_conformance_report`]. Gated by `[workflow] warn_nonconforming` and
+/// active only while `[task_types]` declares schemas. Runs on RAW state —
+/// before the display renames and timestamp injection that would skew the
+/// check.
+fn warn_nonconforming(state: &HashMap<String, TaskState>, config: &Config) {
+    if !config.workflow.warn_nonconforming {
+        return;
+    }
+    let report = schema_conformance_report(state, config);
+    if let Some(example) = report.first() {
+        eprintln!(
+            "taska: warning: {} task(s) do not conform to their task-type schema (e.g. \
+             {example}) — `ta config validate` lists them, `ta repair --schema` applies the \
+             lossless fixes; writes to such a task must bring it into conformance. Silence \
+             with `workflow.warn_nonconforming = false`.",
+            report.len()
+        );
+    }
 }
 
 /// Insert a computed timestamp into a task's fields under `name` (RFC 3339), so
@@ -606,27 +627,6 @@ pub(crate) fn inverse_edges(
         }
     }
     display
-}
-
-/// A parsed field list, split by operator: fields to **set** (`=`) and fields to
-/// **append** to (`+=`).
-pub(crate) struct FieldOps {
-    /// Fields to **set** (`=`), values JSON-guessed.
-    pub(crate) set: Map<String, Value>,
-    /// Fields to **accumulate** into (`+=`), values JSON-guessed. Dispatched by
-    /// declared kind at write time: text append for strings/undeclared, `Add`
-    /// for numeric and set fields.
-    pub(crate) append: Map<String, Value>,
-    /// Fields to **remove** from (`-=`): numeric subtract or set-element
-    /// removal — requires a declared numeric/set field.
-    pub(crate) subtract: Map<String, Value>,
-    /// The verbatim inline token text per SET key (always `Value::String`).
-    /// Schema-aware coercion uses it to recover exact input the JSON guess
-    /// mangles — `version=3.10` guesses the number 3.1, but a declared string
-    /// field wants "3.10". `@file`/`@-` values are already verbatim strings and
-    /// have no entry. A `Map<String, Value>` (not strings) so the same
-    /// [`canonicalize_fields`] keeps its keys aligned with `set`.
-    pub(crate) raw: Map<String, Value>,
 }
 
 /// The `(display name, canonical storage key)` pairs of the config-renamable

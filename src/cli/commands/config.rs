@@ -42,7 +42,7 @@ fn cmd_config_validate(store: &FileStore) -> Result<(), DynError> {
     // The conformance report needs RAW state (canonical keys, no injected
     // timestamps) — the display view above would skew the check.
     let raw = crate::cli::replay(store, store.load_baseline()?, store.load_mutations()?);
-    let report = crate::cli::schema_conformance_report(&raw, store.config());
+    let report = crate::schema::schema_conformance_report(&raw, store.config());
     for line in &report {
         eprintln!("warning: {line}");
     }
