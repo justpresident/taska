@@ -150,6 +150,9 @@ keep_days = 30
 # `ta list --ready` treats a dependency as satisfied once it reaches done_status.
 status_field = "status"
 done_status = "closed"
+# DISPLAY name of the task-type discriminator that selects a [task_types]
+# schema (stored canonically as `task_type`; renaming is free too).
+type_field = "type"
 
 [merge]
 on_conflict = "surface"
@@ -169,6 +172,20 @@ inverse = "subtask_of"
 [relationships.relates_to]
 kind = "info"
 inverse = "relates_to"   # symmetric
+
+# Per-type task schemas — OFF while no [task_types.<name>] is declared (the
+# store stays fully schema-agnostic). Once declared, the `type` field selects a
+# task's schema; enforcement arrives with the schema write gate. Field kinds:
+# string, bool, int, uint, float, datetime, enum, any, array<T>, set<T>.
+[task_types.bug]
+closed = true                       # no fields beyond the declared ones
+[task_types.bug.fields]
+points = "uint"                     # shorthand: just the kind
+tags = "array<string>"
+[task_types.bug.fields.severity]    # long form when constraints are needed
+type = "enum"
+values = ["low", "medium", "high"]
+required = true
 
 [display]
 # Columns for list/ready (and the field order used by --format json).

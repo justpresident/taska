@@ -40,6 +40,9 @@ pub fn default_toml() -> String {
         display,
         timestamps,
         relationships,
+        // Default-empty: the template documents [task_types] with a commented
+        // example block instead of rendering the (empty) map.
+        task_types: _,
     } = Config::default();
     let on_conflict = merge.on_conflict.as_str();
     let columns = render_columns(&display.columns);
@@ -78,6 +81,10 @@ done_status = "{done_status}"
 # Status stamped onto a new task when `ta create` doesn't set one. Set to "" to
 # create statusless tasks (the status field stays absent until you set it).
 default_status = "{default_status}"
+# DISPLAY name of the task-type discriminator used by [task_types] schemas
+# (`ta create x type=bug`). Stored canonically as `task_type`, so renaming this
+# is free, like status_field.
+type_field = "{type_field}"
 
 [merge]
 # What to do when concurrent branches change the SAME field (or dependency) to
@@ -130,6 +137,21 @@ close_time = "{close_time}"
 # omit it for a one-way type; the type's own name makes it symmetric
 # (`a relates_to b` reads both ways); else it labels the inverse.
 {relationships_toml}
+
+# Per-type task schemas — OFF while no [task_types.<name>] is declared (the
+# store stays fully schema-agnostic). Once declared, the `type` field (see
+# workflow.type_field) selects a task's schema; enforcement arrives with the
+# schema write gate. Field kinds: string, bool, int, uint, float, datetime,
+# enum, any, array<T>, set<T>. Example:
+# [task_types.bug]
+# closed = true                       # no fields beyond the declared ones
+# [task_types.bug.fields]
+# points = "uint"                     # shorthand: just the kind
+# tags = "array<string>"
+# [task_types.bug.fields.severity]    # long form when constraints are needed
+# type = "enum"
+# values = ["low", "medium", "high"]
+# required = true
 "#,
         min_keep = MIN_KEEP_EVENTS,
         keep_events = compaction.keep_events,
@@ -137,6 +159,7 @@ close_time = "{close_time}"
         status_field = workflow.status_field,
         done_status = workflow.done_status,
         default_status = workflow.default_status,
+        type_field = workflow.type_field,
         on_conflict = on_conflict,
         columns = columns,
         max_width = display.max_width,
@@ -199,6 +222,7 @@ pub struct Config {
     pub display: DisplayConfig,
     pub timestamps: TimestampConfig,
     pub relationships: RelationshipConfig,
+    pub task_types: TaskTypesConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -233,6 +257,11 @@ pub struct WorkflowConfig {
     /// field. Empty means create statusless tasks (the status field is simply
     /// absent until set).
     pub default_status: String,
+    /// DISPLAY name of the task-type discriminator (`ta create x type=bug`)
+    /// that selects a task's `[task_types]` schema. Same display-vs-storage
+    /// split as `status_field`: storage is always the canonical
+    /// [`crate::model::TASK_TYPE_KEY`], so renaming this is free too.
+    pub type_field: String,
 }
 
 impl Default for WorkflowConfig {
@@ -241,6 +270,7 @@ impl Default for WorkflowConfig {
             status_field: "status".to_string(),
             done_status: "closed".to_string(),
             default_status: "todo".to_string(),
+            type_field: "type".to_string(),
         }
     }
 }
@@ -496,6 +526,167 @@ impl Default for RelationshipConfig {
     }
 }
 
+/// A declared field's value kind, parsed from its spec string (`"uint"`,
+/// `"enum"`, `"array<string>"`, `"set<enum>"`, …).
+///
+/// This is the grammar the schema write gate will enforce; the config layer
+/// parses and validates declarations only. `set<T>` is an `array<T>` with
+/// unique elements, stored canonically deduped + sorted (canonical bytes are
+/// what make concurrent inserts converge on merge).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldKind {
+    String,
+    Bool,
+    Int,
+    Uint,
+    Float,
+    Datetime,
+    Enum,
+    Any,
+    Array(Box<Self>),
+    Set(Box<Self>),
+}
+
+impl FieldKind {
+    /// Parse a kind string. Containers take exactly one SCALAR element kind:
+    /// `array<…>`/`set<…>` don't nest, and `any` can't be an element.
+    pub fn parse(spec: &str) -> Result<Self, String> {
+        let scalar = |name: &str| match name {
+            "string" => Some(Self::String),
+            "bool" => Some(Self::Bool),
+            "int" => Some(Self::Int),
+            "uint" => Some(Self::Uint),
+            "float" => Some(Self::Float),
+            "datetime" => Some(Self::Datetime),
+            "enum" => Some(Self::Enum),
+            _ => None,
+        };
+        if spec == "any" {
+            return Ok(Self::Any);
+        }
+        if let Some(kind) = scalar(spec) {
+            return Ok(kind);
+        }
+        for (prefix, container) in [
+            ("array<", Self::Array as fn(Box<Self>) -> Self),
+            ("set<", Self::Set as fn(Box<Self>) -> Self),
+        ] {
+            if let Some(element) = spec
+                .strip_prefix(prefix)
+                .and_then(|rest| rest.strip_suffix('>'))
+            {
+                return scalar(element)
+                    .map(|kind| container(Box::new(kind)))
+                    .ok_or_else(|| {
+                        format!(
+                            "`{element}` is not a valid element kind for `{prefix}…>` \
+                             (expected a scalar: string|bool|int|uint|float|datetime|enum)"
+                        )
+                    });
+            }
+        }
+        Err(format!(
+            "unknown field kind `{spec}` (expected string|bool|int|uint|float|datetime|enum|any, \
+             or array<…>/set<…> of a scalar kind)"
+        ))
+    }
+
+    /// The kind that `values` and value checks attach to: the element kind for
+    /// containers, the kind itself otherwise.
+    #[must_use]
+    pub fn base(&self) -> &Self {
+        match self {
+            Self::Array(element) | Self::Set(element) => element,
+            other => other,
+        }
+    }
+}
+
+/// One declared field of a task type.
+///
+/// Either the shorthand kind string (`points = "uint"`) or the long form with
+/// constraints (`[task_types.<t>.fields.<name>]` carrying `type`, `values`,
+/// `required`). Loading is permissive (untagged); [`Config::validate`] checks
+/// the kind grammar and the enum/`values` consistency.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum FieldSchema {
+    /// `name = "<kind>"`.
+    Short(String),
+    /// A `[task_types.<t>.fields.<name>]` sub-table.
+    Full(FieldSpec),
+}
+
+impl FieldSchema {
+    /// The declared kind string (the shorthand itself, or the long form's `type`).
+    #[must_use]
+    pub fn kind_str(&self) -> &str {
+        match self {
+            Self::Short(kind) => kind,
+            Self::Full(spec) => &spec.kind,
+        }
+    }
+
+    /// The declared enum values (empty for the shorthand and non-enum kinds).
+    #[must_use]
+    pub fn values(&self) -> &[String] {
+        match self {
+            Self::Short(_) => &[],
+            Self::Full(spec) => &spec.values,
+        }
+    }
+
+    /// Whether every task of the type must carry this field.
+    #[must_use]
+    pub const fn required(&self) -> bool {
+        match self {
+            Self::Short(_) => false,
+            Self::Full(spec) => spec.required,
+        }
+    }
+}
+
+/// The long-form field spec. `deny_unknown_fields` makes a typo'd key a load
+/// error instead of a silently weaker schema.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct FieldSpec {
+    /// The field's value kind (`"enum"`, `"uint"`, `"array<string>"`, …). The
+    /// config key is `type` — a field's type and a TASK's type are different
+    /// entities; both are legitimately called type.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Allowed values when the (element) kind is `enum`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
+    /// Whether every task of this type must carry the field.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+}
+
+/// One declared task type (`[task_types.<name>]`): its field schemas and
+/// whether undeclared fields are allowed on tasks of this type.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct TaskTypeDef {
+    /// `true` = tasks of this type may carry NO field names beyond the declared
+    /// ones (plus the discriminator itself). Open (`false`) is the default —
+    /// the schema-agnostic ethos.
+    pub closed: bool,
+    pub fields: BTreeMap<String, FieldSchema>,
+}
+
+/// Declared task types, by name.
+///
+/// Empty (the default) means schemas are off and the store stays fully
+/// schema-agnostic. A newtype over the map so it serializes transparently as
+/// `[task_types.<name>]` sub-tables.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(transparent)]
+pub struct TaskTypesConfig {
+    pub types: BTreeMap<String, TaskTypeDef>,
+}
+
 impl Config {
     /// Load config from `path`, falling back to defaults if the file is absent.
     /// `#[serde(default)]` means a partial file still loads — only the keys
@@ -547,6 +738,124 @@ impl Config {
                  dependency type is required (the default config declares `depends_on`)."
                     .to_string(),
             );
+        }
+        self.collect_workflow_name_problems(problems);
+        self.collect_task_type_problems(problems);
+    }
+
+    /// The relationship-type names + their non-empty inverse display names —
+    /// the vocabulary task fields and workflow display names must not shadow.
+    fn relationship_names(&self) -> BTreeSet<&str> {
+        let mut names: BTreeSet<&str> = self
+            .relationships
+            .types
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for def in self.relationships.types.values() {
+            if !def.inverse.is_empty() {
+                names.insert(def.inverse.as_str());
+            }
+        }
+        names
+    }
+
+    /// The configured display names (`status_field`, `type_field`) must be
+    /// non-empty, distinct, and must not shadow another concept's name.
+    fn collect_workflow_name_problems(&self, problems: &mut Vec<String>) {
+        let w = &self.workflow;
+        if w.status_field == w.type_field {
+            problems.push(format!(
+                "workflow.status_field and workflow.type_field are both `{}` — two concepts \
+                 can't share one display name",
+                w.status_field
+            ));
+        }
+        // Cross-canonical collisions: one concept's display name must not be the
+        // OTHER concept's storage key, or reads would garble them.
+        if w.status_field == crate::model::TASK_TYPE_KEY {
+            problems.push(format!(
+                "workflow.status_field = `{}` collides with the task-type storage key",
+                w.status_field
+            ));
+        }
+        if w.type_field == crate::model::STATUS_KEY {
+            problems.push(format!(
+                "workflow.type_field = `{}` collides with the status storage key",
+                w.type_field
+            ));
+        }
+        let rel_names = self.relationship_names();
+        for (option, name) in [
+            ("workflow.status_field", &w.status_field),
+            ("workflow.type_field", &w.type_field),
+        ] {
+            if name.is_empty() {
+                problems.push(format!("{option} must not be empty"));
+            } else if crate::model::RESERVED_FIELD_KEYS.contains(&name.as_str()) {
+                problems.push(format!(
+                    "{option} = `{name}` collides with a reserved/computed field name"
+                ));
+            } else if rel_names.contains(name.as_str()) {
+                problems.push(format!(
+                    "{option} = `{name}` collides with a relationship type or inverse name"
+                ));
+            }
+        }
+    }
+
+    /// `[task_types]` declarations: every field name must be usable (not
+    /// reserved/computed, not a relationship or timestamp name, not the
+    /// discriminator itself), every kind string must parse, and `values` must
+    /// be present exactly for enum kinds.
+    fn collect_task_type_problems(&self, problems: &mut Vec<String>) {
+        let w = &self.workflow;
+        let rel_names = self.relationship_names();
+        let ts = &self.timestamps;
+        let timestamp_names: Vec<&String> = [&ts.create_time, &ts.update_time, &ts.close_time]
+            .into_iter()
+            .filter(|n| !n.is_empty())
+            .collect();
+        for (type_name, def) in &self.task_types.types {
+            for (field, schema) in &def.fields {
+                let ctx = format!("task_types.{type_name}.fields.{field}");
+                if crate::model::RESERVED_FIELD_KEYS.contains(&field.as_str()) {
+                    problems.push(format!("{ctx}: reserved/computed field name"));
+                } else if rel_names.contains(field.as_str()) {
+                    problems.push(format!(
+                        "{ctx}: collides with a relationship type or inverse name"
+                    ));
+                } else if timestamp_names.contains(&field) {
+                    problems.push(format!("{ctx}: collides with a computed timestamp column"));
+                } else if field == &w.type_field || field == crate::model::TASK_TYPE_KEY {
+                    problems.push(format!(
+                        "{ctx}: the task-type discriminator is implicit — don't declare it"
+                    ));
+                } else if field == crate::model::STATUS_KEY
+                    && w.status_field != crate::model::STATUS_KEY
+                {
+                    problems.push(format!(
+                        "{ctx}: declare the status under its display name `{}`",
+                        w.status_field
+                    ));
+                }
+                match FieldKind::parse(schema.kind_str()) {
+                    Err(reason) => problems.push(format!("{ctx}: {reason}")),
+                    Ok(kind) => {
+                        let is_enum = matches!(kind.base(), FieldKind::Enum);
+                        if is_enum && schema.values().is_empty() {
+                            problems.push(format!(
+                                "{ctx}: an enum kind needs a non-empty `values` list"
+                            ));
+                        } else if !is_enum && !schema.values().is_empty() {
+                            problems.push(format!(
+                                "{ctx}: `values` only applies to enum kinds (declared `{}`)",
+                                schema.kind_str()
+                            ));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -645,6 +954,123 @@ mod tests {
         // from — catches a typo'd key or section in the prose template.
         let parsed: Config = toml::from_str(&default_toml()).unwrap();
         assert_eq!(parsed, Config::default());
+    }
+
+    #[test]
+    fn field_kind_grammar_parses_and_rejects() {
+        assert_eq!(FieldKind::parse("uint").unwrap(), FieldKind::Uint);
+        assert_eq!(FieldKind::parse("any").unwrap(), FieldKind::Any);
+        assert_eq!(
+            FieldKind::parse("array<string>").unwrap(),
+            FieldKind::Array(Box::new(FieldKind::String))
+        );
+        assert_eq!(
+            FieldKind::parse("set<enum>").unwrap(),
+            FieldKind::Set(Box::new(FieldKind::Enum))
+        );
+        // `base` is what values/checks attach to: the element for containers.
+        assert_eq!(
+            *FieldKind::parse("set<int>").unwrap().base(),
+            FieldKind::Int
+        );
+        assert_eq!(*FieldKind::parse("float").unwrap().base(), FieldKind::Float);
+        for bad in ["", "integer", "array<any>", "array<array<int>>", "set<>"] {
+            assert!(FieldKind::parse(bad).is_err(), "must reject `{bad}`");
+        }
+    }
+
+    #[test]
+    fn task_type_schemas_parse_shorthand_and_long_form() {
+        let cfg: Config = toml::from_str(
+            r#"
+[task_types.bug]
+closed = true
+[task_types.bug.fields]
+points = "uint"
+tags = "array<string>"
+[task_types.bug.fields.severity]
+type = "enum"
+values = ["low", "high"]
+required = true
+"#,
+        )
+        .unwrap();
+        let bug = &cfg.task_types.types["bug"];
+        assert!(bug.closed);
+        assert_eq!(bug.fields["points"].kind_str(), "uint");
+        assert!(!bug.fields["points"].required(), "shorthand is optional");
+        assert!(bug.fields["points"].values().is_empty());
+        assert_eq!(bug.fields["severity"].kind_str(), "enum");
+        assert_eq!(bug.fields["severity"].values(), ["low", "high"]);
+        assert!(bug.fields["severity"].required());
+        assert!(cfg.validate().is_ok(), "a sound schema validates");
+
+        // A typo'd long-form key is a LOAD error, not a silently weaker schema.
+        assert!(toml::from_str::<Config>(
+            "[task_types.t.fields.s]\ntype = \"string\"\nrequird = true\n"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn task_type_validation_catches_bad_declarations() {
+        let check = |types_toml: &str, needle: &str| {
+            let cfg: Config = toml::from_str(types_toml).unwrap();
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains(needle), "`{needle}` not in: {err}");
+        };
+        check("[task_types.t.fields.sev]\ntype = \"enum\"\n", "values");
+        check(
+            "[task_types.t.fields]\npoints = \"integer\"\n",
+            "unknown field kind",
+        );
+        check(
+            "[task_types.t.fields.p]\ntype = \"uint\"\nvalues = [\"x\"]\n",
+            "only applies to enum",
+        );
+        check("[task_types.t.fields]\ndeps = \"string\"\n", "reserved");
+        check(
+            "[task_types.t.fields]\nblocks = \"string\"\n",
+            "relationship",
+        );
+        check(
+            "[task_types.t.fields]\ntype = \"string\"\n",
+            "discriminator",
+        );
+        check(
+            "[task_types.t.fields]\ncreate_time = \"datetime\"\n",
+            "timestamp",
+        );
+        // With a renamed status display name, the canonical spelling is the
+        // wrong way to declare the status field.
+        check(
+            "[workflow]\nstatus_field = \"state\"\n[task_types.t.fields]\nstatus = \"string\"\n",
+            "display name `state`",
+        );
+    }
+
+    #[test]
+    fn workflow_display_names_validate() {
+        let check = |toml_src: &str, needle: &str| {
+            let cfg: Config = toml::from_str(toml_src).unwrap();
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains(needle), "`{needle}` not in: {err}");
+        };
+        check(
+            "[workflow]\nstatus_field = \"x\"\ntype_field = \"x\"\n",
+            "share one display name",
+        );
+        check(
+            "[workflow]\ntype_field = \"status\"\n",
+            "status storage key",
+        );
+        check(
+            "[workflow]\nstatus_field = \"task_type\"\n",
+            "task-type storage key",
+        );
+        check("[workflow]\nstatus_field = \"\"\n", "must not be empty");
+        check("[workflow]\ntype_field = \"deps\"\n", "reserved");
+        check("[workflow]\ntype_field = \"blocks\"\n", "relationship");
     }
 
     #[test]

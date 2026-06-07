@@ -52,6 +52,35 @@ pub const STATUS_KEY: &str = "status";
 /// display name defaults to `type`.
 pub const TASK_TYPE_KEY: &str = "task_type";
 
+/// Field names never legal as user fields under ANY config.
+///
+/// Rejectable at parse time, before a store or config exists. Two reasons,
+/// interleaved in the list: the event-envelope keys (payload fields are
+/// serde-flattened next to them on the log line, so a user field would collide
+/// with the envelope or be swallowed by `_meta`), and the static
+/// computed/injected columns (their value is derived at read time, so a stored
+/// field would be silently shadowed; `dep` additionally reads like a
+/// dependency — use `ta dep add`). The config-DEPENDENT reserved names
+/// (timestamp columns, relationship types and inverses) can't live in a const;
+/// `cli::reserved_field_names` unions them in for the write gate, and
+/// `Config::validate` checks `[task_types]` field declarations against this
+/// same list.
+pub const RESERVED_FIELD_KEYS: &[&str] = &[
+    // event envelope
+    "seq",
+    "timestamp",
+    "op",
+    "task_id",
+    "_meta",
+    // static computed/injected columns
+    "id",
+    "deps",
+    "dep",
+    "unblocks",
+    "blocked_by",
+    "subtasks",
+];
+
 /// An edge event's target id, accepting the legacy `dep` key until v1.
 #[must_use]
 pub fn edge_target(payload: &Map<String, Value>) -> Option<&str> {

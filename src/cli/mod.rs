@@ -19,7 +19,10 @@ use crate::engine::Engine;
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs};
 use crate::merge;
-use crate::model::{MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, STATUS_KEY, TARGET_KEY};
+use crate::model::{
+    MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, RESERVED_FIELD_KEYS, STATUS_KEY,
+    TARGET_KEY, TASK_TYPE_KEY,
+};
 use crate::storage::{EventStore, FileStore};
 
 mod commands;
@@ -397,11 +400,13 @@ pub(crate) fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskSt
     // (the inverse of the write-side mapping in `canonicalize_fields`). Display
     // -only, like the timestamps above: columns, filters, sorting, and json
     // output all see the display name, while events/baseline keep the canonical
-    // key — which is what makes the name freely renamable in config.
-    let display = &store.config().workflow.status_field;
-    if display != STATUS_KEY {
+    // key — which is what makes the names freely renamable in config.
+    for (display, canonical) in canonical_field_pairs(&store.config().workflow) {
+        if display == canonical {
+            continue;
+        }
         for task in state.values_mut() {
-            if let Some(value) = task.custom_fields.remove(STATUS_KEY) {
+            if let Some(value) = task.custom_fields.remove(canonical) {
                 task.custom_fields.insert(display.clone(), value);
             }
         }
@@ -512,32 +517,6 @@ pub(crate) fn inverse_edges(
     display
 }
 
-/// Field names never legal as user fields under ANY config — rejectable at
-/// parse time, before a store or config exists. Two reasons, interleaved in
-/// the list: the event-envelope keys (payload fields are serde-flattened next
-/// to them on the log line, so a user field would collide with the envelope or
-/// be swallowed by `_meta`), and the static computed/injected columns (their
-/// value is derived at read time, so a stored field would be silently
-/// shadowed; `dep` additionally reads like a dependency — use `ta dep add`).
-/// The config-DEPENDENT reserved names (timestamp columns, relationship types
-/// and inverses) can't live in a const; [`reserved_field_names`] unions them
-/// in for the write gate, which re-checks everything under the store lock.
-const RESERVED_FIELD_KEYS: &[&str] = &[
-    // event envelope
-    "seq",
-    "timestamp",
-    "op",
-    "task_id",
-    "_meta",
-    // static computed/injected columns
-    "id",
-    "deps",
-    "dep",
-    "unblocks",
-    "blocked_by",
-    "subtasks",
-];
-
 /// Validate a batch of draft events against the current `state` and drop the
 /// redundant ones, returning exactly the events worth appending.
 ///
@@ -603,11 +582,15 @@ pub(crate) fn vet_events(
             OpType::Append => {
                 require_existing(state, id)?;
                 // Drafts are canonical by the time they reach the gate, so the
-                // single-valued check looks for the storage key, not the
-                // configured display name.
-                if let Some(bad) = draft.payload.keys().find(|k| *k == STATUS_KEY) {
+                // single-valued check looks for the storage keys (status and
+                // the task-type discriminator), not the display names.
+                if let Some(bad) = draft
+                    .payload
+                    .keys()
+                    .find(|k| *k == STATUS_KEY || *k == TASK_TYPE_KEY)
+                {
                     return Err(format!(
-                        "can't append (`+=`) to `{bad}`: it holds a single status value, not a log"
+                        "can't append (`+=`) to `{bad}`: it holds a single value, not a log"
                     )
                     .into());
                 }
@@ -713,29 +696,42 @@ fn dep_edge_exists(task: &TaskState, payload: &Map<String, Value>) -> bool {
 /// **append** to (`+=`).
 pub(crate) type FieldOps = (Map<String, Value>, Map<String, Value>);
 
+/// The `(display name, canonical storage key)` pairs of the config-renamable
+/// fields: the workflow status and the task-type discriminator. Shared by the
+/// write-side mapping ([`canonicalize_fields`]) and `state_of`'s read-side
+/// rename, so the two boundaries can never disagree.
+const fn canonical_field_pairs(
+    workflow: &crate::config::WorkflowConfig,
+) -> [(&String, &'static str); 2] {
+    [
+        (&workflow.status_field, STATUS_KEY),
+        (&workflow.type_field, TASK_TYPE_KEY),
+    ]
+}
+
 /// Map configured DISPLAY field names onto their canonical storage keys, before
 /// vetting/appending — the write-side inverse of `state_of`'s display rename.
-/// Today that is the workflow status field ([`STATUS_KEY`]); the task-type
-/// discriminator joins when schemas land. Writing the canonical spelling
-/// directly while a different display name is configured is rejected: one name
-/// per concept per store, never two writable spellings.
+/// Writing the canonical spelling directly while a different display name is
+/// configured is rejected: one name per concept per store, never two writable
+/// spellings.
 pub(crate) fn canonicalize_fields(
     fields: &mut Map<String, Value>,
     workflow: &crate::config::WorkflowConfig,
 ) -> Result<(), DynError> {
-    let display = &workflow.status_field;
-    if display == STATUS_KEY {
-        return Ok(());
-    }
-    if fields.contains_key(STATUS_KEY) {
-        return Err(format!(
-            "`{STATUS_KEY}` is the canonical storage key of the configured `{display}` \
-             field; set `{display}=` instead"
-        )
-        .into());
-    }
-    if let Some(value) = fields.remove(display.as_str()) {
-        fields.insert(STATUS_KEY.to_string(), value);
+    for (display, canonical) in canonical_field_pairs(workflow) {
+        if display == canonical {
+            continue;
+        }
+        if fields.contains_key(canonical) {
+            return Err(format!(
+                "`{canonical}` is the canonical storage key of the configured `{display}` \
+                 field; set `{display}=` instead"
+            )
+            .into());
+        }
+        if let Some(value) = fields.remove(display.as_str()) {
+            fields.insert(canonical.to_string(), value);
+        }
     }
     Ok(())
 }

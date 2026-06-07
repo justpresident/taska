@@ -178,3 +178,56 @@ fn renamed_status_field_is_display_only_storage_stays_canonical() {
         "second rename needs no migration"
     );
 }
+
+#[test]
+fn task_type_schemas_validate_and_the_discriminator_maps_canonically() {
+    let dir = fresh_dir("task-types");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+
+    // Declare a sound schema (no enforcement yet — config layer only).
+    let cfg_path = dir.join(".taska/config.toml");
+    let mut cfg = fs::read_to_string(&cfg_path).unwrap();
+    cfg.push_str(
+        "\n[task_types.bug]\nclosed = true\n[task_types.bug.fields]\npoints = \"uint\"\n\
+         tags = \"array<string>\"\n[task_types.bug.fields.severity]\ntype = \"enum\"\n\
+         values = [\"low\", \"high\"]\nrequired = true\n",
+    );
+    fs::write(&cfg_path, &cfg).unwrap();
+    ta(&dir, &["config", "validate"]); // asserts success
+
+    // The discriminator rides the canonical-storage mechanism: type=bug on the
+    // keyboard and in output, task_type on disk.
+    ta(&dir, &["create", "t1", "type=bug"]);
+    let shown = ta(&dir, &["show", "t1", "--format", "json"]);
+    assert!(
+        shown.contains(r#""type":"bug""#) && !shown.contains("task_type"),
+        "display name in output: {shown}"
+    );
+    let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    assert!(
+        log.contains(r#""task_type":"bug""#) && !log.contains(r#""type":"bug""#),
+        "canonical key on disk: {log}"
+    );
+    // Canonical spelling not directly writable; += rejected (single-valued).
+    assert!(!run(ta_bin(), &dir, &["update", "t1", "task_type=feature"])
+        .status
+        .success());
+    assert!(!run(ta_bin(), &dir, &["update", "t1", "type+=x"])
+        .status
+        .success());
+
+    // A hand-edited broken declaration blocks store commands with the problem
+    // named, while `config validate` (which bypasses the gate) reports it too.
+    cfg.push_str("[task_types.bad.fields.sev]\ntype = \"enum\"\n");
+    fs::write(&cfg_path, &cfg).unwrap();
+    let blocked = run(ta_bin(), &dir, &["list"]);
+    assert!(!blocked.status.success(), "bad schema blocks the store");
+    assert!(
+        String::from_utf8_lossy(&blocked.stderr).contains("values"),
+        "problem named: {}",
+        String::from_utf8_lossy(&blocked.stderr)
+    );
+    let validate = run(ta_bin(), &dir, &["config", "validate"]);
+    assert!(!validate.status.success(), "validate reports it");
+}

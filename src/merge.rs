@@ -865,10 +865,9 @@ mod tests {
         let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
         let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
-        let mut ids: Vec<String> =
-            Engine::materialize_state(Vec::new(), merged, "closed")
-                .into_keys()
-                .collect();
+        let mut ids: Vec<String> = Engine::materialize_state(Vec::new(), merged, "closed")
+            .into_keys()
+            .collect();
         ids.sort();
         ids
     }

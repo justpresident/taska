@@ -30,6 +30,10 @@ done_status = "closed"
 # Status stamped onto a new task when `ta create` doesn't set one. Set to "" to
 # create statusless tasks (the status field stays absent until you set it).
 default_status = "todo"
+# DISPLAY name of the task-type discriminator used by [task_types] schemas
+# (`ta create x type=bug`). Stored canonically as `task_type`, so renaming this
+# is free, like status_field.
+type_field = "type"
 
 [merge]
 # What to do when concurrent branches change the SAME field (or dependency) to
@@ -99,3 +103,18 @@ inverse = "relates_to"
 # One-way: `a duplicates b` (no reverse surfaced) — inverse omitted.
 [relationships.duplicates]
 kind = "info"
+
+# Per-type task schemas — OFF while no [task_types.<name>] is declared (the
+# store stays fully schema-agnostic). Once declared, the `type` field (see
+# workflow.type_field) selects a task's schema; enforcement arrives with the
+# schema write gate. Field kinds: string, bool, int, uint, float, datetime,
+# enum, any, array<T>, set<T>. Example:
+# [task_types.bug]
+# closed = true                       # no fields beyond the declared ones
+# [task_types.bug.fields]
+# points = "uint"                     # shorthand: just the kind
+# tags = "array<string>"
+# [task_types.bug.fields.severity]    # long form when constraints are needed
+# type = "enum"
+# values = ["low", "medium", "high"]
+# required = true
