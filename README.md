@@ -145,7 +145,8 @@ keep_events = 1000
 keep_days = 30
 
 [workflow]
-# The field that records status, and the value that means "done".
+# The DISPLAY name of the status field, and the value that means "done" —
+# storage always uses the canonical key `status`, so renaming this is free.
 # `ta list --ready` treats a dependency as satisfied once it reaches done_status.
 status_field = "status"
 done_status = "closed"

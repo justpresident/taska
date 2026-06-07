@@ -1,12 +1,18 @@
 //! `ta update` — set (`=`) and/or append to (`+=`) fields on a task.
 
-use crate::cli::{materialize, parse_field_ops, vet_events};
+use crate::cli::{canonicalize_fields, materialize, parse_field_ops, vet_events};
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType};
 use crate::storage::EventStore;
 
 pub fn cmd_update(store: &impl EventStore, id: &str, fields: &[String]) -> Result<(), DynError> {
-    let (set, append) = parse_field_ops(fields)?;
+    let (mut set, mut append) = parse_field_ops(fields)?;
+    // Display names map onto their canonical storage keys (the append map too:
+    // a renamed `state+=x` must hit the same single-valued-status rejection
+    // that `status+=x` does under the default name).
+    let workflow = &store.config().workflow;
+    canonicalize_fields(&mut set, workflow)?;
+    canonicalize_fields(&mut append, workflow)?;
     // Emit the set (`Update`) before the append (`Append`) so a same-field
     // `field=reset field+=add` applies the reset first, then accumulates onto it —
     // independent of token order on the command line. A mix yields two events; one

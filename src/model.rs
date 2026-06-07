@@ -37,6 +37,21 @@ pub const LEGACY_TARGET_KEY: &str = "dep";
 /// v1; `ta repair --migrate` rewrites it.
 pub const LEGACY_REL_KEY: &str = "type";
 
+/// CANONICAL storage key of the workflow status field.
+///
+/// Events and the baseline always store the status under this key, regardless
+/// of the configured `[workflow] status_field`, which is a DISPLAY name only:
+/// commands map the display name to this key on write, and `state_of` surfaces
+/// the stored value back under the display name on read. That split is what
+/// makes the display name freely renamable in config without touching disk —
+/// and lets clones with different display configs merge cleanly.
+pub const STATUS_KEY: &str = "status";
+
+/// CANONICAL storage key of the task-type discriminator (the schema feature's
+/// field). Same display-vs-storage split as [`STATUS_KEY`]; the configurable
+/// display name defaults to `type`.
+pub const TASK_TYPE_KEY: &str = "task_type";
+
 /// An edge event's target id, accepting the legacy `dep` key until v1.
 #[must_use]
 pub fn edge_target(payload: &Map<String, Value>) -> Option<&str> {

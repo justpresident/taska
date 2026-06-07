@@ -20,9 +20,11 @@ keep_events = 5000
 keep_days = 30
 
 [workflow]
-# The custom field that records a task's status, and the value that marks a
-# task complete. `ta list --ready` treats a dependency as satisfied once it
-# reaches `done_status`.
+# The DISPLAY name of the status field, and the value that marks a task
+# complete. `ta list --ready` treats a dependency as satisfied once it reaches
+# `done_status`. On disk the status always lives under the canonical key
+# `status`, so renaming this is free at any time (no data migration) — just
+# update [display] columns to the new name too.
 status_field = "status"
 done_status = "closed"
 # Status stamped onto a new task when `ta create` doesn't set one. Set to "" to

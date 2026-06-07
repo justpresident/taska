@@ -19,7 +19,7 @@ use crate::engine::Engine;
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs};
 use crate::merge;
-use crate::model::{MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, TARGET_KEY};
+use crate::model::{MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, STATUS_KEY, TARGET_KEY};
 use crate::storage::{EventStore, FileStore};
 
 mod commands;
@@ -336,7 +336,7 @@ pub(crate) fn replay(
     mutations: Vec<MutationEvent>,
 ) -> HashMap<String, TaskState> {
     let w = &store.config().workflow;
-    Engine::materialize_state(baseline, mutations, &w.status_field, &w.done_status)
+    Engine::materialize_state(baseline, mutations, &w.done_status)
 }
 
 /// Like [`replay`] but keeping the orphan report (see [`Engine::materialize_report`]).
@@ -346,23 +346,23 @@ pub(crate) fn replay_report(
     mutations: Vec<MutationEvent>,
 ) -> (HashMap<String, TaskState>, Vec<u64>) {
     let w = &store.config().workflow;
-    Engine::materialize_report(baseline, mutations, &w.status_field, &w.done_status)
+    Engine::materialize_report(baseline, mutations, &w.done_status)
 }
 
 /// Materialize from raw baseline + log slices, using `config`'s workflow names.
 /// The variant the `append_checked` verifier closures use: they hold slices
 /// (read under the store lock), not a store, so can't go through [`replay`].
+/// RAW state: the status lives under the canonical [`STATUS_KEY`], not the
+/// configured display name — which is what verifiers and event writers want.
 pub(crate) fn materialize(
     config: &Config,
     baseline: &[TaskState],
     log: &[MutationEvent],
 ) -> HashMap<String, TaskState> {
-    let w = &config.workflow;
     Engine::materialize_state(
         baseline.to_vec(),
         log.to_vec(),
-        &w.status_field,
-        &w.done_status,
+        &config.workflow.done_status,
     )
 }
 
@@ -392,6 +392,19 @@ pub(crate) fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskSt
         inject_time(&mut task.custom_fields, &ts.create_time, task.create_time);
         inject_time(&mut task.custom_fields, &ts.update_time, task.update_time);
         inject_time(&mut task.custom_fields, &ts.close_time, task.close_time);
+    }
+    // Surface canonically-stored fields under their configured DISPLAY names
+    // (the inverse of the write-side mapping in `canonicalize_fields`). Display
+    // -only, like the timestamps above: columns, filters, sorting, and json
+    // output all see the display name, while events/baseline keep the canonical
+    // key — which is what makes the name freely renamable in config.
+    let display = &store.config().workflow.status_field;
+    if display != STATUS_KEY {
+        for task in state.values_mut() {
+            if let Some(value) = task.custom_fields.remove(STATUS_KEY) {
+                task.custom_fields.insert(display.clone(), value);
+            }
+        }
     }
     Ok(state)
 }
@@ -589,11 +602,10 @@ pub(crate) fn vet_events(
             }
             OpType::Append => {
                 require_existing(state, id)?;
-                if let Some(bad) = draft
-                    .payload
-                    .keys()
-                    .find(|k| *k == &config.workflow.status_field)
-                {
+                // Drafts are canonical by the time they reach the gate, so the
+                // single-valued check looks for the storage key, not the
+                // configured display name.
+                if let Some(bad) = draft.payload.keys().find(|k| *k == STATUS_KEY) {
                     return Err(format!(
                         "can't append (`+=`) to `{bad}`: it holds a single status value, not a log"
                     )
@@ -700,6 +712,33 @@ fn dep_edge_exists(task: &TaskState, payload: &Map<String, Value>) -> bool {
 /// A parsed field list, split by operator: fields to **set** (`=`) and fields to
 /// **append** to (`+=`).
 pub(crate) type FieldOps = (Map<String, Value>, Map<String, Value>);
+
+/// Map configured DISPLAY field names onto their canonical storage keys, before
+/// vetting/appending — the write-side inverse of `state_of`'s display rename.
+/// Today that is the workflow status field ([`STATUS_KEY`]); the task-type
+/// discriminator joins when schemas land. Writing the canonical spelling
+/// directly while a different display name is configured is rejected: one name
+/// per concept per store, never two writable spellings.
+pub(crate) fn canonicalize_fields(
+    fields: &mut Map<String, Value>,
+    workflow: &crate::config::WorkflowConfig,
+) -> Result<(), DynError> {
+    let display = &workflow.status_field;
+    if display == STATUS_KEY {
+        return Ok(());
+    }
+    if fields.contains_key(STATUS_KEY) {
+        return Err(format!(
+            "`{STATUS_KEY}` is the canonical storage key of the configured `{display}` \
+             field; set `{display}=` instead"
+        )
+        .into());
+    }
+    if let Some(value) = fields.remove(display.as_str()) {
+        fields.insert(STATUS_KEY.to_string(), value);
+    }
+    Ok(())
+}
 
 /// Parse `key=value` / `key+=value` tokens into two payload maps: fields to
 /// **set** (`=`) and fields to **append** to (`+=`). One `update` can mix both,
@@ -881,5 +920,37 @@ mod tests {
         );
         assert!(parse_field_ops(&["+=x".into()]).is_err(), "empty key");
         assert!(parse_field_ops(&["noeq".into()]).is_err(), "no operator");
+    }
+
+    #[test]
+    fn canonicalize_maps_display_status_and_rejects_the_canonical_spelling() {
+        use crate::config::WorkflowConfig;
+        let renamed = WorkflowConfig {
+            status_field: "state".to_string(),
+            ..WorkflowConfig::default()
+        };
+
+        // The configured display name maps onto the canonical storage key.
+        let mut fields = Map::new();
+        fields.insert("state".to_string(), serde_json::json!("open"));
+        canonicalize_fields(&mut fields, &renamed).unwrap();
+        assert_eq!(fields.get(STATUS_KEY), Some(&serde_json::json!("open")));
+        assert!(!fields.contains_key("state"), "display key consumed");
+
+        // Writing the canonical spelling directly is rejected while a different
+        // display name is configured — one writable name per concept.
+        let mut direct = Map::new();
+        direct.insert(STATUS_KEY.to_string(), serde_json::json!("x"));
+        let err = canonicalize_fields(&mut direct, &renamed).unwrap_err();
+        assert!(
+            err.to_string().contains("state"),
+            "points at display: {err}"
+        );
+
+        // Default name: canonical IS the display name; nothing to do.
+        let mut plain = Map::new();
+        plain.insert(STATUS_KEY.to_string(), serde_json::json!("open"));
+        canonicalize_fields(&mut plain, &WorkflowConfig::default()).unwrap();
+        assert_eq!(plain.get(STATUS_KEY), Some(&serde_json::json!("open")));
     }
 }

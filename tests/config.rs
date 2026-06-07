@@ -128,3 +128,53 @@ fn config_validate_flags_a_blocker_cycle_and_set_runs_the_same_check() {
     );
     assert!(!set.status.success(), "config set runs graph validation");
 }
+
+#[test]
+fn renamed_status_field_is_display_only_storage_stays_canonical() {
+    let dir = fresh_dir("status-display");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["config", "set", "workflow.status_field", "state"]);
+
+    // The display name is what you type and what you see...
+    ta(&dir, &["create", "t1", "state=open"]);
+    ta(&dir, &["create", "t2"]); // default_status stamped
+    ta(&dir, &["update", "t2", "state=closed"]);
+    let shown = ta(&dir, &["show", "t1", "--format", "json"]);
+    assert!(
+        shown.contains(r#""state":"open""#) && !shown.contains(r#""status""#),
+        "display name in output: {shown}"
+    );
+    // ...and the workflow machinery follows it: filtering, --open, --ready.
+    assert!(lists_task(&ta(&dir, &["list", "state=open"]), "t1"));
+    let open = ta(&dir, &["list", "--open"]);
+    assert!(
+        lists_task(&open, "t1") && !lists_task(&open, "t2"),
+        "t2 is done under the renamed field: {open}"
+    );
+
+    // ...but STORAGE is canonical: events carry `status`, never `state`.
+    let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    assert!(
+        log.contains(r#""status":"open""#) && !log.contains(r#""state":"open""#),
+        "canonical key on disk: {log}"
+    );
+
+    // The canonical spelling is not directly writable while renamed...
+    let out = run(ta_bin(), &dir, &["update", "t1", "status=x"]);
+    assert!(!out.status.success(), "canonical spelling rejected");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("state"),
+        "error points at the display name"
+    );
+    // ...and the single-valued append rejection follows the display name.
+    let out = run(ta_bin(), &dir, &["update", "t1", "state+=more"]);
+    assert!(!out.status.success(), "+= on the renamed status rejected");
+
+    // Renaming AGAIN is free — the data was canonical all along.
+    ta(&dir, &["config", "set", "workflow.status_field", "phase"]);
+    assert!(
+        ta(&dir, &["show", "t1", "--format", "json"]).contains(r#""phase":"open""#),
+        "second rename needs no migration"
+    );
+}

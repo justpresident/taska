@@ -2,10 +2,10 @@
 
 use serde_json::Value;
 
-use crate::cli::{materialize, parse_field_ops, vet_events};
+use crate::cli::{canonicalize_fields, materialize, parse_field_ops, vet_events};
 use crate::config::WorkflowConfig;
 use crate::error::DynError;
-use crate::model::{MutationEvent, OpType};
+use crate::model::{MutationEvent, OpType, STATUS_KEY};
 use crate::storage::EventStore;
 
 pub fn cmd_create(
@@ -20,12 +20,16 @@ pub fn cmd_create(
     for (k, v) in append {
         payload.insert(k, v);
     }
+    // Display names map onto their canonical storage keys before anything is
+    // stamped or vetted (so the event stores `status` whatever the field is
+    // called on screen).
+    canonicalize_fields(&mut payload, workflow)?;
     // Stamp the configured default status unless the caller named the status
     // field themselves (even as JSON `null`, the explicit-unset convention) or
     // defaults are turned off with an empty `default_status`.
-    if !workflow.default_status.is_empty() && !payload.contains_key(&workflow.status_field) {
+    if !workflow.default_status.is_empty() && !payload.contains_key(STATUS_KEY) {
         payload.insert(
-            workflow.status_field.clone(),
+            STATUS_KEY.to_string(),
             Value::String(workflow.default_status.clone()),
         );
     }

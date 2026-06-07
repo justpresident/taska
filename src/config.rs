@@ -68,9 +68,11 @@ keep_events = {keep_events}
 keep_days = {keep_days}
 
 [workflow]
-# The custom field that records a task's status, and the value that marks a
-# task complete. `ta list --ready` treats a dependency as satisfied once it
-# reaches `done_status`.
+# The DISPLAY name of the status field, and the value that marks a task
+# complete. `ta list --ready` treats a dependency as satisfied once it reaches
+# `done_status`. On disk the status always lives under the canonical key
+# `status`, so renaming this is free at any time (no data migration) — just
+# update [display] columns to the new name too.
 status_field = "{status_field}"
 done_status = "{done_status}"
 # Status stamped onto a new task when `ta create` doesn't set one. Set to "" to
@@ -222,6 +224,9 @@ impl Default for CompactionConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default)]
 pub struct WorkflowConfig {
+    /// DISPLAY name of the status field. Storage is always the canonical
+    /// [`crate::model::STATUS_KEY`]: commands map this name to the key on
+    /// write, `state_of` maps it back on read — so renaming it is free.
     pub status_field: String,
     pub done_status: String,
     /// Status stamped onto a new task when `ta create` doesn't set the status
