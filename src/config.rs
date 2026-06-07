@@ -125,8 +125,7 @@ show_layout = "{show_layout}"
 
 # Per-column truncation overrides. A column listed here is truncated to its own
 # width instead of max_width (0 = no limit). `--full` ignores these entirely.
-[display.column_max_width]
-{column_max_width}
+column_max_width = {{ {column_max_width} }}
 
 [timestamps]
 # Computed timestamp fields materialized onto every task from the event log
@@ -197,19 +196,26 @@ fn render_columns(columns: &[String]) -> String {
         .join(", ")
 }
 
-/// The `[display.column_max_width]` sub-table, one `name = width` per entry.
+/// The `column_max_width` inline table, `name = width` entries on one line.
 /// Keys are quoted so a column name with TOML-special characters round-trips.
 fn render_column_widths(widths: &BTreeMap<String, usize>) -> String {
     widths
         .iter()
         .map(|(k, v)| format!("\"{k}\" = {v}"))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join(", ")
 }
 
-/// One `[relationships.<name>]` sub-table per declared relationship type.
+/// The `[relationships]` table: one aligned inline table per declared type
+/// (`depends_on = {{ kind = "blocker", inverse = "blocks" }}`).
 fn render_relationships(relationships: &RelationshipConfig) -> String {
-    relationships
+    let width = relationships
+        .types
+        .keys()
+        .map(String::len)
+        .max()
+        .unwrap_or(0);
+    let lines = relationships
         .types
         .iter()
         .map(|(name, k)| {
@@ -217,15 +223,16 @@ fn render_relationships(relationships: &RelationshipConfig) -> String {
             let inverse = if k.inverse.is_empty() {
                 String::new()
             } else {
-                format!("\ninverse = \"{}\"", k.inverse)
+                format!(", inverse = \"{}\"", k.inverse)
             };
             format!(
-                "[relationships.{name}]\nkind = \"{}\"{inverse}",
+                "{name:<width$} = {{ kind = \"{}\"{inverse} }}",
                 k.kind.as_str()
             )
         })
         .collect::<Vec<_>>()
-        .join("\n\n")
+        .join("\n");
+    format!("[relationships]\n{lines}")
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]

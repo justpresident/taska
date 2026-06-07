@@ -166,21 +166,16 @@ untyped_tasks = "deny"
 [merge]
 on_conflict = "surface"
 
-# Typed relationship edges. Each `[relationships.<name>]` declares a type usable
-# with `ta dep add/remove`. `kind` is its semantics: "blocker" gates readiness and
+# Typed relationship edges, one inline table per declared type, usable with
+# `ta dep add/remove`. `kind` is its semantics: "blocker" gates readiness and
 # cycle detection, "hierarchy" is a parent/child subtask edge (gates like a blocker
 # but renders distinctly), "info" is informational only. `inverse` names the reverse
-# edge `show` surfaces ("" = one-way). At least one "blocker" type must be declared;
-# `depends_on` is the default config's (there is no implicit blocker).
-[relationships.depends_on]
-kind = "blocker"
-inverse = "blocks"
-[relationships.has_subtask]
-kind = "hierarchy"
-inverse = "subtask_of"
-[relationships.relates_to]
-kind = "info"
-inverse = "relates_to"   # symmetric
+# edge `show` surfaces (omit it for a one-way type). At least one "blocker" type
+# must be declared; `depends_on` is the default config's (there is no implicit blocker).
+[relationships]
+depends_on  = { kind = "blocker", inverse = "blocks" }
+has_subtask = { kind = "hierarchy", inverse = "subtask_of" }
+relates_to  = { kind = "info", inverse = "relates_to" }   # symmetric
 
 # Per-type task schemas — OFF while no [task_types.<name>] is declared (the
 # store stays fully schema-agnostic). Once declared, the `type` field selects a
@@ -218,8 +213,7 @@ show_layout = "list"
 
 # Per-column truncation overrides: a column listed here is truncated to its own
 # width instead of max_width (0 = no limit). --full ignores these entirely.
-[display.column_max_width]
-title = 80
+column_max_width = { title = 80 }
 
 [timestamps]
 # Computed (never user-set) timestamp fields materialized onto every task from

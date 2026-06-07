@@ -175,6 +175,9 @@ fn parse_config_value(raw: &str) -> toml_edit::Value {
 /// Set a dotted key in a `toml_edit` document, creating intermediate tables as
 /// needed. Editing in place preserves the surrounding comments and formatting,
 /// which is the whole reason `set` uses `toml_edit` rather than re-serializing.
+/// The walk is table-LIKE, not table-only: an intermediate may be a `[section]`
+/// or an inline table (`column_max_width = { title = 80 }`, the relationship
+/// defs), and both must remain settable.
 fn set_dotted(
     doc: &mut toml_edit::DocumentMut,
     key: &str,
@@ -187,16 +190,32 @@ fn set_dotted(
     let (last, parents) = parts
         .split_last()
         .ok_or_else(|| format!("invalid config key `{key}`"))?;
-    let mut table = doc.as_table_mut();
+    let mut table: &mut dyn toml_edit::TableLike = doc.as_table_mut();
     for &parent in parents {
-        let item = table
-            .entry(parent)
-            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
-        table = item
-            .as_table_mut()
+        if table.get(parent).is_none() {
+            table.insert(parent, toml_edit::Item::Table(toml_edit::Table::new()));
+        }
+        table = table
+            .get_mut(parent)
+            .and_then(toml_edit::Item::as_table_like_mut)
             .ok_or_else(|| format!("config key `{parent}` is not a table"))?;
     }
-    table[*last] = toml_edit::Item::Value(value);
+    let mut item = toml_edit::Item::Value(value);
+    // Replacing an existing value: carry its decor over (the spacing inside an
+    // inline table), and swap the item IN PLACE — `insert` would re-create the
+    // key and silently drop the comment attached to it.
+    if let Some(old) = table.get(last).and_then(toml_edit::Item::as_value) {
+        if let Some(new) = item.as_value_mut() {
+            *new.decor_mut() = old.decor().clone();
+        }
+    }
+    if table.get(last).is_some() {
+        if let Some(existing) = table.get_mut(last) {
+            *existing = item;
+        }
+    } else {
+        table.insert(last, item);
+    }
     Ok(())
 }
 
@@ -244,6 +263,40 @@ mod tests {
 
         // An empty key segment is rejected rather than producing a bogus table.
         assert!(set_dotted(&mut doc, "display..title", parse_config_value("1")).is_err());
+    }
+
+    #[test]
+    fn set_dotted_descends_into_inline_tables() {
+        // The template styles column_max_width and the relationship defs as
+        // inline tables — a dotted set must walk INTO them (table-like, not
+        // table-only) and keep the inline style.
+        let mut doc = "[display]\ncolumn_max_width = { title = 80 }\n\
+                       [relationships]\ndepends_on = { kind = \"blocker\", inverse = \"blocks\" }\n"
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        set_dotted(
+            &mut doc,
+            "display.column_max_width.title",
+            parse_config_value("120"),
+        )
+        .unwrap();
+        set_dotted(
+            &mut doc,
+            "relationships.depends_on.kind",
+            parse_config_value("\"hierarchy\""),
+        )
+        .unwrap();
+        let text = doc.to_string();
+        assert!(
+            text.contains("column_max_width = { title = 120 }"),
+            "updated in place, still inline: {text}"
+        );
+        let cfg: Config = toml::from_str(&text).unwrap();
+        assert_eq!(cfg.display.column_max_width.get("title"), Some(&120));
+        assert_eq!(
+            cfg.relationships.types["depends_on"].kind,
+            crate::config::RelKind::Hierarchy
+        );
     }
 
     #[test]

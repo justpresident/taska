@@ -74,8 +74,7 @@ show_layout = "list"
 
 # Per-column truncation overrides. A column listed here is truncated to its own
 # width instead of max_width (0 = no limit). `--full` ignores these entirely.
-[display.column_max_width]
-title = 80
+column_max_width = { title = 80 }
 
 [timestamps]
 # Computed timestamp fields materialized onto every task from the event log
@@ -97,22 +96,13 @@ close_time = "close_time"
 # and is OPTIONAL — omit it for a one-way relationship; a type's OWN name means it
 # is symmetric (`a relates_to b` also reads as `b relates_to a`, removable from
 # either side); any other name labels the inverse (`depends_on`'s reverse is `blocks`).
-[relationships.depends_on]
-kind = "blocker"
-inverse = "blocks"
-
+[relationships]
+depends_on  = { kind = "blocker", inverse = "blocks" }
 # Parent/child: `epic has_subtask child` (or `child subtask_of epic`).
-[relationships.has_subtask]
-kind = "hierarchy"
-inverse = "subtask_of"
-
-[relationships.relates_to]
-kind = "info"
-inverse = "relates_to"
-
+has_subtask = { kind = "hierarchy", inverse = "subtask_of" }
+relates_to  = { kind = "info", inverse = "relates_to" }
 # One-way: `a duplicates b` (no reverse surfaced) — inverse omitted.
-[relationships.duplicates]
-kind = "info"
+duplicates  = { kind = "info" }
 
 # Per-type task schemas — OFF while no [task_types.<name>] is declared (the
 # store stays fully schema-agnostic). Once declared, the `type` field (see
