@@ -152,7 +152,10 @@ close_time = "{close_time}"
 # store stays fully schema-agnostic). Once declared, the `type` field (see
 # workflow.type_field) selects a task's schema, enforced on every create/update
 # (whole-task: every violation reported in one error). Field kinds: string,
-# bool, int, uint, float, datetime, enum, any, array<T>, set<T>. Example:
+# bool, int, uint, float, datetime, enum, any, array<T>, set<T>. Long-form
+# constraints: required, default (stamped at create, healed onto writes,
+# substituted at read), min/max, pattern, min_len/max_len, min_items/max_items.
+# Example:
 # [task_types.bug]
 # closed = true                       # no fields beyond the declared ones
 # [task_types.bug.fields]
@@ -162,6 +165,11 @@ close_time = "{close_time}"
 # type = "enum"
 # values = ["low", "medium", "high"]
 # required = true
+# default = "low"
+# [task_types.bug.fields.estimate]
+# type = "uint"
+# min = 1
+# max = 13
 "#,
         min_keep = MIN_KEEP_EVENTS,
         keep_events = compaction.keep_events,
@@ -694,8 +702,9 @@ impl FieldKind {
 pub enum FieldSchema {
     /// `name = "<kind>"`.
     Short(String),
-    /// A `[task_types.<t>.fields.<name>]` sub-table.
-    Full(FieldSpec),
+    /// A `[task_types.<t>.fields.<name>]` sub-table (boxed: the constraint
+    /// set makes it much larger than the shorthand string).
+    Full(Box<FieldSpec>),
 }
 
 impl FieldSchema {
@@ -725,6 +734,86 @@ impl FieldSchema {
             Self::Full(spec) => spec.required,
         }
     }
+
+    /// The long-form spec, when this is one (the shorthand carries no
+    /// constraints or default).
+    #[must_use]
+    pub const fn spec(&self) -> Option<&FieldSpec> {
+        match self {
+            Self::Short(_) => None,
+            Self::Full(spec) => Some(spec),
+        }
+    }
+
+    /// The declared default value, if any: stamped at create, healed onto any
+    /// write that leaves the field absent, substituted at read for a
+    /// missing/invalid value, and stamped by `ta repair --schema` for missing
+    /// REQUIRED fields.
+    #[must_use]
+    pub fn default_value(&self) -> Option<&serde_json::Value> {
+        self.spec().and_then(|spec| spec.default.as_ref())
+    }
+
+    /// Every way `value` (assumed kind-correct) violates this field's declared
+    /// constraints — message fragments for the write gate's violation list
+    /// (`is below min 1`, `does not match pattern …`). Empty = conforming. An
+    /// uncompilable pattern is skipped here; `Config::validate` reports it.
+    #[must_use]
+    pub fn constraint_violations(&self, value: &serde_json::Value) -> Vec<String> {
+        use std::cmp::Ordering;
+        let Some(spec) = self.spec() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        if let Some(min) = &spec.min {
+            if crate::model::cmp_json(value, min) == Ordering::Less {
+                out.push(format!("is below min {min}"));
+            }
+        }
+        if let Some(max) = &spec.max {
+            if crate::model::cmp_json(value, max) == Ordering::Greater {
+                out.push(format!("exceeds max {max}"));
+            }
+        }
+        if let (Some(pattern), Some(text)) = (&spec.pattern, value.as_str()) {
+            if let Ok(re) = regex::Regex::new(pattern) {
+                if !re.is_match(text) {
+                    out.push(format!("does not match pattern `{pattern}`"));
+                }
+            }
+        }
+        if let Some(text) = value.as_str() {
+            let chars = text.chars().count() as u64;
+            if spec.min_len.is_some_and(|n| chars < n) {
+                out.push(format!(
+                    "is shorter than min_len {}",
+                    spec.min_len.unwrap_or(0)
+                ));
+            }
+            if spec.max_len.is_some_and(|n| chars > n) {
+                out.push(format!(
+                    "is longer than max_len {}",
+                    spec.max_len.unwrap_or(0)
+                ));
+            }
+        }
+        if let Some(items) = value.as_array() {
+            let count = items.len() as u64;
+            if spec.min_items.is_some_and(|n| count < n) {
+                out.push(format!(
+                    "has fewer than min_items {}",
+                    spec.min_items.unwrap_or(0)
+                ));
+            }
+            if spec.max_items.is_some_and(|n| count > n) {
+                out.push(format!(
+                    "has more than max_items {}",
+                    spec.max_items.unwrap_or(0)
+                ));
+            }
+        }
+        out
+    }
 }
 
 /// The long-form field spec. `deny_unknown_fields` makes a typo'd key a load
@@ -743,6 +832,31 @@ pub struct FieldSpec {
     /// Whether every task of this type must carry the field.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub required: bool,
+    /// Default value: stamped at create when the field is absent, healed onto
+    /// any write that leaves it absent, substituted at read for missing or
+    /// invalid values. Must itself satisfy the kind and constraints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
+    /// Inclusive lower/upper bounds, compared with the shared value ordering
+    /// (numeric for numbers, lexicographic for strings — which makes RFC 3339
+    /// datetime bounds chronological). Plain scalar kinds only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<serde_json::Value>,
+    /// A regex the (plain string) value must match.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    /// Character-count bounds for plain string values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_len: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_len: Option<u64>,
+    /// Element-count bounds for `array<T>`/`set<T>` values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<u64>,
 }
 
 /// One declared task type (`[task_types.<name>]`): its field schemas and
@@ -1014,8 +1128,101 @@ impl Config {
                                 schema.kind_str()
                             ));
                         }
+                        if let Some(spec) = schema.spec() {
+                            Self::collect_field_spec_problems(&ctx, spec, &kind, schema, problems);
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    /// The long-form constraints must fit the declared kind and each other,
+    /// and a `default` must satisfy everything it would be checked against.
+    fn collect_field_spec_problems(
+        ctx: &str,
+        spec: &FieldSpec,
+        kind: &FieldKind,
+        schema: &FieldSchema,
+        problems: &mut Vec<String>,
+    ) {
+        use std::cmp::Ordering;
+        let ordered_scalar = matches!(
+            kind,
+            FieldKind::Int
+                | FieldKind::Uint
+                | FieldKind::Float
+                | FieldKind::Datetime
+                | FieldKind::String
+        );
+        if (spec.min.is_some() || spec.max.is_some()) && !ordered_scalar {
+            problems.push(format!(
+                "{ctx}: min/max only apply to int|uint|float|datetime|string (declared `{}`)",
+                spec.kind
+            ));
+        }
+        for (name, bound) in [("min", &spec.min), ("max", &spec.max)] {
+            if let Some(bound) = bound {
+                if ordered_scalar && !kind.matches_value(bound, schema.values()) {
+                    problems.push(format!(
+                        "{ctx}: `{name}` must itself satisfy the declared kind `{}`",
+                        spec.kind
+                    ));
+                }
+            }
+        }
+        if let (Some(min), Some(max)) = (&spec.min, &spec.max) {
+            if crate::model::cmp_json(min, max) == Ordering::Greater {
+                problems.push(format!("{ctx}: min {min} is greater than max {max}"));
+            }
+        }
+        let is_string = matches!(kind, FieldKind::String);
+        if spec.pattern.is_some() && !is_string {
+            problems.push(format!(
+                "{ctx}: `pattern` only applies to plain string fields (declared `{}`)",
+                spec.kind
+            ));
+        }
+        if let Some(pattern) = &spec.pattern {
+            if let Err(e) = regex::Regex::new(pattern) {
+                problems.push(format!("{ctx}: invalid `pattern`: {e}"));
+            }
+        }
+        if (spec.min_len.is_some() || spec.max_len.is_some()) && !is_string {
+            problems.push(format!(
+                "{ctx}: min_len/max_len only apply to plain string fields (declared `{}`)",
+                spec.kind
+            ));
+        }
+        if let (Some(lo), Some(hi)) = (spec.min_len, spec.max_len) {
+            if lo > hi {
+                problems.push(format!("{ctx}: min_len {lo} is greater than max_len {hi}"));
+            }
+        }
+        let is_container = matches!(kind, FieldKind::Array(_) | FieldKind::Set(_));
+        if (spec.min_items.is_some() || spec.max_items.is_some()) && !is_container {
+            problems.push(format!(
+                "{ctx}: min_items/max_items only apply to array<…>/set<…> (declared `{}`)",
+                spec.kind
+            ));
+        }
+        if let (Some(lo), Some(hi)) = (spec.min_items, spec.max_items) {
+            if lo > hi {
+                problems.push(format!(
+                    "{ctx}: min_items {lo} is greater than max_items {hi}"
+                ));
+            }
+        }
+        if let Some(default) = &spec.default {
+            if kind.matches_value(default, schema.values()) {
+                for violation in schema.constraint_violations(default) {
+                    problems.push(format!("{ctx}: `default` {default} {violation}"));
+                }
+            } else {
+                problems.push(format!(
+                    "{ctx}: `default` {default} doesn't satisfy the declared kind `{}`",
+                    spec.kind
+                ));
             }
         }
     }
@@ -1198,6 +1405,89 @@ required = true
             "[workflow]\nstatus_field = \"state\"\n[task_types.t.fields]\nstatus = \"string\"\n",
             "display name `state`",
         );
+    }
+
+    #[test]
+    fn field_constraints_validate_and_check_values() {
+        let check = |types_toml: &str, needle: &str| {
+            let cfg: Config = toml::from_str(types_toml).unwrap();
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains(needle), "`{needle}` not in: {err}");
+        };
+        // Constraint/kind applicability and internal consistency.
+        check(
+            "[task_types.t.fields.f]\ntype = \"bool\"\nmin = 1\n",
+            "min/max only apply",
+        );
+        check(
+            "[task_types.t.fields.f]\ntype = \"uint\"\nmin = 5\nmax = 2\n",
+            "greater than max",
+        );
+        check(
+            "[task_types.t.fields.f]\ntype = \"uint\"\nmin = \"x\"\n",
+            "must itself satisfy",
+        );
+        check(
+            "[task_types.t.fields.f]\ntype = \"uint\"\npattern = \"^a\"\n",
+            "only applies to plain string",
+        );
+        check(
+            "[task_types.t.fields.f]\ntype = \"string\"\npattern = \"[\"\n",
+            "invalid `pattern`",
+        );
+        check(
+            "[task_types.t.fields.f]\ntype = \"uint\"\nmin_len = 1\n",
+            "min_len/max_len only apply",
+        );
+        check(
+            "[task_types.t.fields.f]\ntype = \"string\"\nmin_items = 1\n",
+            "min_items/max_items only apply",
+        );
+        // Defaults must satisfy the kind AND their own constraints.
+        check(
+            "[task_types.t.fields.f]\ntype = \"uint\"\ndefault = \"x\"\n",
+            "doesn't satisfy the declared kind",
+        );
+        check(
+            "[task_types.t.fields.f]\ntype = \"uint\"\nmin = 5\ndefault = 1\n",
+            "below min",
+        );
+
+        // A sound constrained spec validates, and value checks fire precisely.
+        let cfg: Config = toml::from_str(
+            r#"
+[task_types.t.fields.title]
+type = "string"
+pattern = "^[A-Z]"
+min_len = 3
+max_len = 6
+[task_types.t.fields.points]
+type = "uint"
+min = 1
+max = 10
+default = 1
+[task_types.t.fields.tags]
+type = "set<string>"
+max_items = 2
+"#,
+        )
+        .unwrap();
+        assert!(cfg.validate().is_ok());
+        let fields = &cfg.task_types.types["t"].fields;
+        let violations =
+            |field: &str, v: serde_json::Value| fields[field].constraint_violations(&v);
+        assert!(violations("points", serde_json::json!(5)).is_empty());
+        assert!(violations("points", serde_json::json!(0))[0].contains("below min 1"));
+        assert!(violations("points", serde_json::json!(11))[0].contains("exceeds max 10"));
+        let bad_title = violations("title", serde_json::json!("ab"));
+        assert!(
+            bad_title.iter().any(|v| v.contains("pattern"))
+                && bad_title.iter().any(|v| v.contains("min_len")),
+            "both constraints reported: {bad_title:?}"
+        );
+        assert!(violations("title", serde_json::json!("Abcdefg"))[0].contains("max_len"));
+        assert!(violations("tags", serde_json::json!(["a", "b", "c"]))[0].contains("max_items"));
+        assert!(violations("tags", serde_json::json!(["a"])).is_empty());
     }
 
     #[test]

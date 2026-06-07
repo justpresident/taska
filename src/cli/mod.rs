@@ -466,6 +466,10 @@ pub(crate) fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskSt
     // materialize — but every read command says so ONCE, before the display
     // renames below would skew the check. Silenceable via config.
     warn_nonconforming(&state, store.config());
+    // Then the default substitution: missing/invalid declared fields READ as
+    // their declared default (after the warning, so the report reflects the
+    // stored truth; display-only, like everything below).
+    substitute_schema_defaults(&mut state, store.config());
     // Surface the computed timestamps as ordinary (RFC 3339 string) fields under
     // their configured names, so list/show/--sort treat them like any
     // other column. This is display-only: the raw Option<DateTime> stays on
@@ -823,6 +827,84 @@ fn vet_accumulate(
     Ok(changed)
 }
 
+/// The declared defaults a write should stamp: every field of the effective
+/// task type (the payload's discriminator wins over the current one) that has
+/// a `default`, is absent from the current task, and is not being set, unset,
+/// or accumulated by this very write. Used by `create` (stamp into the
+/// payload) and `update` (heal the task on any write), so a task with
+/// defaulted required fields conforms without spelling them out.
+pub(crate) fn schema_default_stamps(
+    current: Option<&Map<String, Value>>,
+    payload: &Map<String, Value>,
+    touched: &BTreeSet<String>,
+    config: &Config,
+) -> Map<String, Value> {
+    let mut stamps = Map::new();
+    let Some(def) = payload
+        .get(TASK_TYPE_KEY)
+        .or_else(|| current.and_then(|fields| fields.get(TASK_TYPE_KEY)))
+        .and_then(Value::as_str)
+        .and_then(|name| config.task_types.types.get(name))
+    else {
+        return stamps;
+    };
+    for (name, schema) in &def.fields {
+        let Some(default) = schema.default_value() else {
+            continue;
+        };
+        let key = declared_field_key(name, &config.workflow.status_field);
+        let absent = !payload.contains_key(key)
+            && !touched.contains(key)
+            && !current.is_some_and(|fields| fields.contains_key(key));
+        if absent {
+            stamps.insert(key.to_string(), default.clone());
+        }
+    }
+    stamps
+}
+
+/// Read-side default substitution (display-only, like the timestamp
+/// injection): a declared field that is MISSING or whose stored value is
+/// invalid (wrong kind or constraint-violating) reads as its declared
+/// `default`. The stored log/baseline are untouched — the non-conformance
+/// warning and `ta repair --schema` remain the signals to actually fix the
+/// data. Runs on RAW state, before the display renames.
+fn substitute_schema_defaults(state: &mut HashMap<String, TaskState>, config: &Config) {
+    if config.task_types.types.is_empty() {
+        return;
+    }
+    for task in state.values_mut() {
+        let Some(def) = task
+            .custom_fields
+            .get(TASK_TYPE_KEY)
+            .and_then(Value::as_str)
+            .and_then(|name| config.task_types.types.get(name))
+        else {
+            continue;
+        };
+        let mut substitutions: Vec<(String, Value)> = Vec::new();
+        for (name, schema) in &def.fields {
+            let Some(default) = schema.default_value() else {
+                continue;
+            };
+            let Ok(kind) = crate::config::FieldKind::parse(schema.kind_str()) else {
+                continue;
+            };
+            let key = declared_field_key(name, &config.workflow.status_field);
+            let invalid = task.custom_fields.get(key).is_none_or(|value| {
+                !kind.matches_value(value, schema.values())
+                    || !schema.constraint_violations(value).is_empty()
+            });
+            if invalid {
+                substitutions.push((key.to_string(), default.clone()));
+            }
+        }
+        for (key, value) in substitutions {
+            task.custom_fields.insert(key, value);
+        }
+    }
+}
+
 /// Take a task's working field set out of the preview (falling back to its
 /// current state, then to empty for a fresh create), for [`vet_events`] to
 /// apply the next draft onto.
@@ -937,7 +1019,13 @@ fn schema_violations(fields: &Map<String, Value>, config: &Config) -> Vec<String
                 }
             }
             Some(value) => {
-                if !kind.matches_value(value, schema.values()) {
+                if kind.matches_value(value, schema.values()) {
+                    // Kind-correct values still face the declared constraints
+                    // (min/max, pattern, length and item bounds).
+                    for constraint in schema.constraint_violations(value) {
+                        violations.push(format!("`{name}`: {value} {constraint}"));
+                    }
+                } else {
                     let hint = if schema.values().is_empty() {
                         String::new()
                     } else {
@@ -1100,9 +1188,23 @@ pub(crate) fn build_field_events(
     config: &Config,
 ) -> Result<Vec<MutationEvent>, DynError> {
     let (text, add, remove) = dispatch_accumulate(id, ops, state, config)?;
+    // Heal-on-write: any write to a task whose declared, DEFAULTED fields are
+    // still absent stamps them in the same Update — so `required` + `default`
+    // never blocks a write, and the task converges toward conformance.
+    let mut set = ops.set.clone();
+    let touched: BTreeSet<String> = text
+        .keys()
+        .chain(add.keys())
+        .chain(remove.keys())
+        .cloned()
+        .collect();
+    let current = state.get(id).map(|task| &task.custom_fields);
+    for (key, value) in schema_default_stamps(current, &set, &touched, config) {
+        set.insert(key, value);
+    }
     let mut events = Vec::new();
     for (payload, op) in [
-        (ops.set.clone(), OpType::Update),
+        (set, OpType::Update),
         (text, OpType::Append),
         (add, OpType::Add),
         (remove, OpType::Remove),

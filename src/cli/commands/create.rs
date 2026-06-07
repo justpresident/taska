@@ -48,6 +48,17 @@ pub fn cmd_create(
             Value::String(workflow.default_status.clone()),
         );
     }
+    // And the schema defaults of the declared task type (same convention: an
+    // explicit value — or null — in the payload wins over the default).
+    let stamps = crate::cli::schema_default_stamps(
+        None,
+        &payload,
+        &std::collections::BTreeSet::default(),
+        store.config(),
+    );
+    for (key, value) in stamps {
+        payload.insert(key, value);
+    }
     // Verify-then-append under the store lock: schema-aware coercion first,
     // then vetting — which rejects a duplicate `create` (the task already
     // exists) atomically, so two concurrent creates can't both win. A create

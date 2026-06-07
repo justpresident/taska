@@ -269,25 +269,13 @@ fn backfill_type(
         if task.custom_fields.contains_key(TASK_TYPE_KEY) {
             continue;
         }
-        let target = log
-            .iter_mut()
-            .find(|e| matches!(e.op, OpType::Create) && e.task_id == task.id);
-        let backfilled = if let Some(event) = target {
-            event.payload.insert(
-                TASK_TYPE_KEY.to_string(),
-                Value::String(type_name.to_string()),
-            );
-            true
-        } else if let Some(base) = baseline.iter_mut().find(|t| t.id == task.id) {
-            base.custom_fields.insert(
-                TASK_TYPE_KEY.to_string(),
-                Value::String(type_name.to_string()),
-            );
-            true
-        } else {
-            false
-        };
-        if backfilled {
+        if stamp_new_field(
+            log,
+            baseline,
+            &task.id,
+            TASK_TYPE_KEY,
+            &Value::String(type_name.to_string()),
+        ) {
             report.push(format!(
                 "`{}` on `{}`: set to `{type_name}`",
                 config.workflow.type_field, task.id
@@ -295,6 +283,30 @@ fn backfill_type(
         }
     }
     Ok(report)
+}
+
+/// Write a NEW field onto the record that establishes the task — its first
+/// `Create` event, else its baseline entry — so the log reads as if the field
+/// was always there. Shared by the type backfill and the default stamping.
+fn stamp_new_field(
+    log: &mut [MutationEvent],
+    baseline: &mut [TaskState],
+    id: &str,
+    key: &str,
+    value: &Value,
+) -> bool {
+    if let Some(event) = log
+        .iter_mut()
+        .find(|e| matches!(e.op, OpType::Create) && e.task_id == id)
+    {
+        event.payload.insert(key.to_string(), value.clone());
+        return true;
+    }
+    if let Some(base) = baseline.iter_mut().find(|t| t.id == id) {
+        base.custom_fields.insert(key.to_string(), value.clone());
+        return true;
+    }
+    false
 }
 
 /// Every deterministic, lossless VALUE fix toward the declared schemas, applied
@@ -325,6 +337,20 @@ fn apply_lossless_fixes(
         for (name, schema) in &def.fields {
             let key = crate::cli::declared_field_key(name, &config.workflow.status_field);
             let Some(value) = task.custom_fields.get(key) else {
+                // A missing REQUIRED field with a declared default is stamped
+                // (onto the establishing record, like the type backfill) —
+                // the deterministic half of "missing required"; without a
+                // default it stays a suggestion.
+                if schema.required() {
+                    if let Some(default) = schema.default_value() {
+                        if stamp_new_field(log, baseline, &task.id, key, default) {
+                            report.push(format!(
+                                "`{name}` on `{}`: stamped default {default}",
+                                task.id
+                            ));
+                        }
+                    }
+                }
                 continue;
             };
             let Ok(kind) = FieldKind::parse(schema.kind_str()) else {

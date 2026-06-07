@@ -118,7 +118,10 @@ kind = "info"
 # store stays fully schema-agnostic). Once declared, the `type` field (see
 # workflow.type_field) selects a task's schema, enforced on every create/update
 # (whole-task: every violation reported in one error). Field kinds: string,
-# bool, int, uint, float, datetime, enum, any, array<T>, set<T>. Example:
+# bool, int, uint, float, datetime, enum, any, array<T>, set<T>. Long-form
+# constraints: required, default (stamped at create, healed onto writes,
+# substituted at read), min/max, pattern, min_len/max_len, min_items/max_items.
+# Example:
 # [task_types.bug]
 # closed = true                       # no fields beyond the declared ones
 # [task_types.bug.fields]
@@ -128,3 +131,8 @@ kind = "info"
 # type = "enum"
 # values = ["low", "medium", "high"]
 # required = true
+# default = "low"
+# [task_types.bug.fields.estimate]
+# type = "uint"
+# min = 1
+# max = 13

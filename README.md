@@ -193,6 +193,12 @@ tags = "array<string>"
 type = "enum"
 values = ["low", "medium", "high"]
 required = true
+default = "low"                     # stamped at create, healed onto writes,
+                                    # substituted at read for old data
+[task_types.bug.fields.estimate]
+type = "uint"
+min = 1
+max = 13
 
 [display]
 # Columns for list/ready (and the field order used by --format json).

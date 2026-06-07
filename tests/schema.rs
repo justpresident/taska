@@ -332,3 +332,101 @@ fn untyped_tasks_policy_walks_allow_warn_deny() {
         "deny blocks writes to untyped tasks"
     );
 }
+
+/// Constraints (min/max, pattern, lengths, item counts) and the `default`
+/// life-cycle: stamped at create, substituted at read for grandfathered tasks,
+/// healed onto any write, stamped in bulk by `repair --schema`.
+#[test]
+fn constraints_and_defaults_full_circle() {
+    let dir = fresh_dir("schema-constraints");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // Pre-schema tasks: typed (the field maps, no validation yet) but missing
+    // the soon-to-be-required `title`.
+    ta(&dir, &["create", "legacy", "type=card", "points=5"]);
+    ta(&dir, &["create", "legacy2", "type=card", "points=7"]);
+    let cfg = dir.join(".taska/config.toml");
+    let mut text = fs::read_to_string(&cfg).unwrap();
+    text.push_str(
+        "\n[task_types.card.fields.points]\ntype = \"uint\"\nmin = 1\nmax = 10\ndefault = 1\n\
+         [task_types.card.fields.title]\ntype = \"string\"\nrequired = true\n\
+         default = \"Task\"\npattern = \"^[A-Z]\"\nmin_len = 3\nmax_len = 8\n\
+         [task_types.card.fields.tags]\ntype = \"set<string>\"\nmax_items = 2\n",
+    );
+    fs::write(&cfg, text).unwrap();
+
+    // Create stamps the defaults: no need to spell out defaulted fields.
+    ta(&dir, &["create", "c1", "type=card"]);
+    let shown = ta(&dir, &["show", "c1", "--format", "json"]);
+    assert!(
+        shown.contains(r#""points":1"#) && shown.contains(r#""title":"Task""#),
+        "defaults stamped at create: {shown}"
+    );
+
+    // Constraint violations reject with precise messages.
+    let out = run(ta_bin(), &dir, &["create", "c2", "type=card", "points=11"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("exceeds max 10"),
+        "max violation named"
+    );
+    let out = run(ta_bin(), &dir, &["create", "c2", "type=card", "title=ab"]);
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("pattern") && stderr.contains("min_len"),
+        "BOTH constraint violations in one error: {stderr}"
+    );
+    assert!(
+        !run(
+            ta_bin(),
+            &dir,
+            &["create", "c2", "type=card", r#"tags=["a","b","c"]"#]
+        )
+        .status
+        .success(),
+        "max_items enforced"
+    );
+    assert!(
+        !run(ta_bin(), &dir, &["update", "c1", "points=0"])
+            .status
+            .success(),
+        "min enforced on update"
+    );
+
+    // Grandfathered tasks: storage lacks `title`, so the warning fires — but
+    // reads SUBSTITUTE the default (display-only).
+    assert!(
+        ta(&dir, &["show", "legacy", "--format", "json"]).contains(r#""title":"Task""#),
+        "read-side default substitution"
+    );
+    let out = run(ta_bin(), &dir, &["list"]);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("2 task(s) do not conform"),
+        "substitution does not hide the stored truth"
+    );
+
+    // Heal-on-write: ANY write stamps the missing defaults alongside.
+    ta(&dir, &["update", "legacy", "points=6"]);
+    let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    assert!(
+        log.contains(r#""title":"Task""#),
+        "default healed into the update event: {log}"
+    );
+    let out = run(ta_bin(), &dir, &["list"]);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("1 task(s) do not conform"),
+        "legacy now conforms in storage"
+    );
+
+    // repair --schema stamps required defaults onto the rest, no write needed.
+    let out = ta(&dir, &["repair", "--schema"]);
+    assert!(
+        out.contains("stamped default"),
+        "repair stamps required defaults: {out}"
+    );
+    let quiet = run(ta_bin(), &dir, &["list"]);
+    assert!(
+        !String::from_utf8_lossy(&quiet.stderr).contains("do not conform"),
+        "store fully conforms"
+    );
+}
