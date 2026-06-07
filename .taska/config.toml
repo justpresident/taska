@@ -121,18 +121,24 @@ kind = "info"
 # bool, int, uint, float, datetime, enum, any, array<T>, set<T>. Long-form
 # constraints: required, default (stamped at create, healed onto writes,
 # substituted at read), min/max, pattern, min_len/max_len, min_items/max_items.
-# Example:
-# [task_types.bug]
-# closed = true                       # no fields beyond the declared ones
-# [task_types.bug.fields]
-# points = "uint"                     # shorthand: just the kind
-# tags = "array<string>"
-# [task_types.bug.fields.severity]    # long form when constraints are needed
-# type = "enum"
-# values = ["low", "medium", "high"]
-# required = true
-# default = "low"
-# [task_types.bug.fields.estimate]
-# type = "uint"
-# min = 1
-# max = 13
+#
+# This repo's roadmap uses a single type: `ta create <id> type=task title=… notes=…`.
+[task_types.task]
+closed = true                         # no fields beyond the declared ones
+
+[task_types.task.fields]
+notes = { type = "string", required = true }
+
+[task_types.task.fields.title]
+type = "string"
+required = true
+min_len = 3
+
+[task_types.task.fields.status]
+type = "enum"
+values = ["todo", "in_progress", "closed"]
+required = true
+
+[task_types.task.fields.priority]
+type = "enum"
+values = ["low", "medium", "high"]
