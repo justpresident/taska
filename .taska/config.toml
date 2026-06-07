@@ -34,6 +34,10 @@ default_status = "todo"
 # (`ta create x type=bug`). Stored canonically as `task_type`, so renaming this
 # is free, like status_field.
 type_field = "type"
+# Read commands print ONE warning when the store holds tasks that don't conform
+# to their [task_types] schema (old data is read-tolerated by design; writes to
+# such a task must bring it into conformance). Set false to silence.
+warn_nonconforming = true
 
 [merge]
 # What to do when concurrent branches change the SAME field (or dependency) to

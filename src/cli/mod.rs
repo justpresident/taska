@@ -389,6 +389,11 @@ pub(crate) fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskSt
             orphans.len()
         );
     }
+    // Read-tolerance: schemas are write-time law only, so non-conforming tasks
+    // (grandfathered by a schema change, merged in, restored by undo) always
+    // materialize — but every read command says so ONCE, before the display
+    // renames below would skew the check. Silenceable via config.
+    warn_nonconforming(&state, store.config());
     // Surface the computed timestamps as ordinary (RFC 3339 string) fields under
     // their configured names, so list/show/--sort treat them like any
     // other column. This is display-only: the raw Option<DateTime> stays on
@@ -415,6 +420,55 @@ pub(crate) fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskSt
         }
     }
     Ok(state)
+}
+
+/// The grandfathered-data report: every task whose RAW stored fields violate
+/// its `[task_types]` schema, each as one `task `id`: first violation (+N
+/// more)` line. Empty while schemas are off. Shared by `state_of`'s one-line
+/// warning and `ta config validate`'s detailed listing — reads stay tolerant
+/// (this is a report, never an error), while any WRITE to such a task must
+/// bring it into conformance (the whole-task gate).
+pub(crate) fn schema_conformance_report(
+    state: &HashMap<String, TaskState>,
+    config: &Config,
+) -> Vec<String> {
+    if config.task_types.types.is_empty() {
+        return Vec::new();
+    }
+    let mut report: Vec<String> = state
+        .values()
+        .filter_map(|task| {
+            let violations = schema_violations(&task.custom_fields, config);
+            let first = violations.first()?;
+            let more = match violations.len() {
+                1 => String::new(),
+                n => format!(" (+{} more)", n - 1),
+            };
+            Some(format!("task `{}`: {first}{more}", task.id))
+        })
+        .collect();
+    report.sort();
+    report
+}
+
+/// Print (never fail on) the ONE-line non-conformance warning for a read
+/// command, pointing at the detail surface. Gated by
+/// `[workflow] warn_nonconforming` and active only while `[task_types]`
+/// declares schemas. Runs on RAW state — before the display renames and
+/// timestamp injection that would skew the check.
+fn warn_nonconforming(state: &HashMap<String, TaskState>, config: &Config) {
+    if !config.workflow.warn_nonconforming {
+        return;
+    }
+    let report = schema_conformance_report(state, config);
+    if let Some(example) = report.first() {
+        eprintln!(
+            "taska: warning: {} task(s) do not conform to their task-type schema (e.g. \
+             {example}) — `ta config validate` lists them; writes to such a task must bring \
+             it into conformance. Silence with `workflow.warn_nonconforming = false`.",
+            report.len()
+        );
+    }
 }
 
 /// Insert a computed timestamp into a task's fields under `name` (RFC 3339), so

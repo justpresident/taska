@@ -33,10 +33,29 @@ pub fn cmd_config(store: &FileStore, action: ConfigAction) -> Result<(), DynErro
 /// Validate the effective config against the materialized task graph, reporting
 /// every problem found (or confirming it's clean). Run this after hand-editing
 /// `.taska/config.toml`; `config set` runs the same check before persisting.
+/// Schema NON-conformance of existing tasks is listed as warnings, not errors —
+/// grandfathered data is read-tolerated by design, and failing here would block
+/// declaring a schema over an existing store at all.
 fn cmd_config_validate(store: &FileStore) -> Result<(), DynError> {
     let state = state_of(store)?;
     store.config().validate_against(&state)?;
-    println!("Config OK ({} task(s) checked).", state.len());
+    // The conformance report needs RAW state (canonical keys, no injected
+    // timestamps) — the display view above would skew the check.
+    let raw = crate::cli::replay(store, store.load_baseline()?, store.load_mutations()?);
+    let report = crate::cli::schema_conformance_report(&raw, store.config());
+    for line in &report {
+        eprintln!("warning: {line}");
+    }
+    if report.is_empty() {
+        println!("Config OK ({} task(s) checked).", state.len());
+    } else {
+        println!(
+            "Config OK ({} task(s) checked; {} not conforming to their task-type schema — \
+             writes to those tasks must bring them into conformance).",
+            state.len(),
+            report.len()
+        );
+    }
     Ok(())
 }
 

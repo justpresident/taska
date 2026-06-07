@@ -153,6 +153,9 @@ done_status = "closed"
 # DISPLAY name of the task-type discriminator that selects a [task_types]
 # schema (stored canonically as `task_type`; renaming is free too).
 type_field = "type"
+# Read commands warn ONCE when tasks don't conform to their schema (old data
+# stays readable by design; any write to such a task must fix it). false silences.
+warn_nonconforming = true
 
 [merge]
 on_conflict = "surface"

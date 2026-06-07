@@ -211,3 +211,75 @@ fn accumulate_operators_dispatch_by_declared_kind() {
         "Add/Remove events logged: {log}"
     );
 }
+
+#[test]
+fn nonconforming_tasks_are_read_tolerated_with_one_warning() {
+    let dir = fresh_dir("schema-tolerance");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // Grandfathered data: created before the schema existed.
+    ta(&dir, &["create", "legacy", "priority=1"]);
+    ta(&dir, &["create", "old2", "priority=2"]);
+    declare_schema(&dir);
+
+    // Reads SUCCEED — tolerance is the law — with exactly ONE warning naming
+    // the count, an example, and the detail surface.
+    let out = run(ta_bin(), &dir, &["list"]);
+    assert!(out.status.success(), "reads never fail on nonconformance");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.matches("do not conform").count(),
+        1,
+        "one warning, not per task: {stderr}"
+    );
+    assert!(
+        stderr.contains("2 task(s)") && stderr.contains("config validate"),
+        "count + pointer: {stderr}"
+    );
+    // The data itself is fully readable.
+    assert!(ta(&dir, &["show", "legacy", "--format", "json"]).contains(r#""priority":1"#));
+
+    // `config validate` stays exit-0 (grandfather: a schema declared over an
+    // existing store must not lock config commands) and lists the details.
+    let v = run(ta_bin(), &dir, &["config", "validate"]);
+    assert!(v.status.success(), "conformance is a report, not an error");
+    let v_err = String::from_utf8_lossy(&v.stderr);
+    assert!(
+        v_err.contains("task `legacy`") && v_err.contains("task `old2`"),
+        "per-task detail: {v_err}"
+    );
+    assert!(
+        String::from_utf8_lossy(&v.stdout).contains("2 not conforming"),
+        "summary counts them"
+    );
+
+    // The silence switch.
+    ta(
+        &dir,
+        &["config", "set", "workflow.warn_nonconforming", "false"],
+    );
+    let quiet = run(ta_bin(), &dir, &["list"]);
+    assert!(
+        !String::from_utf8_lossy(&quiet.stderr).contains("do not conform"),
+        "silenced"
+    );
+
+    // A conforming store never warns (switch back on first).
+    ta(
+        &dir,
+        &["config", "set", "workflow.warn_nonconforming", "true"],
+    );
+    ta(
+        &dir,
+        &["update", "legacy", "type=feature", "owner=a", "priority=1"],
+    );
+    ta(
+        &dir,
+        &["update", "old2", "type=feature", "owner=b", "priority=2"],
+    );
+    let clean = run(ta_bin(), &dir, &["list"]);
+    assert!(
+        !String::from_utf8_lossy(&clean.stderr).contains("do not conform"),
+        "conforming store is quiet"
+    );
+}

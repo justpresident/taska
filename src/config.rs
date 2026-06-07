@@ -85,6 +85,10 @@ default_status = "{default_status}"
 # (`ta create x type=bug`). Stored canonically as `task_type`, so renaming this
 # is free, like status_field.
 type_field = "{type_field}"
+# Read commands print ONE warning when the store holds tasks that don't conform
+# to their [task_types] schema (old data is read-tolerated by design; writes to
+# such a task must bring it into conformance). Set false to silence.
+warn_nonconforming = {warn_nonconforming}
 
 [merge]
 # What to do when concurrent branches change the SAME field (or dependency) to
@@ -160,6 +164,7 @@ close_time = "{close_time}"
         done_status = workflow.done_status,
         default_status = workflow.default_status,
         type_field = workflow.type_field,
+        warn_nonconforming = workflow.warn_nonconforming,
         on_conflict = on_conflict,
         columns = columns,
         max_width = display.max_width,
@@ -262,6 +267,11 @@ pub struct WorkflowConfig {
     /// split as `status_field`: storage is always the canonical
     /// [`crate::model::TASK_TYPE_KEY`], so renaming this is free too.
     pub type_field: String,
+    /// Whether read commands print the one-line warning when the store holds
+    /// tasks that don't conform to their `[task_types]` schema (grandfathered
+    /// data is read-tolerated by design; the warning is the signal to run the
+    /// repair). `false` silences it.
+    pub warn_nonconforming: bool,
 }
 
 impl Default for WorkflowConfig {
@@ -271,6 +281,7 @@ impl Default for WorkflowConfig {
             done_status: "closed".to_string(),
             default_status: "todo".to_string(),
             type_field: "type".to_string(),
+            warn_nonconforming: true,
         }
     }
 }
