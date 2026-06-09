@@ -28,8 +28,8 @@ use crate::storage::{EventStore, FileStore};
 
 mod commands;
 use commands::{
-    cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_init, cmd_list, cmd_repair,
-    cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction, DepAction,
+    cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_edit, cmd_init, cmd_list,
+    cmd_repair, cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction, DepAction,
 };
 
 use crate::schema::{schema_conformance_report, FieldOps};
@@ -102,6 +102,23 @@ enum Commands {
         id: String,
         #[command(flatten)]
         display: DisplayArgs,
+    },
+    /// Edit a task's fields in `$EDITOR`: `ta edit <id>` (alias `ed`)
+    ///
+    /// Round-trips the task's current fields through `$VISUAL`/`$EDITOR` (else
+    /// `vi`) as TOML (default) or JSON (`--json`). Save to apply the diff: a
+    /// changed or added field is set, a deleted field is unset. On a syntax,
+    /// naming, or schema error the message prints to stderr and you're offered to
+    /// re-edit the same file. Relationships are managed with `ta dep`, not here.
+    #[command(visible_alias = "ed")]
+    Edit {
+        id: String,
+        /// Edit as pretty-printed JSON instead of TOML.
+        #[arg(long, conflicts_with = "toml")]
+        json: bool,
+        /// Edit as TOML (the default).
+        #[arg(long)]
+        toml: bool,
     },
     /// Summary counts: total, per-status, blocked, ready, closed
     Status {
@@ -386,6 +403,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             )
         }
         Commands::Show { id, display } => cmd_show(store, &id, &display, &store.config().display),
+        Commands::Edit { id, json, toml: _ } => cmd_edit(store, &id, json),
         Commands::Status { output } => {
             let workflow = store.config().workflow.clone();
             cmd_status(store, &workflow, &output)
@@ -633,7 +651,7 @@ pub(crate) fn inverse_edges(
 /// fields: the workflow status and the task-type discriminator. Shared by the
 /// write-side mapping ([`canonicalize_fields`]) and `state_of`'s read-side
 /// rename, so the two boundaries can never disagree.
-const fn canonical_field_pairs(
+pub(crate) const fn canonical_field_pairs(
     workflow: &crate::config::WorkflowConfig,
 ) -> [(&String, &'static str); 2] {
     [
