@@ -8,6 +8,12 @@ crates.io versions are **immutable**: once `cargo publish` succeeds you cannot
 overwrite or re-upload that version. Everything below the publish step exists to
 make sure the artifact is correct *before* it goes out.
 
+A release ships two things: the crate on crates.io (`cargo publish`, manual) and
+prebuilt `ta` binaries on the GitHub release (built by the
+`.github/workflows/release.yml` workflow, automatic). The binary workflow fires
+when you **publish** the GitHub release in the last step and never touches
+crates.io — the two halves are independent.
+
 ## Pre-flight
 
 0. Be on `master`, up to date, with a clean working tree and CI green on the last
@@ -113,3 +119,49 @@ make sure the artifact is correct *before* it goes out.
     unauthenticated, create it manually: GitHub → **Releases** → **Draft a new
     release** → choose the existing `v0.3.0` tag → paste the changelog section →
     **Publish release** — then delete the scratch file.
+
+    Publishing the release **fires the binary workflow** (next section) — that is
+    the trigger, so the release must be *published*, not left as a draft.
+
+## Attach the prebuilt binaries
+
+14. Publishing the release in the previous step triggers
+    `.github/workflows/release.yml`, which builds three binaries on their native
+    runners and attaches them to this release:
+
+    | Target | Runner | Asset |
+    |---|---|---|
+    | `x86_64-unknown-linux-musl` | `ubuntu-latest` | static Linux binary (any distro, any glibc) |
+    | `x86_64-apple-darwin` | `macos-15-intel` | macOS Intel |
+    | `aarch64-apple-darwin` | `macos-15` | macOS Apple Silicon |
+
+    Each is a `ta-vX.Y.Z-<target>.tar.gz` (holding the stripped `ta` + `README.md`
+    + `LICENSE`) with a sibling `.sha256`. Watch the run finish
+    (`gh run watch` / Actions tab) and confirm **all six assets** (three archives
+    + three checksums) are attached to the release. The binaries are stripped and
+    fat-LTO'd via `[profile.release]` in `Cargo.toml` — nothing to do per target.
+
+15. **If CI is unavailable**, build the binaries by hand from the tagged tree and
+    upload them. For each target (the two macOS ones must be built on a Mac —
+    cross-compiling Apple targets from Linux needs Apple's SDK and is not
+    supported here):
+    ```bash
+    rustup target add x86_64-unknown-linux-musl    # or the apple-darwin target
+    cargo build --release --locked --target x86_64-unknown-linux-musl --bin ta
+    name="ta-v0.3.0-x86_64-unknown-linux-musl"
+    mkdir "$name" && cp target/x86_64-unknown-linux-musl/release/ta README.md LICENSE "$name/"
+    tar czf "$name.tar.gz" "$name" && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+    gh release upload v0.3.0 "$name.tar.gz" "$name.tar.gz.sha256"
+    ```
+
+### Smoke-testing the workflow without cutting a release
+
+The workflow also has a `workflow_dispatch` trigger taking an existing tag, so you
+can exercise the whole build/package/upload path against a release that already
+exists (it attaches the assets to that release):
+```bash
+gh workflow run "Release binaries" -f tag=v0.5.0
+gh run watch
+```
+Use this to validate a change to `release.yml` before relying on it for a real
+release.

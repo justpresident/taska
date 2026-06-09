@@ -40,11 +40,34 @@ The default setup installs a custom merge driver — via `.gitattributes` — fo
 
 ## Install
 
+With Rust installed, from crates.io:
+
 ```console
 $ cargo install taska        # installs the `ta` binary
 ```
 
-Or from source:
+Or grab a prebuilt binary — no Rust toolchain needed — from the [latest
+release](https://github.com/justpresident/taska/releases/latest). Each release
+ships a static Linux binary (runs on any distro) and both macOS variants:
+
+```console
+# macOS — pick your arch: aarch64 (Apple Silicon) or x86_64 (Intel)
+$ TARGET=aarch64-apple-darwin   # Intel Macs: x86_64-apple-darwin
+$ VERSION=v0.5.0                # see the releases page for the latest
+$ curl -sSfL "https://github.com/justpresident/taska/releases/download/$VERSION/ta-$VERSION-$TARGET.tar.gz" | tar xz
+$ sudo mv "ta-$VERSION-$TARGET/ta" /usr/local/bin/
+
+# Linux (static, any distro)
+$ TARGET=x86_64-unknown-linux-musl
+$ curl -sSfL "https://github.com/justpresident/taska/releases/download/$VERSION/ta-$VERSION-$TARGET.tar.gz" | tar xz
+$ sudo mv "ta-$VERSION-$TARGET/ta" /usr/local/bin/
+```
+
+Each archive has a sibling `.sha256` you can verify with `shasum -a 256 -c`. On
+macOS, if Gatekeeper quarantines the unsigned binary, clear it with
+`xattr -d com.apple.quarantine /usr/local/bin/ta`.
+
+Or build from source:
 
 ```console
 $ git clone https://github.com/justpresident/taska

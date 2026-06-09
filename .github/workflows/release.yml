@@ -1,0 +1,96 @@
+name: Release binaries
+
+# Build prebuilt `ta` binaries on each target's NATIVE runner (cross-compiling
+# macOS from Linux would need Apple's SDK and is a licensing/fragility trap), then
+# attach them to the GitHub release for the tag. This never publishes to crates.io
+# — `cargo publish` stays a separate manual step in docs/crate_release_process.md.
+# Fires when a GitHub release is PUBLISHED (the curated-notes step in
+# docs/crate_release_process.md), so binaries attach to that release with no race
+# against its creation.
+on:
+  release:
+    types: [published]
+  # Manual run, so the workflow can be exercised against an EXISTING tag without
+  # cutting a new release: dispatch with e.g. tag = v0.5.0 and the three archives
+  # are built and attached to that tag's release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and attach binaries to (e.g. v0.5.0)'
+        required: true
+
+permissions:
+  contents: write  # create/update the release and upload assets
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Static musl: one Linux binary that runs on any distro regardless of
+          # glibc version (the GLIBC-mismatch class of breakage we hit in dev).
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          # macOS Intel, built native on the Intel runner (GitHub retired
+          # macos-13; the Intel runners are now the `-intel`-suffixed labels).
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          # macOS Apple Silicon, built native on the arm runner (plain macos-15).
+          - os: macos-15
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: echo "name=${{ github.event.inputs.tag || github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.name }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Pure-Rust crate, but the musl target links through musl-gcc.
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin ta
+
+      # Archive: ta + README + LICENSE as ta-<tag>-<target>.tar.gz, plus a sibling
+      # .sha256. The binary is already stripped via [profile.release].
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="ta-${{ steps.tag.outputs.name }}-${{ matrix.target }}"
+          staging="$name"
+          mkdir "$staging"
+          cp "target/${{ matrix.target }}/release/ta" "$staging/"
+          cp README.md LICENSE "$staging/"
+          tar czf "$name.tar.gz" "$staging"
+          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          echo "archive=$name.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          files: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.archive }}.sha256

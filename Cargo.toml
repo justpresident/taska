@@ -13,6 +13,15 @@ categories = ["command-line-utilities", "development-tools"]
 # Keep the published tarball to the crate itself; internal/draft docs stay in the repo.
 exclude = ["/docs"]
 
+# Release builds (and the binaries the release workflow ships) are size- and
+# speed-optimized: fat LTO needs codegen-units = 1 to inline across the whole
+# crate graph, and symbols are stripped. Dev builds and `cargo test` use the
+# dev/test profiles and are unaffected.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
+
 [lib]
 name = "taska"
 path = "src/lib.rs"
