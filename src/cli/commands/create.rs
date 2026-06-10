@@ -44,7 +44,7 @@ pub fn cmd_create(
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::cli::state_of;
+    use crate::action::read;
     use crate::test_support::InMemoryStore;
 
     #[test]
@@ -57,7 +57,7 @@ mod tests {
             &["status=open".into(), "priority=3".into()],
         )
         .unwrap();
-        let state = state_of(&store).unwrap();
+        let state = read(&store).unwrap().state;
         // An explicit status wins over the configured default.
         assert_eq!(
             state["api"].custom_fields["status"],
@@ -71,7 +71,7 @@ mod tests {
     fn bare_create_stamps_default_status() {
         let store = InMemoryStore::default();
         cmd_create(&store, &WorkflowConfig::default(), "api", &[]).unwrap();
-        let state = state_of(&store).unwrap();
+        let state = read(&store).unwrap().state;
         assert_eq!(
             state["api"].custom_fields["status"],
             serde_json::json!("todo")
@@ -87,7 +87,7 @@ mod tests {
         store.config.workflow.default_status = String::new();
         let workflow = store.config.workflow.clone();
         cmd_create(&store, &workflow, "api", &[]).unwrap();
-        let state = state_of(&store).unwrap();
+        let state = read(&store).unwrap().state;
         assert!(!state["api"].custom_fields.contains_key("status"));
     }
 
@@ -103,7 +103,7 @@ mod tests {
             &["status=null".into()],
         )
         .unwrap();
-        let state = state_of(&store).unwrap();
+        let state = read(&store).unwrap().state;
         assert!(!state["api"].custom_fields.contains_key("status"));
     }
 

@@ -1,9 +1,11 @@
 //! One module per `ta` subcommand handler.
 //!
-//! Each handler depends on the [`EventStore`](crate::storage::EventStore)
-//! abstraction (not the concrete `FileStore`, except the few that need git or
-//! filesystem paths), and reaches shared plumbing — `state_of`, `replay`,
-//! `parse_field_ops`, `confirm` — through the parent [`crate::cli`] module.
+//! Each handler is thin: it parses/renders for the CLI and delegates the data
+//! work to the frontend-agnostic [`crate::action`] layer. Handlers depend on the
+//! [`EventStore`](crate::storage::EventStore) abstraction (not the concrete
+//! `FileStore`, except the few that need git or filesystem paths) and reach the
+//! shared CLI plumbing — `parse_field_ops`, `confirm`, `print_warnings` —
+//! through the parent [`crate::cli`] module.
 
 pub mod compact;
 pub mod config;

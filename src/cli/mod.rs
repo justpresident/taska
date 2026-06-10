@@ -2,9 +2,11 @@
 //!
 //! This module owns the clap definitions and `run()`/dispatch. Each subcommand's
 //! handler lives in [`commands`]; the cross-cutting helpers handlers reach for —
-//! materializing state ([`state_of`]/[`replay`]), parsing `key=value` fields
+//! raw materialization ([`replay`]), parsing `key=value` fields
 //! ([`parse_field_ops`]), and confirming destructive actions ([`confirm`]) — live
-//! here so the handlers stay thin. The write gate and `[task_types]` schema law
+//! here so the handlers stay thin. The data work itself is the frontend-agnostic
+//! [`crate::action`] layer (display state, warnings, every command's typed
+//! outcome). The write gate and `[task_types]` schema law
 //! (event vetting, conformance, coercion) are NOT here — they live in the
 //! crate-level [`crate::schema`] module, the frontend-agnostic domain layer
 //! every frontend funnels writes through; this module only adds the CLI's
@@ -435,19 +437,6 @@ pub(crate) fn replay(
     Engine::materialize_state(baseline, mutations, &w.done_status)
 }
 
-/// Load and materialize the current task map from any store.
-///
-/// Replay also reports *orphaned* events — `Update`/`Append`/`AddEdge`/`RemoveEdge`/
-/// `Delete` events whose target task no longer exists, which apply to nothing. They are a
-/// silent symptom of a dropped `Create` (from the merge driver's removal-union, a
-/// revert, or a manual edit), so every read command warns about them on STDERR
-/// and points at `ta resolve`. The warning never blocks the read.
-pub(crate) fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskState>, DynError> {
-    let session = crate::action::read(store)?;
-    print_warnings(&session.warnings);
-    Ok(session.state)
-}
-
 /// Render a read's [`Warning`](crate::action::Warning)s to stderr — the CLI's
 /// presentation of the data [`crate::action::read`] returns. Never blocks the
 /// read; the nonconformance warning is already gated (by config) in the action.
@@ -475,7 +464,7 @@ pub(crate) fn print_warnings(warnings: &[crate::action::Warning]) {
 }
 
 /// Map configured DISPLAY field names onto their canonical storage keys, before
-/// vetting/appending — the write-side inverse of `state_of`'s read-side rename.
+/// vetting/appending — the write-side inverse of `action::read`'s read-side rename.
 /// The shared `(display, canonical)` list lives in
 /// [`schema::canonical_field_pairs`](crate::schema::canonical_field_pairs) so
 /// the two boundaries can never disagree. Writing the canonical spelling

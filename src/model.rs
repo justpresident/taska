@@ -41,7 +41,7 @@ pub const LEGACY_REL_KEY: &str = "type";
 ///
 /// Events and the baseline always store the status under this key, regardless
 /// of the configured `[workflow] status_field`, which is a DISPLAY name only:
-/// commands map the display name to this key on write, and `state_of` surfaces
+/// commands map the display name to this key on write, and `action::read` surfaces
 /// the stored value back under the display name on read. That split is what
 /// makes the display name freely renamable in config without touching disk —
 /// and lets clones with different display configs merge cleanly.

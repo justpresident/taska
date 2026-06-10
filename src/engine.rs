@@ -174,7 +174,7 @@ impl Engine {
     /// report, for callers that only need the state. `done_status` is needed
     /// only to compute each task's `close_time`; the status itself always lives
     /// under the canonical [`STATUS_KEY`] in raw state (the configured
-    /// `status_field` is a display name, applied later by `state_of`).
+    /// `status_field` is a display name, applied later by `action::read`).
     pub fn materialize_state(
         baseline: Vec<TaskState>,
         mutations: Vec<MutationEvent>,

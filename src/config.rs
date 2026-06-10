@@ -272,7 +272,7 @@ impl Default for CompactionConfig {
 pub struct WorkflowConfig {
     /// DISPLAY name of the status field. Storage is always the canonical
     /// [`crate::model::STATUS_KEY`]: commands map this name to the key on
-    /// write, `state_of` maps it back on read — so renaming it is free.
+    /// write, `action::read` maps it back on read — so renaming it is free.
     pub status_field: String,
     pub done_status: String,
     /// Status stamped onto a new task when `ta create` doesn't set the status

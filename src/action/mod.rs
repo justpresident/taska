@@ -14,9 +14,12 @@
 //! incrementally (see `commands-action-presentation-split`).
 
 pub mod compact;
+pub mod config;
 pub mod dep;
+pub mod init;
 pub mod list;
 pub mod read;
+pub mod repair;
 pub mod resolve;
 pub mod show;
 pub mod status;

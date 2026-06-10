@@ -17,7 +17,7 @@ pub fn cmd_compact(
             log_len,
             keep_events,
         } => {
-            println!("Nothing to compact ({log_len} event(s) in log, keep_events = {keep_events})")
+            println!("Nothing to compact ({log_len} event(s) in log, keep_events = {keep_events})");
         }
         CompactOutcome::Compacted {
             folded,
@@ -35,8 +35,8 @@ pub fn cmd_compact(
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
+    use crate::action::read;
     use crate::cli::commands::create::cmd_create;
-    use crate::cli::state_of;
     use crate::config::WorkflowConfig;
     use crate::test_support::InMemoryStore;
 
@@ -60,7 +60,7 @@ mod tests {
         assert_eq!(store.load_baseline().unwrap().len(), 1, "the rest folded");
         // A later Create still appends to the log and overlays the baseline post-compaction.
         cmd_create(&store, &WorkflowConfig::default(), "c", &[]).unwrap();
-        assert_eq!(state_of(&store).unwrap().len(), 3);
+        assert_eq!(read(&store).unwrap().state.len(), 3);
     }
 
     #[test]
@@ -86,7 +86,7 @@ mod tests {
             "folded 3 into baseline"
         );
         assert_eq!(
-            state_of(&store).unwrap().len(),
+            read(&store).unwrap().state.len(),
             5,
             "all tasks still visible"
         );
