@@ -13,7 +13,9 @@ use crate::action::{read, Warning};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::graph;
-use crate::model::{is_done, TaskState};
+use crate::model::{
+    is_done, TaskState, BLOCKED_BY_KEY, DEPS_KEY, ID_KEY, SUBTASKS_KEY, UNBLOCKS_KEY,
+};
 use crate::storage::EventStore;
 
 /// A `list` query: the filter criteria, the not-done / ready shortcuts, and the
@@ -112,7 +114,7 @@ fn inject_computed_columns(
         |name: &str| display_columns.iter().any(|c| c == name) || criteria_fields.contains(&name);
     let workflow = &store.config().workflow;
 
-    if wants("unblocks") || wants("blocked_by") {
+    if wants(UNBLOCKS_KEY) || wants(BLOCKED_BY_KEY) {
         let blockers = store.config().relationships.blocker_types();
         let counts = graph::reachability_counts(
             state,
@@ -123,14 +125,14 @@ fn inject_computed_columns(
         for (id, task) in state.iter_mut() {
             if let Some(&(unblocks, blocked_by)) = counts.get(id) {
                 task.custom_fields
-                    .insert("unblocks".to_string(), serde_json::json!(unblocks));
+                    .insert(UNBLOCKS_KEY.to_string(), serde_json::json!(unblocks));
                 task.custom_fields
-                    .insert("blocked_by".to_string(), serde_json::json!(blocked_by));
+                    .insert(BLOCKED_BY_KEY.to_string(), serde_json::json!(blocked_by));
             }
         }
     }
 
-    if wants("subtasks") {
+    if wants(SUBTASKS_KEY) {
         let hierarchy = store.config().relationships.hierarchy_types();
         let progress = graph::subtask_progress(
             state,
@@ -141,7 +143,7 @@ fn inject_computed_columns(
         for (id, task) in state.iter_mut() {
             if let Some(&(done, total)) = progress.get(id) {
                 task.custom_fields.insert(
-                    "subtasks".to_string(),
+                    SUBTASKS_KEY.to_string(),
                     serde_json::json!(format!("{done}/{total}")),
                 );
             }
@@ -237,8 +239,8 @@ impl Criterion {
 /// names, so the dispatch is unambiguous.
 fn field_values(task: &TaskState, field: &str, ctx: &FilterCtx) -> Vec<Value> {
     match field {
-        "id" => vec![Value::String(task.id.clone())],
-        "deps" => task
+        ID_KEY => vec![Value::String(task.id.clone())],
+        DEPS_KEY => task
             .relationships
             .values()
             .flatten()

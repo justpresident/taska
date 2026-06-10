@@ -52,6 +52,31 @@ pub const STATUS_KEY: &str = "status";
 /// display name defaults to `type`.
 pub const TASK_TYPE_KEY: &str = "task_type";
 
+/// Built-in display/query column: a task's id.
+///
+/// Its identity, not a stored field. Part of the column vocabulary every
+/// frontend and the filter language understand, so it's named here rather than
+/// spelled out at each dispatch site.
+pub const ID_KEY: &str = "id";
+
+/// Built-in display/query column: a task's typed relationships map
+/// (`{type: [targets…]}`). `deps=x` matches an edge of any type.
+pub const DEPS_KEY: &str = "deps";
+
+/// Reserved field name: reads like a dependency, so it's rejected as a field
+/// (use `ta dep add`). Not itself a column.
+pub const DEP_KEY: &str = "dep";
+
+/// Computed column: how many not-done tasks this one transitively UNBLOCKS.
+/// Graph-derived, injected at read time only when a query references it.
+pub const UNBLOCKS_KEY: &str = "unblocks";
+
+/// Computed column: how many not-done prerequisites transitively BLOCK this task.
+pub const BLOCKED_BY_KEY: &str = "blocked_by";
+
+/// Computed column: a parent's `done/total` direct-child completion.
+pub const SUBTASKS_KEY: &str = "subtasks";
+
 /// Field names never legal as user fields under ANY config.
 ///
 /// Rejectable at parse time, before a store or config exists. Two reasons,
@@ -72,13 +97,13 @@ pub const RESERVED_FIELD_KEYS: &[&str] = &[
     "op",
     "task_id",
     "_meta",
-    // static computed/injected columns
-    "id",
-    "deps",
-    "dep",
-    "unblocks",
-    "blocked_by",
-    "subtasks",
+    // static built-in + computed/injected columns (the column vocabulary)
+    ID_KEY,
+    DEPS_KEY,
+    DEP_KEY,
+    UNBLOCKS_KEY,
+    BLOCKED_BY_KEY,
+    SUBTASKS_KEY,
 ];
 
 /// A total order over heterogeneous JSON scalars.

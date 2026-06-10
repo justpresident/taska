@@ -11,7 +11,10 @@ use crate::cli::{materialize, state_of};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::OutputArgs;
-use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, TARGET_KEY};
+use crate::model::{
+    is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, ID_KEY, REL_KEY, SUBTASKS_KEY,
+    TARGET_KEY,
+};
 use crate::schema::vet_events;
 use crate::storage::EventStore;
 
@@ -565,7 +568,7 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool) {
 /// One tree node as JSON, recursing into children.
 fn node_json(node: &Node) -> Value {
     let mut o = serde_json::Map::new();
-    o.insert("id".to_string(), Value::String(node.id.clone()));
+    o.insert(ID_KEY.to_string(), Value::String(node.id.clone()));
     if !node.title.is_empty() {
         o.insert("title".to_string(), Value::String(node.title.clone()));
     }
@@ -578,7 +581,7 @@ fn node_json(node: &Node) -> Value {
     }
     if let Some((d, t)) = node.rollup {
         o.insert(
-            "subtasks".to_string(),
+            SUBTASKS_KEY.to_string(),
             serde_json::json!({"done": d, "total": t}),
         );
     }

@@ -86,7 +86,8 @@ enum Commands {
         /// `field~regex`, `field!=value`, `field!~regex`. `field` may be a task
         /// field, `id`, `deps` (any edge), a relationship type (`depends_on=x`)
         /// or inverse name (`subtask_of=epic`, `blocks=x`), or a computed
-        /// column (`unblocks=0`). With none given, lists every task.
+        /// column (`unblocks`/`blocked_by`/`subtasks`, e.g. `unblocks=0`). With
+        /// none given, lists every task.
         criteria: Vec<String>,
         /// Only tasks that are not done (status is not the configured done value)
         #[arg(long)]

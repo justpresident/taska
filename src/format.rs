@@ -14,7 +14,7 @@ use clap::{Args, ValueEnum};
 use serde_json::Value;
 
 use crate::config::{DisplayConfig, Layout};
-use crate::model::{cmp_json, TaskState};
+use crate::model::{cmp_json, TaskState, DEPS_KEY, ID_KEY};
 
 /// Wrap `text` in an ANSI SGR sequence when `on`, else return it unchanged. Uses
 /// the terminal's NAMED 16-color palette (which the user's theme remaps for
@@ -33,7 +33,7 @@ pub(crate) fn sgr(text: &str, code: &str, on: bool) -> String {
 /// see [`group_sgr`]).
 fn column_sgr(column: &str) -> Option<&'static str> {
     match column {
-        "id" => Some("36"),     // cyan
+        ID_KEY => Some("36"),   // cyan
         "status" => Some("32"), // green
         _ => None,
     }
@@ -97,7 +97,8 @@ pub(crate) struct DisplayArgs {
     /// `subtasks`; plus any task field. E.g. --columns id,status,unblocks
     #[arg(long, value_delimiter = ',')]
     pub(crate) columns: Option<Vec<String>>,
-    /// Sort rows by this column (id, deps, or any field), overriding config
+    /// Sort rows by this column: `id`, `deps`, any task field, a timestamp, or a
+    /// computed column (`unblocks`/`blocked_by`/`subtasks`). Overrides config
     #[arg(long)]
     pub(crate) sort: Option<String>,
     /// Reverse the sort order (descending)
@@ -249,8 +250,8 @@ pub(crate) fn task_cmp(a: &TaskState, b: &TaskState, column: &str) -> Ordering {
 /// orders them last.
 fn cell_value(task: &TaskState, column: &str) -> Option<Value> {
     match column {
-        "id" => Some(Value::String(task.id.clone())),
-        "deps" => Some(Value::Object(
+        ID_KEY => Some(Value::String(task.id.clone())),
+        DEPS_KEY => Some(Value::Object(
             task.relationships
                 .iter()
                 .map(|(rel, targets)| {
@@ -383,7 +384,7 @@ fn resolve_columns(
 /// rendering consume this same order, so their columns match.
 pub(crate) fn full_columns(tasks: &[&TaskState], cfg: &DisplayConfig) -> Vec<String> {
     // Every field present across the view, plus the always-shown built-ins.
-    let mut present: BTreeSet<&str> = BTreeSet::from(["id", "deps"]);
+    let mut present: BTreeSet<&str> = BTreeSet::from([ID_KEY, DEPS_KEY]);
     for t in tasks {
         present.extend(t.custom_fields.keys().map(String::as_str));
     }
@@ -434,7 +435,7 @@ fn render_human(
                 .iter()
                 .enumerate()
                 .map(|(i, c)| {
-                    if c == "deps" {
+                    if c == DEPS_KEY {
                         deps_cell(t, blockers, caps[i], color)
                     } else {
                         let cell = truncate(&human_cell(t, c), caps[i]);
@@ -479,7 +480,7 @@ pub(crate) fn render_record(
         // The value's display lines: deps puts one type group per line, each
         // styled by its kind; anything else is the human cell continued across
         // its own newlines, the first line carrying the column color.
-        let parts: Vec<String> = if col == "deps" {
+        let parts: Vec<String> = if col == DEPS_KEY {
             deps_groups(task)
                 .into_iter()
                 .map(|(rel, text)| sgr(&text, group_sgr(blockers.contains(&rel)), color))
@@ -574,7 +575,7 @@ fn json_object(task: &TaskState, columns: &[String]) -> String {
 /// joined by `", "` (so any list field reads like a deps group), or compact JSON
 /// for anything else. Empty for a column the task lacks.
 fn human_cell(task: &TaskState, col: &str) -> String {
-    if col == "deps" {
+    if col == DEPS_KEY {
         return deps_groups(task)
             .into_iter()
             .map(|(_, text)| text)
