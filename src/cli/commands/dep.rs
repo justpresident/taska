@@ -5,17 +5,13 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use clap::Subcommand;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::cli::{materialize, state_of};
+use crate::cli::state_of;
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::OutputArgs;
-use crate::model::{
-    is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, ID_KEY, REL_KEY, SUBTASKS_KEY,
-    TARGET_KEY,
-};
-use crate::schema::vet_events;
+use crate::model::{is_done, OpType, TaskState, DEPENDS_ON, ID_KEY, SUBTASKS_KEY};
 use crate::storage::EventStore;
 
 /// `ta dep` subcommands. Edges are `type=target` tokens; `type` must be declared
@@ -107,10 +103,8 @@ pub fn cmd_dep_group(
     }
 }
 
-/// Add or remove the `name=target` edges. Each `name` resolves to one or more
-/// canonical stored edges (see [`resolve_edge`]) — typically one, but removing a
-/// symmetric edge clears both sides — and one event is appended per resolved
-/// edge.
+/// Add or remove the `name=target` edges via [`crate::action::apply_edges`],
+/// reporting how many stored edges changed.
 fn dep_write(
     store: &impl EventStore,
     task: &str,
@@ -119,165 +113,13 @@ fn dep_write(
     verb: &str,
     types: &BTreeMap<String, RelationshipDef>,
 ) -> Result<(), DynError> {
-    let removing = matches!(op, OpType::RemoveEdge);
-    let mut resolved: Vec<(String, String, String)> = Vec::new();
-    for edge in edges {
-        let (name, target) = edge
-            .split_once('=')
-            .filter(|(t, v)| !t.is_empty() && !v.is_empty())
-            .ok_or_else(|| format!("invalid edge `{edge}` (expected type=target)"))?;
-        resolved.extend(resolve_edge(name, task, target, types, removing)?);
-    }
-    let events: Vec<MutationEvent> = resolved
-        .iter()
-        .map(|(owner, rel_type, dep)| {
-            let mut payload = Map::new();
-            payload.insert(TARGET_KEY.to_string(), Value::String(dep.clone()));
-            // Every edge carries an explicit type now — no implicit `depends_on`.
-            payload.insert(REL_KEY.to_string(), Value::String(rel_type.clone()));
-            MutationEvent::new(op.clone(), owner.clone(), payload)
-        })
-        .collect();
-
-    // Verify-then-append under the store lock: the structural blocker checks (one
-    // blocker per pair, one parent), the existence/self-reference checks, and the
-    // no-op drop (edge already present / already absent) all run against the
-    // freshly-read state, so none of them can race a concurrent writer.
-    let blockers = store.config().relationships.blocker_types();
-    let hierarchy = store.config().relationships.hierarchy_types();
-    let config = store.config().clone();
-    let written = store.append_checked(&|baseline, log| {
-        let state = materialize(&config, baseline, log);
-        if !removing {
-            validate_blocker_additions(&resolved, &state, &blockers, &hierarchy)?;
-        }
-        vet_events(&events, &state, &config)
-    })?;
-    if written.is_empty() {
+    let written = crate::action::apply_edges(store, task, edges, op, types)?;
+    if written == 0 {
         println!("no changes on `{task}`");
     } else {
-        println!("{verb} {} edge(s) on `{task}`", written.len());
+        println!("{verb} {written} edge(s) on `{task}`");
     }
     Ok(())
-}
-
-/// Reject blocker-edge additions that would break the structural invariants:
-/// (1) at most one blocking relationship between two tasks, and (2) a task may
-/// have at most one parent (one incoming `hierarchy` edge). Checked incrementally
-/// against the current state *plus* the edges added earlier in this command, so a
-/// pre-existing violation elsewhere never blocks an unrelated add.
-fn validate_blocker_additions(
-    resolved: &[(String, String, String)],
-    state: &HashMap<String, TaskState>,
-    blockers: &BTreeSet<String>,
-    hierarchy: &BTreeSet<String>,
-) -> Result<(), DynError> {
-    if !resolved
-        .iter()
-        .any(|(_, t, _)| blockers.contains(t.as_str()))
-    {
-        return Ok(());
-    }
-
-    // Seed the would-be view from current state: each owner's blocker target→type,
-    // and each child's parent.
-    let mut blocker_to: HashMap<String, HashMap<String, String>> = HashMap::new();
-    let mut parent_of: HashMap<String, String> = HashMap::new();
-    for (id, task) in state {
-        for (target, kind) in crate::graph::blocker_edges(task, blockers) {
-            blocker_to
-                .entry(id.clone())
-                .or_default()
-                .insert(target.to_string(), kind.to_string());
-        }
-        for htype in hierarchy {
-            for child in task.relationships.get(htype).into_iter().flatten() {
-                parent_of.insert(child.clone(), id.clone());
-            }
-        }
-    }
-
-    for (owner, rel_type, target) in resolved {
-        if !blockers.contains(rel_type.as_str()) {
-            continue;
-        }
-        let owner_map = blocker_to.entry(owner.clone()).or_default();
-        match owner_map.get(target).cloned() {
-            Some(existing) if existing != *rel_type => {
-                return Err(format!(
-                    "`{owner}` already has a `{existing}` relationship to `{target}`; only one \
-                     blocking relationship is allowed between two tasks"
-                )
-                .into());
-            }
-            Some(_) => {} // same type, idempotent
-            None => {
-                owner_map.insert(target.clone(), rel_type.clone());
-            }
-        }
-        if hierarchy.contains(rel_type.as_str()) {
-            match parent_of.get(target).cloned() {
-                Some(parent) if parent != *owner => {
-                    return Err(format!(
-                        "`{target}` is already a subtask of `{parent}`; a task can have only one \
-                         parent"
-                    )
-                    .into());
-                }
-                Some(_) => {}
-                None => {
-                    parent_of.insert(target.clone(), owner.clone());
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Resolve a user-facing `name=target` edge on `task` into canonical stored
-/// edges `(owner, forward_type, target)`. `name` may be a declared relationship
-/// type (a forward edge stored on `task`) or the configured `inverse` of one (in
-/// which case the stored edge lives on the *other* task). Removal resolves to
-/// every matching location so the edge clears regardless of which side stores
-/// it; add resolves to a single canonical edge (declared type preferred).
-fn resolve_edge(
-    name: &str,
-    task: &str,
-    target: &str,
-    types: &BTreeMap<String, RelationshipDef>,
-    removing: bool,
-) -> Result<Vec<(String, String, String)>, DynError> {
-    let mut edges = Vec::new();
-    if types.contains_key(name) {
-        edges.push((task.to_string(), name.to_string(), target.to_string()));
-    }
-    // An inverse name (or, when removing, the inverse side of a symmetric edge)
-    // points at the forward edge stored on the other task.
-    if removing || edges.is_empty() {
-        for (fwd, def) in types {
-            if def.inverse == name {
-                edges.push((target.to_string(), fwd.clone(), task.to_string()));
-            }
-        }
-    }
-    edges.sort();
-    edges.dedup();
-    if edges.is_empty() {
-        let mut accepted: Vec<&str> = types.keys().map(String::as_str).collect();
-        for def in types.values() {
-            if !def.inverse.is_empty() {
-                accepted.push(def.inverse.as_str());
-            }
-        }
-        accepted.sort_unstable();
-        accepted.dedup();
-        return Err(format!(
-            "unknown relationship type `{name}`; accepted: {}",
-            accepted.join(", ")
-        )
-        .into());
-    }
-    Ok(edges)
 }
 
 /// A shortened title is truncated to this many characters in the tree.
@@ -697,9 +539,9 @@ fn subtree_open(
 /// `ta dep cycles` — report any cycles in the blocker graph. JSON is an array of
 /// cycles (each an array of member ids); human is one cycle per line.
 fn dep_cycles(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynError> {
-    let state = state_of(store)?;
-    let blockers = store.config().relationships.blocker_types();
-    let cycles = crate::graph::dependency_cycles(&state, &blockers);
+    let outcome = crate::action::cycles(store)?;
+    crate::cli::print_warnings(&outcome.warnings);
+    let cycles = outcome.cycles;
     let color = crate::format::want_color(output.no_color);
 
     let value = Value::Array(
@@ -741,88 +583,34 @@ fn dep_plan(
     critical: bool,
     output: &OutputArgs,
 ) -> Result<(), DynError> {
-    let state = state_of(store)?;
-    for g in goals {
-        if !state.contains_key(g) {
-            return Err(format!("no task `{g}`").into());
-        }
-    }
-    let blockers = store.config().relationships.blocker_types();
-
-    // Transitive prerequisite closure, the goals included.
-    let mut want: BTreeSet<String> = BTreeSet::new();
-    let mut stack: Vec<String> = goals.to_vec();
-    while let Some(id) = stack.pop() {
-        if !want.insert(id.clone()) {
-            continue;
-        }
-        if let Some(task) = state.get(&id) {
-            for (dep, _) in crate::graph::blocker_edges(task, &blockers) {
-                if state.contains_key(dep) {
-                    stack.push(dep.to_string());
-                }
-            }
-        }
-    }
-
-    // Order just that subgraph (prerequisites before dependents); a cycle within
-    // it is surfaced as an error, like `ta list --ready`.
-    let sub: HashMap<String, TaskState> = want
-        .iter()
-        .filter_map(|id| state.get(id).map(|t| (id.clone(), t.clone())))
-        .collect();
-    let order = crate::graph::validate_and_sort_dependencies(&sub, &blockers)?;
-
-    let wf = store.config().workflow.clone();
-    let remaining: Vec<&String> = order
-        .iter()
-        .filter(|id| {
-            sub.get(id.as_str())
-                .is_some_and(|t| !is_done(t, &wf.status_field, &wf.done_status))
-        })
-        .collect();
-    let total = remaining.len();
-    let to_print: Vec<String> = if remaining.is_empty() {
-        Vec::new()
-    } else if critical {
-        critical_path(&remaining, &sub, &blockers)
-    } else {
-        remaining.iter().map(|id| (*id).clone()).collect()
-    };
+    let outcome = crate::action::plan(store, goals, critical)?;
+    crate::cli::print_warnings(&outcome.warnings);
+    let steps = &outcome.steps;
+    let total = outcome.total;
     let color = crate::format::want_color(output.no_color);
 
-    let status_of = |id: &str| -> String {
-        sub.get(id)
-            .and_then(|t| t.custom_fields.get(&wf.status_field))
-            .map(|v| match v {
-                Value::String(s) => s.clone(),
-                other => other.to_string(),
-            })
-            .unwrap_or_default()
-    };
-
     let value = Value::Array(
-        to_print
+        steps
             .iter()
-            .map(|id| serde_json::json!({ "id": id, "status": status_of(id) }))
+            .map(|s| serde_json::json!({ "id": &s.id, "status": &s.status }))
             .collect(),
     );
-    let human = if to_print.is_empty() {
+    let human = if steps.is_empty() {
         "Nothing to do — every prerequisite is already done.".to_string()
     } else {
-        let width = to_print.iter().map(String::len).max().unwrap_or(0);
-        let mut lines: Vec<String> = to_print
+        let width = steps.iter().map(|s| s.id.len()).max().unwrap_or(0);
+        let mut lines: Vec<String> = steps
             .iter()
             .enumerate()
-            .map(|(i, id)| {
-                let id_c = crate::format::sgr(&format!("{id:<width$}"), "36", color);
-                format!("{:>2}. {id_c}  {}", i + 1, status_of(id))
+            .map(|(i, s)| {
+                let id_c = crate::format::sgr(&format!("{:<width$}", s.id), "36", color);
+                format!("{:>2}. {id_c}  {}", i + 1, s.status)
             })
             .collect();
-        lines.push(if critical {
+        lines.push(if outcome.critical {
             format!(
                 "(critical path: {} of {total} remaining task(s))",
-                to_print.len()
+                steps.len()
             )
         } else {
             format!("({total} task(s) remaining, in order)")
@@ -831,55 +619,4 @@ fn dep_plan(
     };
     crate::format::emit(output, &human, &value);
     Ok(())
-}
-
-/// The longest chain of incomplete prerequisites within `remaining` (already in
-/// topological order, prerequisites first). A DP over that order — `depth(t) =
-/// 1 + max(depth(p))` across `t`'s not-done blocker prerequisites — then a
-/// backtrack from the deepest task. Ties break on the smaller id so the chosen
-/// path is deterministic.
-fn critical_path(
-    remaining: &[&String],
-    sub: &HashMap<String, TaskState>,
-    blockers: &BTreeSet<String>,
-) -> Vec<String> {
-    let in_rem: BTreeSet<&str> = remaining.iter().map(|s| s.as_str()).collect();
-    let mut depth: HashMap<&str, usize> = HashMap::new();
-    let mut pred: HashMap<&str, Option<&str>> = HashMap::new();
-    for id in remaining {
-        let id = id.as_str();
-        // Best (deepest) not-done prerequisite, smaller id winning ties.
-        let mut best: Option<(usize, &str)> = None;
-        if let Some(task) = sub.get(id) {
-            for (dep, _) in crate::graph::blocker_edges(task, blockers) {
-                if in_rem.contains(dep) {
-                    let d = depth.get(dep).copied().unwrap_or(0);
-                    let keep = best.is_some_and(|b| b.0 > d || (b.0 == d && b.1 < dep));
-                    if !keep {
-                        best = Some((d, dep));
-                    }
-                }
-            }
-        }
-        depth.insert(id, best.map_or(1, |b| b.0 + 1));
-        pred.insert(id, best.map(|b| b.1));
-    }
-
-    // End at the deepest task (the goal, as the common sink), smaller id on ties.
-    let end = remaining.iter().copied().max_by(|a, b| {
-        let (da, db) = (
-            depth.get(a.as_str()).copied().unwrap_or(0),
-            depth.get(b.as_str()).copied().unwrap_or(0),
-        );
-        da.cmp(&db).then_with(|| b.as_str().cmp(a.as_str()))
-    });
-
-    let mut chain = Vec::new();
-    let mut cur = end.map(String::as_str);
-    while let Some(node) = cur {
-        chain.push(node.to_string());
-        cur = pred.get(node).copied().flatten();
-    }
-    chain.reverse();
-    chain
 }

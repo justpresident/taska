@@ -13,11 +13,13 @@
 //! (`list`/`show`/`status`); the remaining command actions are migrating here
 //! incrementally (see `commands-action-presentation-split`).
 
+pub mod dep;
 pub mod list;
 pub mod read;
 pub mod show;
 pub mod status;
 
+pub use dep::{apply_edges, cycles, plan, CyclesOutcome, PlanOutcome, PlanStep};
 pub use list::{list_tasks, ListOutcome, ListQuery};
 pub use read::{read, Session, Warning};
 pub use show::{show, ShowOutcome};
