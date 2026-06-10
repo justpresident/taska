@@ -445,23 +445,6 @@ pub(crate) fn replay_report(
     Engine::materialize_report(baseline, mutations, &w.done_status)
 }
 
-/// Materialize from raw baseline + log slices, using `config`'s workflow names.
-/// The variant the `append_checked` verifier closures use: they hold slices
-/// (read under the store lock), not a store, so can't go through [`replay`].
-/// RAW state: the status lives under the canonical [`STATUS_KEY`], not the
-/// configured display name — which is what verifiers and event writers want.
-pub(crate) fn materialize(
-    config: &Config,
-    baseline: &[TaskState],
-    log: &[MutationEvent],
-) -> HashMap<String, TaskState> {
-    Engine::materialize_state(
-        baseline.to_vec(),
-        log.to_vec(),
-        &config.workflow.done_status,
-    )
-}
-
 /// Load and materialize the current task map from any store.
 ///
 /// Replay also reports *orphaned* events — `Update`/`Append`/`AddEdge`/`RemoveEdge`/

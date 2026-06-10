@@ -1,8 +1,7 @@
 //! `ta update` — set (`=`), accumulate (`+=`), or remove (`-=`) fields on a task.
 
-use crate::cli::{canonicalize_fields, materialize, parse_field_ops};
+use crate::cli::{canonicalize_fields, parse_field_ops};
 use crate::error::DynError;
-use crate::schema::{build_field_events, vet_events};
 use crate::storage::EventStore;
 
 pub fn cmd_update(store: &impl EventStore, id: &str, fields: &[String]) -> Result<(), DynError> {
@@ -20,17 +19,7 @@ pub fn cmd_update(store: &impl EventStore, id: &str, fields: &[String]) -> Resul
     ] {
         canonicalize_fields(map, workflow)?;
     }
-    // Verify-then-append under the store lock: event building first (the
-    // `+=`/`-=` dispatch and schema-aware coercion need the task's type from
-    // live state), then vetting — which errors if the task doesn't exist and
-    // drops no-op writes (re-asserting a value, inserting a present set
-    // element, adding 0) so they never bloat the log.
-    let config = store.config().clone();
-    let written = store.append_checked(&|baseline, log| {
-        let state = materialize(&config, baseline, log);
-        let events = build_field_events(id, &ops, &state, &config)?;
-        vet_events(&events, &state, &config)
-    })?;
+    let written = crate::action::write::update(store, id, &ops)?;
     if written.is_empty() {
         println!("`{id}` already up to date — no changes");
     } else {

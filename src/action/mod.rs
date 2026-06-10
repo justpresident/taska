@@ -18,6 +18,7 @@ pub mod list;
 pub mod read;
 pub mod show;
 pub mod status;
+pub mod write;
 
 pub use dep::{
     apply_edges, cycles, plan, tree, CyclesOutcome, Kids, Node, PlanOutcome, PlanStep, TreeOutcome,

@@ -20,7 +20,7 @@ use std::process::Command;
 
 use serde_json::{Map, Value};
 
-use crate::cli::{canonicalize_fields, confirm, materialize, replay};
+use crate::cli::{canonicalize_fields, confirm, replay};
 use crate::config::{Config, WorkflowConfig};
 use crate::error::DynError;
 use crate::model::TaskState;
@@ -68,16 +68,9 @@ pub fn cmd_edit(store: &impl EventStore, id: &str, as_json: bool) -> Result<(), 
         return Ok(());
     }
 
-    // Verify-then-append under the store lock, re-validating against current
-    // state (the editor ran outside the lock): the authoritative write, mirroring
-    // `cmd_update`.
-    let config = store.config().clone();
-    store.append_checked(&|baseline, log| {
-        let state = materialize(&config, baseline, log);
-        let ops = set_only(payload.clone());
-        let events = build_field_events(id, &ops, &state, &config)?;
-        vet_events(&events, &state, &config)
-    })?;
+    // Re-validate against current state (the editor ran outside the lock) and
+    // append through the shared write path.
+    crate::action::write::update(store, id, &set_only(payload))?;
     println!("Updated task `{id}`");
     Ok(())
 }
