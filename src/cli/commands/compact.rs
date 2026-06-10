@@ -2,11 +2,9 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::cli::replay;
+use crate::action::compact::{compact, CompactOutcome};
 use crate::config::CompactionConfig;
-use crate::engine::Engine;
 use crate::error::DynError;
-use crate::model::TaskState;
 use crate::storage::EventStore;
 
 pub fn cmd_compact(
@@ -14,34 +12,22 @@ pub fn cmd_compact(
     cfg: &CompactionConfig,
     now: DateTime<Utc>,
 ) -> Result<(), DynError> {
-    let baseline = store.load_baseline()?;
-    let mutations = store.load_mutations()?;
-
-    let split = Engine::retention_split(&mutations, cfg.keep_events, cfg.keep_days, now);
-    if split == 0 {
-        println!(
-            "Nothing to compact ({} event(s) in log, keep_events = {})",
-            mutations.len(),
-            cfg.keep_events
-        );
-        return Ok(());
+    match compact(store, cfg, now)? {
+        CompactOutcome::NothingToDo {
+            log_len,
+            keep_events,
+        } => {
+            println!("Nothing to compact ({log_len} event(s) in log, keep_events = {keep_events})")
+        }
+        CompactOutcome::Compacted {
+            folded,
+            baseline_tasks,
+            kept,
+        } => println!(
+            "Compacted {folded} event(s) into baseline ({baseline_tasks} task(s)); \
+             kept {kept} recent event(s)"
+        ),
     }
-
-    // Fold the old prefix into the baseline; retain the recent suffix in the log
-    // so divergent branches can still be reconciled by event id. `replay` uses the
-    // store's workflow config so the folded baseline carries computed timestamps.
-    let (to_fold, to_keep) = mutations.split_at(split);
-    let folded = replay(store, baseline, to_fold.to_vec());
-    let mut new_baseline: Vec<TaskState> = folded.into_values().collect();
-    new_baseline.sort_by(|a, b| a.id.cmp(&b.id));
-
-    store.compact(&new_baseline, to_keep)?;
-    println!(
-        "Compacted {} event(s) into baseline ({} task(s)); kept {} recent event(s)",
-        split,
-        new_baseline.len(),
-        to_keep.len()
-    );
     Ok(())
 }
 

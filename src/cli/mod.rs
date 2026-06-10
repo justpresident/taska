@@ -435,16 +435,6 @@ pub(crate) fn replay(
     Engine::materialize_state(baseline, mutations, &w.done_status)
 }
 
-/// Like [`replay`] but keeping the orphan report (see [`Engine::materialize_report`]).
-pub(crate) fn replay_report(
-    store: &impl EventStore,
-    baseline: Vec<TaskState>,
-    mutations: Vec<MutationEvent>,
-) -> (HashMap<String, TaskState>, Vec<u64>) {
-    let w = &store.config().workflow;
-    Engine::materialize_report(baseline, mutations, &w.done_status)
-}
-
 /// Load and materialize the current task map from any store.
 ///
 /// Replay also reports *orphaned* events — `Update`/`Append`/`AddEdge`/`RemoveEdge`/

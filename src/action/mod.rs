@@ -13,11 +13,14 @@
 //! (`list`/`show`/`status`); the remaining command actions are migrating here
 //! incrementally (see `commands-action-presentation-split`).
 
+pub mod compact;
 pub mod dep;
 pub mod list;
 pub mod read;
+pub mod resolve;
 pub mod show;
 pub mod status;
+pub mod undo;
 pub mod write;
 
 pub use dep::{
