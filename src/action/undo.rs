@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
-use crate::engine::Engine;
+use crate::action::materialize;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType, TaskState, REL_KEY, TARGET_KEY};
 use crate::storage::{EventStore, FileStore};
@@ -55,14 +55,12 @@ pub fn plan(store: &FileStore, count: usize, remove: bool) -> Result<Option<Undo
     if count == 0 || n == 0 {
         return Ok(None);
     }
-    let done = &store.config().workflow.done_status;
-
     let count = count.min(n);
     let keep = n - count;
     let undone_slice = &mutations[keep..];
 
-    let current = Engine::materialize_state(baseline.clone(), mutations.clone(), done);
-    let target = Engine::materialize_state(baseline.clone(), mutations[..keep].to_vec(), done);
+    let current = materialize(store.config(), &baseline, &mutations);
+    let target = materialize(store.config(), &baseline, &mutations[..keep]);
 
     // The tasks any undone event touched, sorted for stable output.
     let mut affected: Vec<String> = undone_slice.iter().map(|e| e.task_id.clone()).collect();
@@ -97,7 +95,7 @@ pub fn plan(store: &FileStore, count: usize, remove: bool) -> Result<Option<Undo
         // Keep committed history; append compensating events from the committed
         // prefix's state toward the target.
         let truncate_to = committed_count;
-        let post = Engine::materialize_state(baseline, mutations[..truncate_to].to_vec(), done);
+        let post = materialize(store.config(), &baseline, &mutations[..truncate_to]);
         let comps = compensate(&post, &target, &affected);
 
         let next = mutations[..truncate_to]

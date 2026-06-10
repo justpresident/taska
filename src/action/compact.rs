@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 
+use crate::action::materialize;
 use crate::config::CompactionConfig;
 use crate::engine::Engine;
 use crate::error::DynError;
@@ -43,11 +44,7 @@ pub fn compact(
     }
 
     let (to_fold, to_keep) = mutations.split_at(split);
-    let folded = Engine::materialize_state(
-        baseline,
-        to_fold.to_vec(),
-        &store.config().workflow.done_status,
-    );
+    let folded = materialize(store.config(), &baseline, to_fold);
     let mut new_baseline: Vec<TaskState> = folded.into_values().collect();
     new_baseline.sort_by(|a, b| a.id.cmp(&b.id));
 

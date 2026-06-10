@@ -9,8 +9,8 @@
 
 use serde_json::Value;
 
+use crate::action::materialize;
 use crate::config::{Config, FieldKind};
-use crate::engine::Engine;
 use crate::error::DynError;
 use crate::migrate::{run_all, Snapshot};
 use crate::model::{MutationEvent, OpType, TaskState, RESERVED_FIELD_KEYS, TASK_TYPE_KEY};
@@ -93,7 +93,7 @@ pub fn schema(
     }
 
     // What remains is ambiguous by definition — report it actionably.
-    let state = Engine::materialize_state(baseline, log, &config.workflow.done_status);
+    let state = materialize(config, &baseline, &log);
     let remaining = schema_conformance_report(&state, config);
     Ok(SchemaRepairReport {
         rename: rename_outcome,
@@ -142,8 +142,8 @@ fn apply_rename(
         }
         if new == crate::model::STATUS_KEY || new == workflow.status_field {
             return Err(format!(
-                "can't rename onto `{new}`: it is the status field — set it per task with \
-                 `ta update` instead"
+                "can't rename onto `{new}`: it is the status field — set it per task, \
+                 not via rename"
             )
             .into());
         }
@@ -219,11 +219,7 @@ fn backfill_type(
         .into());
     }
     let mut report = Vec::new();
-    let state = Engine::materialize_state(
-        baseline.to_vec(),
-        log.to_vec(),
-        &config.workflow.done_status,
-    );
+    let state = materialize(config, baseline, log);
     for task in state.values() {
         if task.custom_fields.contains_key(TASK_TYPE_KEY) {
             continue;
@@ -279,11 +275,7 @@ fn apply_lossless_fixes(
     config: &Config,
 ) -> Vec<String> {
     let mut report = Vec::new();
-    let state = Engine::materialize_state(
-        baseline.to_vec(),
-        log.to_vec(),
-        &config.workflow.done_status,
-    );
+    let state = materialize(config, baseline, log);
     for task in state.values() {
         let Some(def) = task
             .custom_fields

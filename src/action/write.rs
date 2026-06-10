@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
 
-use crate::engine::Engine;
+use crate::action::materialize;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType, STATUS_KEY};
 use crate::schema::{
@@ -48,11 +48,7 @@ pub fn create(
     let draft = MutationEvent::new(OpType::Create, id, payload);
     let config = store.config().clone();
     store.append_checked(&|baseline, log| {
-        let state = Engine::materialize_state(
-            baseline.to_vec(),
-            log.to_vec(),
-            &config.workflow.done_status,
-        );
+        let state = materialize(&config, baseline, log);
         let mut events = vec![draft.clone()];
         coerce_event_fields(&mut events, raw, &state, &config);
         vet_events(&events, &state, &config)
@@ -73,11 +69,7 @@ pub fn update(
 ) -> Result<Vec<MutationEvent>, DynError> {
     let config = store.config().clone();
     store.append_checked(&|baseline, log| {
-        let state = Engine::materialize_state(
-            baseline.to_vec(),
-            log.to_vec(),
-            &config.workflow.done_status,
-        );
+        let state = materialize(&config, baseline, log);
         let events = build_field_events(id, ops, &state, &config)?;
         vet_events(&events, &state, &config)
     })
@@ -89,11 +81,7 @@ pub fn delete(store: &impl EventStore, id: &str) -> Result<(), DynError> {
     let draft = MutationEvent::new(OpType::Delete, id, Map::new());
     let config = store.config().clone();
     store.append_checked(&|baseline, log| {
-        let state = Engine::materialize_state(
-            baseline.to_vec(),
-            log.to_vec(),
-            &config.workflow.done_status,
-        );
+        let state = materialize(&config, baseline, log);
         vet_events(std::slice::from_ref(&draft), &state, &config)
     })?;
     Ok(())

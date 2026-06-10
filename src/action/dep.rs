@@ -11,9 +11,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
-use crate::action::{read, Warning};
+use crate::action::{materialize, read, Warning};
 use crate::config::RelationshipDef;
-use crate::engine::Engine;
 use crate::error::DynError;
 use crate::graph;
 use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, TARGET_KEY};
@@ -59,11 +58,7 @@ pub fn apply_edges(
     let hierarchy = store.config().relationships.hierarchy_types();
     let config = store.config().clone();
     let written = store.append_checked(&|baseline, log| {
-        let state = Engine::materialize_state(
-            baseline.to_vec(),
-            log.to_vec(),
-            &config.workflow.done_status,
-        );
+        let state = materialize(&config, baseline, log);
         if !removing {
             validate_blocker_additions(&resolved, &state, &blockers, &hierarchy)?;
         }

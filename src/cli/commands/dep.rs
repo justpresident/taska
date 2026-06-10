@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use clap::Subcommand;
 use serde_json::Value;
 
-use crate::action::{Kids, Node};
+use crate::action::dep::{Kids, Node};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::OutputArgs;
@@ -102,7 +102,7 @@ pub fn cmd_dep_group(
     }
 }
 
-/// Add or remove the `name=target` edges via [`crate::action::apply_edges`],
+/// Add or remove the `name=target` edges via [`crate::action::dep::apply_edges`],
 /// reporting how many stored edges changed.
 fn dep_write(
     store: &impl EventStore,
@@ -112,7 +112,7 @@ fn dep_write(
     verb: &str,
     types: &BTreeMap<String, RelationshipDef>,
 ) -> Result<(), DynError> {
-    let written = crate::action::apply_edges(store, task, edges, op, types)?;
+    let written = crate::action::dep::apply_edges(store, task, edges, op, types)?;
     if written == 0 {
         println!("no changes on `{task}`");
     } else {
@@ -145,9 +145,9 @@ fn dep_tree(
     // `format`'s sort. Resolve the column here, default `[display].sort`.
     let column = sort.unwrap_or_else(|| store.config().display.sort.clone());
     let cmp = |a: &TaskState, b: &TaskState| crate::format::task_cmp(a, b, &column);
-    let outcome = crate::action::tree(
+    let outcome = crate::action::dep::tree(
         store,
-        &crate::action::TreeQuery {
+        &crate::action::dep::TreeQuery {
             roots: tasks,
             open,
             reverse,
@@ -288,7 +288,7 @@ fn node_json(node: &Node) -> Value {
 /// `ta dep cycles` — report any cycles in the blocker graph. JSON is an array of
 /// cycles (each an array of member ids); human is one cycle per line.
 fn dep_cycles(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynError> {
-    let outcome = crate::action::cycles(store)?;
+    let outcome = crate::action::dep::cycles(store)?;
     crate::cli::print_warnings(&outcome.warnings);
     let cycles = outcome.cycles;
     let color = crate::format::want_color(output.no_color);
@@ -332,7 +332,7 @@ fn dep_plan(
     critical: bool,
     output: &OutputArgs,
 ) -> Result<(), DynError> {
-    let outcome = crate::action::plan(store, goals, critical)?;
+    let outcome = crate::action::dep::plan(store, goals, critical)?;
     crate::cli::print_warnings(&outcome.warnings);
     let steps = &outcome.steps;
     let total = outcome.total;

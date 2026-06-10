@@ -9,9 +9,17 @@
 //! stays entirely in the frontend, which consumes an action's typed result and
 //! renders it however it likes.
 //!
-//! So far this module owns the READ pipeline ([`read`]) and the display actions
-//! (`list`/`show`/`status`); the remaining command actions are migrating here
-//! incrementally (see `commands-action-presentation-split`).
+//! Every command drives through here: `read`, the display actions
+//! (`list`/`show`/`status`), the `dep` group, `write::{create,update,delete}`,
+//! the plan→apply pairs (`undo`/`resolve`), `compact`, `repair`, `config`, and
+//! `init`. [`materialize`] is the shared raw-materialization primitive every
+//! write/maintenance action uses (so it lives here, not in any one sibling).
+
+use std::collections::HashMap;
+
+use crate::config::Config;
+use crate::engine::Engine;
+use crate::model::{MutationEvent, TaskState};
 
 pub mod compact;
 pub mod config;
@@ -26,11 +34,26 @@ pub mod status;
 pub mod undo;
 pub mod write;
 
-pub use dep::{
-    apply_edges, cycles, plan, tree, CyclesOutcome, Kids, Node, PlanOutcome, PlanStep, TreeOutcome,
-    TreeQuery,
-};
 pub use list::{list_tasks, ListOutcome, ListQuery};
 pub use read::{read, Session, Warning};
 pub use show::{show, ShowOutcome};
 pub use status::{status, StatusOutcome, StatusSummary};
+
+/// Materialize RAW state from baseline + log slices using `config`'s workflow.
+///
+/// The write-side counterpart to [`read`]: the `append_checked` verifier closures
+/// and the maintenance actions hold slices read under the store lock (not a
+/// store) and want raw state — canonical keys, no display shaping. A thin
+/// convenience over [`Engine::materialize_state`], at the action root so no
+/// action depends on a *sibling* module for it.
+pub(crate) fn materialize(
+    config: &Config,
+    baseline: &[TaskState],
+    log: &[MutationEvent],
+) -> HashMap<String, TaskState> {
+    Engine::materialize_state(
+        baseline.to_vec(),
+        log.to_vec(),
+        &config.workflow.done_status,
+    )
+}

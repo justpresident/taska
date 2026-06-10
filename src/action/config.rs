@@ -6,9 +6,8 @@
 //! `toml_edit`) and rejects an invalid result. Rendering — the git-config display
 //! form — is the frontend's job; these return values and reports.
 
-use crate::action::{read, Warning};
+use crate::action::{materialize, read, Warning};
 use crate::config::Config;
-use crate::engine::Engine;
 use crate::error::DynError;
 use crate::schema::schema_conformance_report;
 use crate::storage::{EventStore, FileStore};
@@ -54,10 +53,10 @@ pub struct ValidateReport {
 pub fn validate(store: &FileStore) -> Result<ValidateReport, DynError> {
     let session = read(store)?;
     store.config().validate_against(&session.state)?;
-    let raw = Engine::materialize_state(
-        store.load_baseline()?,
-        store.load_mutations()?,
-        &store.config().workflow.done_status,
+    let raw = materialize(
+        store.config(),
+        &store.load_baseline()?,
+        &store.load_mutations()?,
     );
     let nonconformance = schema_conformance_report(&raw, store.config());
     Ok(ValidateReport {
