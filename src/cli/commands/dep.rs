@@ -1,17 +1,16 @@
 //! The `ta dep` command group — add, remove, and inspect (tree/cycles/plan)
 //! typed relationship edges between tasks.
 
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::BTreeMap;
 
 use clap::Subcommand;
 use serde_json::Value;
 
-use crate::cli::state_of;
+use crate::action::{Kids, Node};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::OutputArgs;
-use crate::model::{is_done, OpType, TaskState, DEPENDS_ON, ID_KEY, SUBTASKS_KEY};
+use crate::model::{OpType, TaskState, ID_KEY, SUBTASKS_KEY};
 use crate::storage::EventStore;
 
 /// `ta dep` subcommands. Edges are `type=target` tokens; `type` must be declared
@@ -125,20 +124,6 @@ fn dep_write(
 /// A shortened title is truncated to this many characters in the tree.
 const TREE_TITLE_MAX: usize = 50;
 
-/// Shared, read-only context for rendering a `dep tree`.
-struct TreeCtx<'a> {
-    state: &'a HashMap<String, TaskState>,
-    blockers: &'a BTreeSet<String>,
-    hierarchy: &'a BTreeSet<String>,
-    status_field: &'a str,
-    done_status: &'a str,
-    column: &'a str,
-    reverse: bool,
-    open: bool,
-    /// Tasks whose blocker-subtree contains at least one open task.
-    open_subtrees: &'a HashSet<String>,
-}
-
 /// `ta dep tree` — ASCII tree of the blocker graph (the `depends_on` field plus
 /// any `blocker`- or `hierarchy`-typed relationship), children nested under their
 /// dependents. Shows the exact graph by default — done tasks are dimmed and marked
@@ -155,183 +140,32 @@ fn dep_tree(
     reverse: bool,
     output: &OutputArgs,
 ) -> Result<(), DynError> {
-    let state = state_of(store)?;
-    let blockers = store.config().relationships.blocker_types();
-    let hierarchy = store.config().relationships.hierarchy_types();
-    let wf = store.config().workflow.clone();
+    // The action builds the forest; it takes the sibling/root ordering as a
+    // comparator (ascending by the chosen column) so it needn't depend on
+    // `format`'s sort. Resolve the column here, default `[display].sort`.
     let column = sort.unwrap_or_else(|| store.config().display.sort.clone());
+    let cmp = |a: &TaskState, b: &TaskState| crate::format::task_cmp(a, b, &column);
+    let outcome = crate::action::tree(
+        store,
+        &crate::action::TreeQuery {
+            roots: tasks,
+            open,
+            reverse,
+        },
+        &cmp,
+    )?;
+    crate::cli::print_warnings(&outcome.warnings);
     let color = crate::format::want_color(output.no_color);
-    let open_subtrees = compute_open_subtrees(&state, &blockers, &wf.status_field, &wf.done_status);
-
-    let mut roots = if tasks.is_empty() {
-        let depended: BTreeSet<&str> = state
-            .values()
-            .flat_map(|t| {
-                crate::graph::blocker_edges(t, &blockers)
-                    .into_iter()
-                    .map(|(target, _)| target)
-            })
-            .collect();
-        let mut r: Vec<String> = state
-            .keys()
-            .filter(|id| !depended.contains(id.as_str()))
-            .cloned()
-            .collect();
-        if r.is_empty() {
-            r = state.keys().cloned().collect();
-        }
-        r
-    } else {
-        for t in tasks {
-            if !state.contains_key(t) {
-                return Err(format!("no task `{t}`").into());
-            }
-        }
-        tasks.to_vec()
-    };
-    sort_ids(&mut roots, &state, &column, reverse);
-    if open {
-        roots.retain(|r| open_subtrees.contains(r));
-    }
-    if roots.is_empty() {
+    if outcome.forest.is_empty() {
         let human = if open { "(nothing open)" } else { "(no tasks)" };
         crate::format::emit(output, human, &Value::Array(Vec::new()));
         return Ok(());
     }
-
-    let ctx = TreeCtx {
-        state: &state,
-        blockers: &blockers,
-        hierarchy: &hierarchy,
-        status_field: &wf.status_field,
-        done_status: &wf.done_status,
-        column: &column,
-        reverse,
-        open,
-        open_subtrees: &open_subtrees,
-    };
-    // Build the forest once, then render BOTH human and JSON from it. `build`
-    // marks a node expanded/on-path itself, so roots start from empty state.
-    let mut expanded: HashSet<String> = HashSet::new();
-    let forest: Vec<Node> = roots
-        .iter()
-        .map(|root| {
-            let mut path = Vec::new();
-            build(&ctx, root, None, &mut path, &mut expanded)
-        })
-        .collect();
-
-    let value = Value::Array(forest.iter().map(node_json).collect());
-    let human = render_human_forest(&forest, color);
+    // Render the built-once forest to BOTH human and JSON.
+    let value = Value::Array(outcome.forest.iter().map(node_json).collect());
+    let human = render_human_forest(&outcome.forest, color);
     crate::format::emit(output, &human, &value);
     Ok(())
-}
-
-/// One node of a rendered tree, built once and rendered to both human and JSON.
-struct Node {
-    id: String,
-    title: String,
-    status: String,
-    done: bool,
-    /// Edge to the parent: `subtask` for a hierarchy edge, the type name for
-    /// another non-`depends_on` blocker, `None` for `depends_on` or a root.
-    edge: Option<String>,
-    /// `(done, total)` subtask rollup, when the node has hierarchy children.
-    rollup: Option<(usize, usize)>,
-    kids: Kids,
-}
-
-enum Kids {
-    Children(Vec<Node>),
-    /// Already shown in full elsewhere (a repeated DAG node).
-    Collapsed,
-    /// A back-edge to an ancestor.
-    Cycle,
-    /// The target id isn't a known task.
-    Missing,
-}
-
-/// Build the node for `id` (reached via `kind`), recursing over its sorted,
-/// `--open`-pruned blocker children. `path` (ancestors) breaks cycles; `expanded`
-/// collapses a node already shown in full elsewhere.
-fn build(
-    ctx: &TreeCtx,
-    id: &str,
-    kind: Option<&str>,
-    path: &mut Vec<String>,
-    expanded: &mut HashSet<String>,
-) -> Node {
-    let edge = match kind {
-        Some(k) if ctx.hierarchy.contains(k) => Some("subtask".to_string()),
-        Some(k) if k != DEPENDS_ON => Some(k.to_string()),
-        _ => None,
-    };
-    let Some(task) = ctx.state.get(id) else {
-        return Node {
-            id: id.to_string(),
-            title: String::new(),
-            status: String::new(),
-            done: false,
-            edge: None,
-            rollup: None,
-            kids: Kids::Missing,
-        };
-    };
-    let done = is_done(task, ctx.status_field, ctx.done_status);
-    let title = task
-        .custom_fields
-        .get("title")
-        .and_then(Value::as_str)
-        .map(|s| crate::format::truncate(s, TREE_TITLE_MAX))
-        .unwrap_or_default();
-    let status = task
-        .custom_fields
-        .get(ctx.status_field)
-        .map(|v| match v {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        })
-        .unwrap_or_default();
-    let (rd, rt) = crate::graph::subtask_counts(
-        task,
-        ctx.state,
-        ctx.hierarchy,
-        ctx.status_field,
-        ctx.done_status,
-    );
-    let rollup = (rt > 0).then_some((rd, rt));
-
-    let kids = if path.iter().any(|p| p == id) {
-        Kids::Cycle
-    } else if expanded.contains(id) && !crate::graph::blocker_edges(task, ctx.blockers).is_empty() {
-        Kids::Collapsed
-    } else {
-        expanded.insert(id.to_string());
-        path.push(id.to_string());
-        let mut children = crate::graph::blocker_edges(task, ctx.blockers);
-        children.sort_by(|a, b| child_cmp(ctx, a.0, b.0));
-        if ctx.reverse {
-            children.reverse();
-        }
-        if ctx.open {
-            children.retain(|(c, _)| ctx.open_subtrees.contains(*c));
-        }
-        let nodes = children
-            .iter()
-            .map(|&(c, k)| build(ctx, c, Some(k), path, expanded))
-            .collect();
-        path.pop();
-        Kids::Children(nodes)
-    };
-    Node {
-        id: id.to_string(),
-        title,
-        status,
-        done,
-        edge,
-        rollup,
-        kids,
-    }
 }
 
 /// The colored label for one node: id, a shortened `title`, the edge tag
@@ -342,7 +176,7 @@ fn node_label(node: &Node, color: bool) -> String {
     let title_part = if node.title.is_empty() {
         String::new()
     } else {
-        format!("  {}", node.title)
+        format!("  {}", crate::format::truncate(&node.title, TREE_TITLE_MAX))
     };
     let rollup = node
         .rollup
@@ -412,7 +246,10 @@ fn node_json(node: &Node) -> Value {
     let mut o = serde_json::Map::new();
     o.insert(ID_KEY.to_string(), Value::String(node.id.clone()));
     if !node.title.is_empty() {
-        o.insert("title".to_string(), Value::String(node.title.clone()));
+        o.insert(
+            "title".to_string(),
+            Value::String(crate::format::truncate(&node.title, TREE_TITLE_MAX)),
+        );
     }
     if !node.status.is_empty() {
         o.insert("status".to_string(), Value::String(node.status.clone()));
@@ -446,94 +283,6 @@ fn node_json(node: &Node) -> Value {
         }
     }
     Value::Object(o)
-}
-
-/// Order two task ids by the tree's sort column (missing tasks last, id tiebreak).
-fn child_cmp(ctx: &TreeCtx, a: &str, b: &str) -> Ordering {
-    match (ctx.state.get(a), ctx.state.get(b)) {
-        (Some(ta), Some(tb)) => crate::format::task_cmp(ta, tb, ctx.column),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => a.cmp(b),
-    }
-}
-
-/// Sort task ids in place by `column` (missing tasks last), flipped by `reverse`.
-fn sort_ids(ids: &mut [String], state: &HashMap<String, TaskState>, column: &str, reverse: bool) {
-    ids.sort_by(|a, b| match (state.get(a), state.get(b)) {
-        (Some(ta), Some(tb)) => crate::format::task_cmp(ta, tb, column),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => a.cmp(b),
-    });
-    if reverse {
-        ids.reverse();
-    }
-}
-
-/// Tasks whose blocker-subtree (the task itself or any transitive prerequisite)
-/// contains an open task. `--open` keeps exactly these, so a done task that still
-/// leads to open work stays while fully-resolved branches are pruned.
-fn compute_open_subtrees(
-    state: &HashMap<String, TaskState>,
-    blockers: &BTreeSet<String>,
-    status_field: &str,
-    done_status: &str,
-) -> HashSet<String> {
-    let mut memo: HashMap<String, bool> = HashMap::new();
-    let mut on_path: HashSet<String> = HashSet::new();
-    for id in state.keys() {
-        subtree_open(
-            id,
-            state,
-            blockers,
-            status_field,
-            done_status,
-            &mut memo,
-            &mut on_path,
-        );
-    }
-    memo.into_iter()
-        .filter_map(|(k, v)| v.then_some(k))
-        .collect()
-}
-
-fn subtree_open(
-    id: &str,
-    state: &HashMap<String, TaskState>,
-    blockers: &BTreeSet<String>,
-    status_field: &str,
-    done_status: &str,
-    memo: &mut HashMap<String, bool>,
-    on_path: &mut HashSet<String>,
-) -> bool {
-    if let Some(&v) = memo.get(id) {
-        return v;
-    }
-    if !on_path.insert(id.to_string()) {
-        return false; // cycle back-edge: don't recurse, the node's own status counts
-    }
-    let mut open = state
-        .get(id)
-        .is_some_and(|t| !is_done(t, status_field, done_status));
-    if let Some(task) = state.get(id) {
-        for (child, _) in crate::graph::blocker_edges(task, blockers) {
-            if subtree_open(
-                child,
-                state,
-                blockers,
-                status_field,
-                done_status,
-                memo,
-                on_path,
-            ) {
-                open = true;
-            }
-        }
-    }
-    on_path.remove(id);
-    memo.insert(id.to_string(), open);
-    open
 }
 
 /// `ta dep cycles` — report any cycles in the blocker graph. JSON is an array of

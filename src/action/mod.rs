@@ -19,7 +19,10 @@ pub mod read;
 pub mod show;
 pub mod status;
 
-pub use dep::{apply_edges, cycles, plan, CyclesOutcome, PlanOutcome, PlanStep};
+pub use dep::{
+    apply_edges, cycles, plan, tree, CyclesOutcome, Kids, Node, PlanOutcome, PlanStep, TreeOutcome,
+    TreeQuery,
+};
 pub use list::{list_tasks, ListOutcome, ListQuery};
 pub use read::{read, Session, Warning};
 pub use show::{show, ShowOutcome};
