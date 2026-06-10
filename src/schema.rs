@@ -54,6 +54,23 @@ pub struct FieldOps {
     pub raw: Map<String, Value>,
 }
 
+/// The display↔canonical field-name boundary, as `(display, canonical)` pairs.
+///
+/// Events and the baseline always store `status`/`task_type` under their
+/// canonical keys ([`STATUS_KEY`]/[`TASK_TYPE_KEY`]); `[workflow] status_field`
+/// /`type_field` are *display* names. This is the one shared list of that
+/// mapping — the read pipeline renames canonical→display, the write side
+/// (`cli::canonicalize_fields`) renames display→canonical — so renaming either
+/// in config is free, with no data migration.
+pub const fn canonical_field_pairs(
+    workflow: &crate::config::WorkflowConfig,
+) -> [(&String, &'static str); 2] {
+    [
+        (&workflow.status_field, STATUS_KEY),
+        (&workflow.type_field, TASK_TYPE_KEY),
+    ]
+}
+
 /// The grandfathered-data report: every task whose RAW stored fields violate
 /// its `[task_types]` schema, one line each.
 ///

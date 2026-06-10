@@ -1,8 +1,8 @@
 //! `taska` — local-first, git-native task & dependency tracker.
 //!
-//! The core (model, engine, storage, merge, graph, config, error) plus the CLI
-//! surface live in this library crate; the `ta` binary is a thin wrapper that
-//! calls [`cli::run`].
+//! The core (model, engine, storage, merge, graph, config, error), the
+//! frontend-agnostic [`action`] layer, and the bundled CLI surface live in this
+//! library crate; the `ta` binary is a thin wrapper that calls [`cli::run`].
 
 #![warn(
     clippy::all,
@@ -23,6 +23,7 @@
     clippy::missing_panics_doc
 )]
 
+pub mod action;
 pub mod cli;
 pub mod config;
 pub mod engine;

@@ -12,18 +12,18 @@
 //! on the [`EventStore`] abstraction rather than the concrete [`FileStore`],
 //! so they can be exercised against any store.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use serde_json::{Map, Value};
 
-use crate::config::{Config, RelationshipDef};
+use crate::config::Config;
 use crate::engine::Engine;
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs};
 use crate::merge;
-use crate::model::{MutationEvent, TaskState, RESERVED_FIELD_KEYS, STATUS_KEY, TASK_TYPE_KEY};
+use crate::model::{MutationEvent, TaskState, RESERVED_FIELD_KEYS};
 use crate::storage::{EventStore, FileStore};
 
 mod commands;
@@ -32,7 +32,7 @@ use commands::{
     cmd_repair, cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction, DepAction,
 };
 
-use crate::schema::{schema_conformance_report, FieldOps};
+use crate::schema::FieldOps;
 
 #[derive(Parser)]
 #[command(name = "ta", version, about)]
@@ -390,24 +390,17 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             open,
             ready,
             display,
-        } => {
-            let workflow = store.config().workflow.clone();
-            cmd_list(
-                store,
-                &criteria,
-                open,
-                ready,
-                &workflow,
-                &display,
-                &store.config().display,
-            )
-        }
+        } => cmd_list(
+            store,
+            &criteria,
+            open,
+            ready,
+            &display,
+            &store.config().display,
+        ),
         Commands::Show { id, display } => cmd_show(store, &id, &display, &store.config().display),
         Commands::Edit { id, json, toml: _ } => cmd_edit(store, &id, json),
-        Commands::Status { output } => {
-            let workflow = store.config().workflow.clone();
-            cmd_status(store, &workflow, &output)
-        }
+        Commands::Status { output } => cmd_status(store, &output),
         Commands::Undo {
             count,
             force,
@@ -476,200 +469,49 @@ pub(crate) fn materialize(
 /// revert, or a manual edit), so every read command warns about them on STDERR
 /// and points at `ta resolve`. The warning never blocks the read.
 pub(crate) fn state_of(store: &impl EventStore) -> Result<HashMap<String, TaskState>, DynError> {
-    let (mut state, orphans) =
-        replay_report(store, store.load_baseline()?, store.load_mutations()?);
-    if !orphans.is_empty() {
-        eprintln!(
-            "taska: warning: {} orphaned event(s) in the log (no matching task) — \
-             run `ta resolve` to clean them up.",
-            orphans.len()
-        );
-    }
-    // Read-tolerance: schemas are write-time law only, so non-conforming tasks
-    // (grandfathered by a schema change, merged in, restored by undo) always
-    // materialize — but every read command says so ONCE, before the display
-    // renames below would skew the check. Silenceable via config.
-    warn_nonconforming(&state, store.config());
-    // Then the default substitution: missing/invalid declared fields READ as
-    // their declared default (after the warning, so the report reflects the
-    // stored truth; display-only, like everything below).
-    crate::schema::substitute_schema_defaults(&mut state, store.config());
-    // Surface the computed timestamps as ordinary (RFC 3339 string) fields under
-    // their configured names, so list/show/--sort treat them like any
-    // other column. This is display-only: the raw Option<DateTime> stays on
-    // TaskState (and in the baseline); injection never reaches the stored log.
-    let ts = &store.config().timestamps;
-    for task in state.values_mut() {
-        inject_time(&mut task.custom_fields, &ts.create_time, task.create_time);
-        inject_time(&mut task.custom_fields, &ts.update_time, task.update_time);
-        inject_time(&mut task.custom_fields, &ts.close_time, task.close_time);
-    }
-    // Surface canonically-stored fields under their configured DISPLAY names
-    // (the inverse of the write-side mapping in `canonicalize_fields`). Display
-    // -only, like the timestamps above: columns, filters, sorting, and json
-    // output all see the display name, while events/baseline keep the canonical
-    // key — which is what makes the names freely renamable in config.
-    for (display, canonical) in canonical_field_pairs(&store.config().workflow) {
-        if display == canonical {
-            continue;
-        }
-        for task in state.values_mut() {
-            if let Some(value) = task.custom_fields.remove(canonical) {
-                task.custom_fields.insert(display.clone(), value);
-            }
-        }
-    }
-    Ok(state)
+    let session = crate::action::read(store)?;
+    print_warnings(&session.warnings);
+    Ok(session.state)
 }
 
-/// Print (never fail on) the ONE-line non-conformance warning for a read
-/// command, pointing at the detail surface — the CLI's presentation of
-/// [`schema_conformance_report`]. Gated by `[workflow] warn_nonconforming` and
-/// active only while `[task_types]` declares schemas. Runs on RAW state —
-/// before the display renames and timestamp injection that would skew the
-/// check.
-fn warn_nonconforming(state: &HashMap<String, TaskState>, config: &Config) {
-    if !config.workflow.warn_nonconforming {
-        return;
-    }
-    let report = schema_conformance_report(state, config);
-    if let Some(example) = report.first() {
-        eprintln!(
-            "taska: warning: {} task(s) do not conform to their task-type schema (e.g. \
-             {example}) — `ta config validate` lists them, `ta repair --schema` applies the \
-             lossless fixes; writes to such a task must bring it into conformance. Silence \
-             with `workflow.warn_nonconforming = false`.",
-            report.len()
-        );
-    }
-}
-
-/// Insert a computed timestamp into a task's fields under `name` (RFC 3339), so
-/// it renders/searches/sorts like a normal field. A blank `name` disables that
-/// timestamp; a `None` value (e.g. `close_time` on an open task) injects
-/// nothing, staying consistent with the omit-absent-fields rule.
-fn inject_time(fields: &mut Map<String, Value>, name: &str, value: Option<DateTime<Utc>>) {
-    if name.is_empty() {
-        return;
-    }
-    if let Some(t) = value {
-        fields.insert(name.to_string(), Value::String(t.to_rfc3339()));
-    }
-}
-
-/// Inject the computed columns onto `state`, but only when the display references
-/// them (as a shown column, the sort key, or — via `extra_refs` — a filter
-/// criterion's field) — so default, `--full`, and json output stay unchanged
-/// unless asked. They are graph-derived and surfaced as ordinary fields, so
-/// `cell_value`/`--sort`/`--columns`/filtering handle them with no
-/// special-casing. Used by `list` (including `--ready`):
-///
-/// - `unblocks`/`blocked_by` — transitive not-done dependents / prerequisites
-///   over the blocker edges (numbers).
-/// - `subtasks` — a parent's `done/total` direct-child completion (string).
-pub(crate) fn inject_computed_columns(
-    store: &impl EventStore,
-    state: &mut HashMap<String, TaskState>,
-    workflow: &crate::config::WorkflowConfig,
-    display: &DisplayArgs,
-    cfg: &crate::config::DisplayConfig,
-    extra_refs: &[String],
-) {
-    let refs = crate::format::referenced_columns(display, cfg);
-    let wants = |name: &str| refs.iter().any(|c| c == name) || extra_refs.iter().any(|c| c == name);
-
-    if wants("unblocks") || wants("blocked_by") {
-        let blockers = store.config().relationships.blocker_types();
-        let counts = crate::graph::reachability_counts(
-            state,
-            &blockers,
-            &workflow.status_field,
-            &workflow.done_status,
-        );
-        for (id, task) in state.iter_mut() {
-            if let Some(&(unblocks, blocked_by)) = counts.get(id) {
-                task.custom_fields
-                    .insert("unblocks".to_string(), serde_json::json!(unblocks));
-                task.custom_fields
-                    .insert("blocked_by".to_string(), serde_json::json!(blocked_by));
-            }
-        }
-    }
-
-    if wants("subtasks") {
-        let hierarchy = store.config().relationships.hierarchy_types();
-        let progress = crate::graph::subtask_progress(
-            state,
-            &hierarchy,
-            &workflow.status_field,
-            &workflow.done_status,
-        );
-        for (id, task) in state.iter_mut() {
-            if let Some(&(done, total)) = progress.get(id) {
-                task.custom_fields.insert(
-                    "subtasks".to_string(),
-                    serde_json::json!(format!("{done}/{total}")),
-                );
-            }
-        }
-    }
-}
-
-/// A task's INVERSE relationship edges for display: for every OTHER task with an
-/// edge pointing here, that edge's configured `inverse` name (an empty inverse
-/// is one-way and not surfaced). Keyed by display name → sorted target ids. The
-/// task's own forward edges are not included — the `deps` column carries them,
-/// grouped by type. Used by `show`.
-pub(crate) fn inverse_edges(
-    state: &HashMap<String, TaskState>,
-    id: &str,
-    types: &BTreeMap<String, RelationshipDef>,
-) -> BTreeMap<String, BTreeSet<String>> {
-    let mut display: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for (other_id, other) in state {
-        if other_id == id {
-            continue;
-        }
-        for (rel_type, targets) in &other.relationships {
-            if !targets.iter().any(|t| t == id) {
-                continue;
-            }
-            if let Some(def) = types.get(rel_type) {
-                if !def.inverse.is_empty() {
-                    display
-                        .entry(def.inverse.clone())
-                        .or_default()
-                        .insert(other_id.clone());
+/// Render a read's [`Warning`](crate::action::Warning)s to stderr — the CLI's
+/// presentation of the data [`crate::action::read`] returns. Never blocks the
+/// read; the nonconformance warning is already gated (by config) in the action.
+pub(crate) fn print_warnings(warnings: &[crate::action::Warning]) {
+    use crate::action::Warning;
+    for warning in warnings {
+        match warning {
+            Warning::Orphans(n) => eprintln!(
+                "taska: warning: {n} orphaned event(s) in the log (no matching task) — \
+                 run `ta resolve` to clean them up."
+            ),
+            Warning::NonConformance(report) => {
+                if let Some(example) = report.first() {
+                    eprintln!(
+                        "taska: warning: {} task(s) do not conform to their task-type schema \
+                         (e.g. {example}) — `ta config validate` lists them, `ta repair \
+                         --schema` applies the lossless fixes; writes to such a task must bring \
+                         it into conformance. Silence with `workflow.warn_nonconforming = false`.",
+                        report.len()
+                    );
                 }
             }
         }
     }
-    display
-}
-
-/// The `(display name, canonical storage key)` pairs of the config-renamable
-/// fields: the workflow status and the task-type discriminator. Shared by the
-/// write-side mapping ([`canonicalize_fields`]) and `state_of`'s read-side
-/// rename, so the two boundaries can never disagree.
-pub(crate) const fn canonical_field_pairs(
-    workflow: &crate::config::WorkflowConfig,
-) -> [(&String, &'static str); 2] {
-    [
-        (&workflow.status_field, STATUS_KEY),
-        (&workflow.type_field, TASK_TYPE_KEY),
-    ]
 }
 
 /// Map configured DISPLAY field names onto their canonical storage keys, before
-/// vetting/appending — the write-side inverse of `state_of`'s display rename.
-/// Writing the canonical spelling directly while a different display name is
-/// configured is rejected: one name per concept per store, never two writable
-/// spellings.
+/// vetting/appending — the write-side inverse of `state_of`'s read-side rename.
+/// The shared `(display, canonical)` list lives in
+/// [`schema::canonical_field_pairs`](crate::schema::canonical_field_pairs) so
+/// the two boundaries can never disagree. Writing the canonical spelling
+/// directly while a different display name is configured is rejected: one name
+/// per concept per store, never two writable spellings.
 pub(crate) fn canonicalize_fields(
     fields: &mut Map<String, Value>,
     workflow: &crate::config::WorkflowConfig,
 ) -> Result<(), DynError> {
-    for (display, canonical) in canonical_field_pairs(workflow) {
+    for (display, canonical) in crate::schema::canonical_field_pairs(workflow) {
         if display == canonical {
             continue;
         }
@@ -792,6 +634,7 @@ pub(crate) fn confirm(prompt: &str, force: bool) -> Result<bool, DynError> {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
+    use crate::model::STATUS_KEY;
 
     #[test]
     fn update_without_fields_is_rejected_by_parser() {

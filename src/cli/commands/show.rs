@@ -1,8 +1,10 @@
 //! `ta show <id>` — a single task in full (every field it has, by default).
+//!
+//! The task (with its inverse edges surfaced) comes from [`crate::action::show`];
+//! this file is just its presentation.
 
-use serde_json::Value;
-
-use crate::cli::{inverse_edges, state_of};
+use crate::action::show;
+use crate::cli::print_warnings;
 use crate::config::DisplayConfig;
 use crate::error::DynError;
 use crate::format::{full_columns, render_rows, DisplayArgs};
@@ -19,20 +21,9 @@ pub fn cmd_show(
     display: &DisplayArgs,
     cfg: &DisplayConfig,
 ) -> Result<(), DynError> {
-    let state = state_of(store)?;
-    let mut task = state
-        .get(id)
-        .cloned()
-        .ok_or_else(|| format!("no task `{id}`"))?;
-    // Surface the INVERSE edges (other tasks' edges pointing here) as ordinary
-    // array fields under their configured inverse names, so the record and json
-    // both show them. The task's own forward edges are NOT injected — the `deps`
-    // built-in already carries them all, grouped by type.
-    let types = &store.config().relationships.types;
-    for (name, targets) in inverse_edges(&state, id, types) {
-        let arr = targets.into_iter().map(Value::String).collect();
-        task.custom_fields.insert(name, Value::Array(arr));
-    }
+    let outcome = show(store, id)?;
+    print_warnings(&outcome.warnings);
+    let task = outcome.task;
     let tasks = [&task];
     // Default to the full task: every field of this one task. An explicit
     // `--columns` overrides.
