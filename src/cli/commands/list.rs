@@ -1,9 +1,9 @@
 //! `ta list` — tasks rendered per the display args, optionally filtered.
 //!
-//! The filtered set comes from [`crate::action::list`] (positional
-//! `field<op>value` criteria, `--open`, `--ready`); this file resolves the
-//! display columns that drive computed-column injection, picks the
-//! empty-placeholder text, and renders.
+//! The filtered, ordered set comes from [`crate::action::list_tasks`]
+//! (positional `field<op>value` criteria, `--open`, `--ready`, `--sort`); this
+//! file resolves the display columns that drive computed-column injection, picks
+//! the empty-placeholder text, and renders.
 
 use crate::action::{list_tasks, ListQuery};
 use crate::cli::print_warnings;
@@ -24,6 +24,8 @@ pub fn cmd_list(
     // Which columns the table will show/sort by drives the action's lazy
     // injection of the graph-computed columns (it adds criterion fields itself).
     let display_columns = referenced_columns(display, cfg);
+    // The effective sort column: `--sort`, else `[display].sort`.
+    let sort = display.sort.as_deref().unwrap_or(cfg.sort.as_str());
     let outcome = list_tasks(
         store,
         &ListQuery {
@@ -31,6 +33,8 @@ pub fn cmd_list(
             open,
             ready,
             display_columns: &display_columns,
+            sort,
+            reverse: display.reverse,
         },
     )?;
     print_warnings(&outcome.warnings);
@@ -50,6 +54,6 @@ pub fn cmd_list(
     let mut display = display.clone();
     display.layout = Some(display.layout.unwrap_or(cfg.list_layout));
     let tasks: Vec<&TaskState> = outcome.tasks.iter().collect();
-    print_tasks(tasks, &display, cfg, &blockers, empty);
+    print_tasks(&tasks, &display, cfg, &blockers, empty);
     Ok(())
 }

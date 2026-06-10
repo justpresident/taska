@@ -7,7 +7,7 @@
 
 use serde_json::{json, Map};
 use taska::action;
-use taska::model::{OpType, TaskState};
+use taska::model::OpType;
 use taska::storage::{EventStore, FileStore};
 
 /// A throwaway file store under the system temp dir (outside the repo tree).
@@ -63,10 +63,15 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
             open: false,
             ready: false,
             display_columns: &[],
+            sort: "id",
+            reverse: false,
         },
     )
     .unwrap();
     assert_eq!(list.tasks.len(), 2);
+    // The action returns ORDERED data — by `id` here, so `a` before `b`.
+    let ids: Vec<&str> = list.tasks.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(ids, ["a", "b"], "list_tasks returns sorted tasks");
 
     // list --ready filters to the actionable task.
     let ready = action::list_tasks(
@@ -76,6 +81,8 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
             open: false,
             ready: true,
             display_columns: &[],
+            sort: "id",
+            reverse: false,
         },
     )
     .unwrap();
@@ -168,8 +175,7 @@ fn dep_tree_returns_the_requested_columns_per_node() {
 
     // No field name is hardcoded — the caller names the columns it wants; the
     // node `cells` carry exactly those (here `title` is a plain field, not a
-    // special one). Order is irrelevant for one root, so a trivial comparator.
-    let cmp = |_a: &TaskState, _b: &TaskState| std::cmp::Ordering::Equal;
+    // special one). The action orders siblings itself, given the sort column.
     let outcome = action::dep::tree(
         &store,
         &action::dep::TreeQuery {
@@ -177,8 +183,8 @@ fn dep_tree_returns_the_requested_columns_per_node() {
             open: false,
             reverse: false,
             columns: &["title".to_string(), "status".to_string()],
+            sort: "id",
         },
-        &cmp,
     )
     .unwrap();
 

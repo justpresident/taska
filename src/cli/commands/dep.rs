@@ -10,7 +10,7 @@ use crate::action::dep::{Kids, Node};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::OutputArgs;
-use crate::model::{OpType, TaskState, DEPS_KEY, ID_KEY, SUBTASKS_KEY};
+use crate::model::{OpType, DEPS_KEY, ID_KEY, SUBTASKS_KEY};
 use crate::storage::EventStore;
 
 /// `ta dep` subcommands. Edges are `type=target` tokens; `type` must be declared
@@ -140,11 +140,9 @@ fn dep_tree(
     reverse: bool,
     output: &OutputArgs,
 ) -> Result<(), DynError> {
-    // The action builds the forest; it takes the sibling/root ordering as a
-    // comparator (ascending by the chosen column) so it needn't depend on
-    // `format`'s sort. Resolve the column here, default `[display].sort`.
+    // The action builds and orders the forest itself; resolve the sort column
+    // here (default `[display].sort`) and hand it the name.
     let column = sort.unwrap_or_else(|| store.config().display.sort.clone());
-    let cmp = |a: &TaskState, b: &TaskState| crate::format::task_cmp(a, b, &column);
     // The per-node columns are the configured display columns minus `id` (the node
     // itself) and `deps` (the tree). No field name is hardcoded.
     let columns: Vec<String> = store
@@ -162,8 +160,8 @@ fn dep_tree(
             open,
             reverse,
             columns: &columns,
+            sort: &column,
         },
-        &cmp,
     )?;
     crate::cli::print_warnings(&outcome.warnings);
     let color = crate::format::want_color(output.no_color);

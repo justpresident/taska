@@ -3,10 +3,9 @@
 //! The selected columns (`--columns`/`--full`/config) decide *which* fields
 //! appear; `--format` decides only *how* they print, and every format shares the
 //! same column order. This module owns the display flags, column resolution,
-//! sorting, and the human/json/jsonl renderers; the command handlers feed it a
-//! task slice and print the result.
+//! and the human/json/jsonl renderers; the command handlers feed it an
+//! already-ordered task slice (ordering is the action's) and print the result.
 
-use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::io::IsTerminal;
 
@@ -14,7 +13,7 @@ use clap::{Args, ValueEnum};
 use serde_json::Value;
 
 use crate::config::{DisplayConfig, Layout};
-use crate::model::{cmp_json, TaskState, DEPS_KEY, ID_KEY};
+use crate::model::{cell_value, TaskState, DEPS_KEY, ID_KEY};
 
 /// Wrap `text` in an ANSI SGR sequence when `on`, else return it unchanged. Uses
 /// the terminal's NAMED 16-color palette (which the user's theme remaps for
@@ -134,20 +133,19 @@ pub(crate) fn emit(out: &OutputArgs, human: &str, value: &Value) {
     }
 }
 
-/// Sort a collected task set by the display args and print it, with `empty` as
-/// the human placeholder for no rows. `blockers` is the readiness-gating
-/// relationship-type set (`RelationshipConfig::blocker_types`), used only to
-/// style the deps cell. The shared print tail of `list` (plain, `--open`, or
-/// `--ready`), which differs only in how it gathers the tasks.
+/// Print an already-ordered task set, with `empty` as the human placeholder for
+/// no rows. `blockers` is the readiness-gating relationship-type set
+/// (`RelationshipConfig::blocker_types`), used only to style the deps cell. The
+/// shared print tail of `list` (plain, `--open`, or `--ready`), which differs
+/// only in how it gathers the tasks; ordering is the action's (`list_tasks`).
 pub(crate) fn print_tasks(
-    mut tasks: Vec<&TaskState>,
+    tasks: &[&TaskState],
     display: &DisplayArgs,
     cfg: &DisplayConfig,
     blockers: &BTreeSet<String>,
     empty: &str,
 ) {
-    sort_tasks(&mut tasks, display, cfg);
-    println!("{}", render(&tasks, display, cfg, blockers, empty));
+    println!("{}", render(tasks, display, cfg, blockers, empty));
 }
 
 /// Render tasks per the display args. The selected columns decide *which* fields
@@ -212,56 +210,6 @@ fn render_records(
         .map(|t| render_record(t, columns, color, blockers))
         .collect::<Vec<_>>()
         .join("\n\n")
-}
-
-/// Sort `tasks` in place by the effective sort column (`--sort`, else the
-/// configured default), ascending, with `id` as a stable tiebreaker; `--reverse`
-/// flips the result. The column may be `id`, `deps`, or any field (including the
-/// injected computed timestamps). Rows lacking the column sort last (ascending);
-/// an empty or unknown column leaves only the `id` tiebreak, i.e. orders by id.
-fn sort_tasks(tasks: &mut [&TaskState], display: &DisplayArgs, cfg: &DisplayConfig) {
-    let column = display.sort.as_deref().unwrap_or(cfg.sort.as_str());
-    tasks.sort_by(|a, b| task_cmp(a, b, column));
-    if display.reverse {
-        tasks.reverse();
-    }
-}
-
-/// Compare two tasks by one column, ascending, with `id` as the stable
-/// tiebreaker — a present value sorts before a missing one. The shared ordering
-/// behind `list`'s `--sort` and `dep tree`'s sibling sort. `--reverse` flips the
-/// result at the call site.
-pub(crate) fn task_cmp(a: &TaskState, b: &TaskState, column: &str) -> Ordering {
-    let ord = match (cell_value(a, column), cell_value(b, column)) {
-        (Some(x), Some(y)) => cmp_json(&x, &y),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    };
-    ord.then_with(|| a.id.cmp(&b.id))
-}
-
-/// The value of `column` for a task as a JSON `Value` — the single source of
-/// truth shared by JSON output, human rendering, and sorting. `id` is the id
-/// string, `deps` the task's typed relationships map (`{type: [targets…]}` —
-/// every edge, keyed by relationship type, `{}` when none), and anything else a
-/// custom or computed field. `None` only for a missing custom field (the
-/// built-ins always resolve), which is how JSON omits absent fields and sorting
-/// orders them last.
-fn cell_value(task: &TaskState, column: &str) -> Option<Value> {
-    match column {
-        ID_KEY => Some(Value::String(task.id.clone())),
-        DEPS_KEY => Some(Value::Object(
-            task.relationships
-                .iter()
-                .map(|(rel, targets)| {
-                    let arr = targets.iter().cloned().map(Value::String).collect();
-                    (rel.clone(), Value::Array(arr))
-                })
-                .collect(),
-        )),
-        _ => task.custom_fields.get(column).cloned(),
-    }
 }
 
 /// The deps cell's type groups, in map (= JSON key) order: one
@@ -714,44 +662,9 @@ mod tests {
     }
 
     #[test]
-    fn sort_tasks_orders_by_column_missing_last_and_reverse() {
-        let pri3 = task("a", &[], &[("priority", serde_json::json!(3))]);
-        let pri1 = task("b", &[], &[("priority", serde_json::json!(1))]);
-        let pri2 = task("c", &[], &[("priority", serde_json::json!(2))]);
-        let none = task("d", &[], &[]); // no priority -> sorts last (ascending)
-        let cfg = DisplayConfig::default();
-        let args = |sort: &str, reverse: bool| DisplayArgs {
-            output: OutputArgs {
-                format: OutputFormat::Human,
-                no_color: false,
-            },
-            full: false,
-            columns: None,
-            sort: Some(sort.to_string()),
-            reverse,
-            layout: None,
-        };
-        let ids =
-            |tasks: &[&TaskState]| -> Vec<String> { tasks.iter().map(|t| t.id.clone()).collect() };
-
-        // Numeric ascending, with the missing-value task last.
-        let mut list = vec![&pri3, &pri1, &pri2, &none];
-        sort_tasks(&mut list, &args("priority", false), &cfg);
-        assert_eq!(ids(&list), ["b", "c", "a", "d"], "asc, missing last");
-
-        // --reverse flips the whole order.
-        let mut list = vec![&pri3, &pri1, &pri2, &none];
-        sort_tasks(&mut list, &args("priority", true), &cfg);
-        assert_eq!(ids(&list), ["d", "a", "c", "b"], "reversed");
-
-        // An unknown column leaves only the id tiebreak (orders by id).
-        let mut list = vec![&pri2, &pri3, &pri1];
-        sort_tasks(&mut list, &args("nope", false), &cfg);
-        assert_eq!(ids(&list), ["a", "b", "c"], "unknown column -> by id");
-    }
-
-    #[test]
-    fn cell_value_unifies_columns_and_human_joins_arrays() {
+    fn human_cell_renders_each_column_form() {
+        // The column→value projection itself ([`crate::model::cell_value`]) is
+        // tested in `model`; here we cover only the human rendering on top of it.
         let mut t = task(
             "api",
             &["db", "web"],
@@ -762,16 +675,6 @@ mod tests {
         );
         t.relationships
             .insert("relates_to".to_string(), vec!["infra".to_string()]);
-
-        // cell_value is the single source of truth: id string, deps as the typed
-        // relationships map, custom passthrough, and None for a missing field.
-        assert_eq!(cell_value(&t, "id"), Some(serde_json::json!("api")));
-        assert_eq!(
-            cell_value(&t, "deps"),
-            Some(serde_json::json!({"depends_on": ["db", "web"], "relates_to": ["infra"]}))
-        );
-        assert_eq!(cell_value(&t, "priority"), Some(serde_json::json!(3)));
-        assert_eq!(cell_value(&t, "missing"), None);
 
         // Human cells: bare string, deps as labeled type groups, arrays joined,
         // numbers as their text, empty for a missing column.
@@ -844,19 +747,6 @@ mod tests {
             colored.contains("\x1b[2mrelates_to: x\x1b[0m"),
             "dim group: {colored:?}"
         );
-    }
-
-    #[test]
-    fn cmp_json_orders_numbers_strings_and_mixed_types() {
-        use serde_json::json;
-        assert_eq!(
-            cmp_json(&json!(2), &json!(10)),
-            Ordering::Less,
-            "numeric, not lexical"
-        );
-        assert_eq!(cmp_json(&json!("a"), &json!("b")), Ordering::Less);
-        // Mixed types fall back to a stable per-type rank (number < string).
-        assert_eq!(cmp_json(&json!(1), &json!("1")), Ordering::Less);
     }
 
     #[test]

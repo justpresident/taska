@@ -17,7 +17,9 @@ use crate::action::{inject_computed_columns, materialize, read, Warning};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::graph;
-use crate::model::{is_done, MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, TARGET_KEY};
+use crate::model::{
+    is_done, task_cmp, MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, TARGET_KEY,
+};
 use crate::schema::vet_events;
 use crate::storage::EventStore;
 
@@ -401,6 +403,8 @@ pub struct TreeQuery<'a> {
     pub open: bool,
     pub reverse: bool,
     pub columns: &'a [String],
+    /// The column siblings/roots are ordered by, ascending (`--reverse` flips).
+    pub sort: &'a str,
 }
 
 /// A `tree` read: the built-once forest plus any read warnings.
@@ -411,15 +415,9 @@ pub struct TreeOutcome {
 
 /// Build the blocker-graph forest, children nested under their dependents.
 ///
-/// `cmp` orders siblings/roots — ascending by the frontend's chosen column; this
-/// layer applies `reverse` and the missing-last rule on top, so ordering policy
-/// stays the frontend's without the action depending on `format`. (When the sort
-/// machinery is lifted out of `format`, `cmp` can come from there instead.)
-pub fn tree(
-    store: &impl EventStore,
-    query: &TreeQuery,
-    cmp: &dyn Fn(&TaskState, &TaskState) -> Ordering,
-) -> Result<TreeOutcome, DynError> {
+/// Siblings and roots are ordered by `query.sort` ascending (via the neutral
+/// [`task_cmp`]), with `reverse` and the missing-last rule applied on top.
+pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, DynError> {
     let session = read(store)?;
     let mut state = session.state;
     // Inject any graph-computed columns the query asked for (timestamps already
@@ -458,7 +456,7 @@ pub fn tree(
         }
         query.roots.to_vec()
     };
-    sort_ids(&mut roots, &state, cmp, query.reverse);
+    sort_ids(&mut roots, &state, query.sort, query.reverse);
     if query.open {
         roots.retain(|r| open_subtrees.contains(r));
     }
@@ -475,7 +473,7 @@ pub fn tree(
         hierarchy: &hierarchy,
         status_field: &wf.status_field,
         done_status: &wf.done_status,
-        cmp,
+        sort: query.sort,
         reverse: query.reverse,
         open: query.open,
         open_subtrees: &open_subtrees,
@@ -504,7 +502,8 @@ struct TreeCtx<'a> {
     hierarchy: &'a BTreeSet<String>,
     status_field: &'a str,
     done_status: &'a str,
-    cmp: &'a dyn Fn(&TaskState, &TaskState) -> Ordering,
+    /// The column siblings are ordered by (via [`task_cmp`]).
+    sort: &'a str,
     reverse: bool,
     open: bool,
     /// Tasks whose blocker-subtree contains at least one open task.
@@ -591,25 +590,21 @@ fn build(
     }
 }
 
-/// Order two task ids by the injected comparator (missing tasks last, id tiebreak).
+/// Order two task ids by the sort column (missing tasks last, id tiebreak).
 fn child_cmp(ctx: &TreeCtx, a: &str, b: &str) -> Ordering {
     match (ctx.state.get(a), ctx.state.get(b)) {
-        (Some(ta), Some(tb)) => (ctx.cmp)(ta, tb),
+        (Some(ta), Some(tb)) => task_cmp(ta, tb, ctx.sort),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => a.cmp(b),
     }
 }
 
-/// Sort task ids in place by `cmp` (missing tasks last), flipped by `reverse`.
-fn sort_ids(
-    ids: &mut [String],
-    state: &HashMap<String, TaskState>,
-    cmp: &dyn Fn(&TaskState, &TaskState) -> Ordering,
-    reverse: bool,
-) {
+/// Sort task ids in place by the `sort` column (missing tasks last), flipped by
+/// `reverse`.
+fn sort_ids(ids: &mut [String], state: &HashMap<String, TaskState>, sort: &str, reverse: bool) {
     ids.sort_by(|a, b| match (state.get(a), state.get(b)) {
-        (Some(ta), Some(tb)) => cmp(ta, tb),
+        (Some(ta), Some(tb)) => task_cmp(ta, tb, sort),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => a.cmp(b),

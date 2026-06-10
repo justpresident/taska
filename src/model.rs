@@ -368,6 +368,49 @@ pub fn is_done(task: &TaskState, status_field: &str, done_status: &str) -> bool 
     task.custom_fields.get(status_field).and_then(Value::as_str) == Some(done_status)
 }
 
+/// The value of `column` for a task as a JSON `Value` — the single source of
+/// truth shared by JSON output, human rendering, sorting, and filtering.
+///
+/// `id` is the id string, `deps` the task's typed relationships map
+/// (`{type: [targets…]}` — every edge keyed by relationship type, `{}` when
+/// none), and anything else a custom or computed field. `None` only for a
+/// missing custom field (the built-ins always resolve), which is how JSON omits
+/// absent fields and sorting orders them last.
+#[must_use]
+pub fn cell_value(task: &TaskState, column: &str) -> Option<Value> {
+    match column {
+        ID_KEY => Some(Value::String(task.id.clone())),
+        DEPS_KEY => Some(Value::Object(
+            task.relationships
+                .iter()
+                .map(|(rel, targets)| {
+                    let arr = targets.iter().cloned().map(Value::String).collect();
+                    (rel.clone(), Value::Array(arr))
+                })
+                .collect(),
+        )),
+        _ => task.custom_fields.get(column).cloned(),
+    }
+}
+
+/// Compare two tasks by one `column`, ascending, with `id` as the stable
+/// tiebreaker — a present value sorts before a missing one.
+///
+/// The shared ordering behind `list`'s `--sort` and `dep tree`'s sibling sort
+/// (both keyed off [`cell_value`] and [`cmp_json`]); `--reverse` flips the
+/// result at the call site.
+#[must_use]
+pub fn task_cmp(a: &TaskState, b: &TaskState, column: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let ord = match (cell_value(a, column), cell_value(b, column)) {
+        (Some(x), Some(y)) => cmp_json(&x, &y),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    };
+    ord.then_with(|| a.id.cmp(&b.id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,5 +432,82 @@ mod tests {
     fn verify_seq_order_rejects_disorder_and_duplicates() {
         assert!(verify_seq_order(&[at(2), at(1)]).is_err(), "out of order");
         assert!(verify_seq_order(&[at(1), at(1)]).is_err(), "duplicate seq");
+    }
+
+    #[test]
+    fn cmp_json_orders_numbers_strings_and_mixed_types() {
+        use serde_json::json;
+        use std::cmp::Ordering;
+        assert_eq!(
+            cmp_json(&json!(2), &json!(10)),
+            Ordering::Less,
+            "numeric, not lexical"
+        );
+        assert_eq!(cmp_json(&json!("a"), &json!("b")), Ordering::Less);
+        // Mixed types fall back to a stable per-type rank (number < string).
+        assert_eq!(cmp_json(&json!(1), &json!("1")), Ordering::Less);
+    }
+
+    #[test]
+    fn cell_value_projects_columns_and_task_cmp_orders_by_them() {
+        use crate::test_support::task;
+        use serde_json::json;
+        use std::cmp::Ordering;
+
+        let mut t = task("api", &["db", "web"], &[("priority", json!(3))]);
+        t.relationships
+            .insert("relates_to".to_string(), vec!["infra".to_string()]);
+
+        // cell_value: id string, deps as the typed relationships map, custom
+        // passthrough, and None for a field the task lacks.
+        assert_eq!(cell_value(&t, ID_KEY), Some(json!("api")));
+        assert_eq!(
+            cell_value(&t, DEPS_KEY),
+            Some(json!({"depends_on": ["db", "web"], "relates_to": ["infra"]}))
+        );
+        assert_eq!(cell_value(&t, "priority"), Some(json!(3)));
+        assert_eq!(cell_value(&t, "missing"), None);
+
+        // task_cmp: numeric (not lexical) order on the column; a present value
+        // sorts before a missing one; equal columns fall back to the id.
+        let lo = task("z", &[], &[("priority", json!(2))]);
+        let hi = task("a", &[], &[("priority", json!(10))]);
+        assert_eq!(
+            task_cmp(&lo, &hi, "priority"),
+            Ordering::Less,
+            "2 < 10 numerically, ignoring ids"
+        );
+        let none = task("b", &[], &[]);
+        assert_eq!(
+            task_cmp(&hi, &none, "priority"),
+            Ordering::Less,
+            "present sorts before missing"
+        );
+        let a2 = task("a", &[], &[("priority", json!(2))]);
+        let z2 = task("z", &[], &[("priority", json!(2))]);
+        assert_eq!(
+            task_cmp(&a2, &z2, "priority"),
+            Ordering::Less,
+            "equal column → id tiebreak"
+        );
+
+        // Driving a whole-vector sort: ascending with the missing-value task
+        // last, an unknown column collapsing to the id tiebreak, and reverse as
+        // a plain flip on top — the policy `list`/`dep tree` apply.
+        let pri3 = task("a", &[], &[("priority", json!(3))]);
+        let pri1 = task("b", &[], &[("priority", json!(1))]);
+        let pri2 = task("c", &[], &[("priority", json!(2))]);
+        let none = task("d", &[], &[]);
+        let ids = |v: &[&TaskState]| -> Vec<String> { v.iter().map(|t| t.id.clone()).collect() };
+
+        let mut list = vec![&pri3, &pri1, &pri2, &none];
+        list.sort_by(|a, b| task_cmp(a, b, "priority"));
+        assert_eq!(ids(&list), ["b", "c", "a", "d"], "asc, missing last");
+        list.reverse();
+        assert_eq!(ids(&list), ["d", "a", "c", "b"], "reversed");
+
+        let mut unknown = vec![&pri2, &pri3, &pri1];
+        unknown.sort_by(|a, b| task_cmp(a, b, "nope"));
+        assert_eq!(ids(&unknown), ["a", "b", "c"], "unknown column → by id");
     }
 }

@@ -2,8 +2,8 @@
 //!
 //! Compiles positional `field<op>value` criteria (`=` exact, `~` regex, `!=`/
 //! `!~` their negations), applies the `--open`/`--ready` shortcuts, injects the
-//! graph-computed columns a query references, and returns the matching tasks as
-//! data — ordering and rendering are the frontend's job.
+//! graph-computed columns a query references, and returns the matching tasks
+//! ordered by the query's sort column — rendering is the frontend's job.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -13,11 +13,11 @@ use crate::action::{inject_computed_columns, read, Warning};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::graph;
-use crate::model::{is_done, TaskState, DEPS_KEY, ID_KEY};
+use crate::model::{is_done, task_cmp, TaskState, DEPS_KEY, ID_KEY};
 use crate::storage::EventStore;
 
-/// A `list` query: the filter criteria, the not-done / ready shortcuts, and the
-/// columns the frontend intends to display.
+/// A `list` query: the filter criteria, the not-done / ready shortcuts, the
+/// columns the frontend intends to display, and the sibling ordering.
 pub struct ListQuery<'a> {
     pub criteria: &'a [String],
     /// Only not-done tasks (status is not the configured done value).
@@ -29,10 +29,16 @@ pub struct ListQuery<'a> {
     /// the graph-computed columns (`unblocks`/`blocked_by`/`subtasks`), so they
     /// cost nothing unless referenced. Criterion fields are added automatically.
     pub display_columns: &'a [String],
+    /// The column to order by, ascending (`id` tiebreak, missing values last —
+    /// see [`task_cmp`]). May be `id`, `deps`, a custom field, or an injected
+    /// computed column.
+    pub sort: &'a str,
+    /// Flip the order to descending.
+    pub reverse: bool,
 }
 
 /// A `list` read: the matching tasks (filtered, with referenced computed columns
-/// injected; unordered) plus any read [`Warning`]s.
+/// injected, ordered by the query's sort column) plus any read [`Warning`]s.
 pub struct ListOutcome {
     pub tasks: Vec<TaskState>,
     pub warnings: Vec<Warning>,
@@ -82,13 +88,19 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
         None
     };
 
-    let tasks: Vec<TaskState> = state
+    let mut tasks: Vec<TaskState> = state
         .values()
         .filter(|t| !query.open || !is_done(t, &workflow.status_field, &workflow.done_status))
         .filter(|t| ready_set.as_ref().is_none_or(|s| s.contains(&t.id)))
         .filter(|t| criteria.iter().all(|c| c.matches(t, &ctx)))
         .cloned()
         .collect();
+
+    // Return ordered data: the frontend renders the slice as-is.
+    tasks.sort_by(|a, b| task_cmp(a, b, query.sort));
+    if query.reverse {
+        tasks.reverse();
+    }
 
     Ok(ListOutcome {
         tasks,
