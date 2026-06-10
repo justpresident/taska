@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Maintaining this file:** describe the current state, not the changes that produced it. No "X was renamed/moved/replaced", no "now"/"no longer", no closed-task references — a reader has no memory of the diff, so change-narrative is dead weight. Only forward-looking pointers to *open* work earn their place.
+
 ## What this is
 
 `taska` is a local-first, git-native task & dependency tracker. The crate is `taska`; the binary is `ta`. Tasks live in an **append-only event log** (`.taska/mutations.jsonl`); the state you see is *replayed* from that log, never stored as a snapshot. A custom git merge driver reconciles concurrent edits on different branches per-field. See `README.md` for the user-facing model.
