@@ -19,7 +19,9 @@ use std::collections::HashMap;
 
 use crate::config::Config;
 use crate::engine::Engine;
-use crate::model::{MutationEvent, TaskState};
+use crate::graph;
+use crate::model::{MutationEvent, TaskState, BLOCKED_BY_KEY, SUBTASKS_KEY, UNBLOCKS_KEY};
+use crate::storage::EventStore;
 
 pub mod compact;
 pub mod config;
@@ -56,4 +58,60 @@ pub(crate) fn materialize(
         log.to_vec(),
         &config.workflow.done_status,
     )
+}
+
+/// Inject the graph-computed columns onto `state`, but only those `wanted` by the
+/// caller — so they cost nothing unless a query/display actually references one.
+///
+/// The shared generic-column primitive: `list` (display + criterion columns) and
+/// `dep tree` (its configured columns) both call this, so every multi-result
+/// action surfaces the same computed columns the same way. They're injected as
+/// ordinary fields, so `cell_value`/sorting/filtering/rendering handle them with
+/// no special-casing:
+/// - `unblocks`/`blocked_by` — transitive not-done dependents / prerequisites
+///   over the blocker edges (numbers).
+/// - `subtasks` — a parent's `done/total` direct-child completion (string).
+pub(crate) fn inject_computed_columns(
+    store: &impl EventStore,
+    state: &mut HashMap<String, TaskState>,
+    wanted: &[&str],
+) {
+    let wants = |name: &str| wanted.contains(&name);
+    let workflow = &store.config().workflow;
+
+    if wants(UNBLOCKS_KEY) || wants(BLOCKED_BY_KEY) {
+        let blockers = store.config().relationships.blocker_types();
+        let counts = graph::reachability_counts(
+            state,
+            &blockers,
+            &workflow.status_field,
+            &workflow.done_status,
+        );
+        for (id, task) in state.iter_mut() {
+            if let Some(&(unblocks, blocked_by)) = counts.get(id) {
+                task.custom_fields
+                    .insert(UNBLOCKS_KEY.to_string(), serde_json::json!(unblocks));
+                task.custom_fields
+                    .insert(BLOCKED_BY_KEY.to_string(), serde_json::json!(blocked_by));
+            }
+        }
+    }
+
+    if wants(SUBTASKS_KEY) {
+        let hierarchy = store.config().relationships.hierarchy_types();
+        let progress = graph::subtask_progress(
+            state,
+            &hierarchy,
+            &workflow.status_field,
+            &workflow.done_status,
+        );
+        for (id, task) in state.iter_mut() {
+            if let Some(&(done, total)) = progress.get(id) {
+                task.custom_fields.insert(
+                    SUBTASKS_KEY.to_string(),
+                    serde_json::json!(format!("{done}/{total}")),
+                );
+            }
+        }
+    }
 }

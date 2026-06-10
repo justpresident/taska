@@ -7,7 +7,7 @@
 
 use serde_json::{json, Map};
 use taska::action;
-use taska::model::OpType;
+use taska::model::{OpType, TaskState};
 use taska::storage::{EventStore, FileStore};
 
 /// A throwaway file store under the system temp dir (outside the repo tree).
@@ -149,4 +149,43 @@ fn dep_plan_and_cycles_return_typed_graph_data() {
     // no cycles in this DAG.
     let cycles = action::dep::cycles(&store).unwrap();
     assert!(cycles.cycles.is_empty());
+}
+
+#[test]
+fn dep_tree_returns_the_requested_columns_per_node() {
+    let store = provision("tree-columns");
+    create(&store, "parent", "Parent task", "todo");
+    create(&store, "child", "Child task", "todo");
+    let types = store.config().relationships.types.clone();
+    action::dep::apply_edges(
+        &store,
+        "parent",
+        &["depends_on=child".to_string()],
+        &OpType::AddEdge,
+        &types,
+    )
+    .unwrap();
+
+    // No field name is hardcoded — the caller names the columns it wants; the
+    // node `cells` carry exactly those (here `title` is a plain field, not a
+    // special one). Order is irrelevant for one root, so a trivial comparator.
+    let cmp = |_a: &TaskState, _b: &TaskState| std::cmp::Ordering::Equal;
+    let outcome = action::dep::tree(
+        &store,
+        &action::dep::TreeQuery {
+            roots: &["parent".to_string()],
+            open: false,
+            reverse: false,
+            columns: &["title".to_string(), "status".to_string()],
+        },
+        &cmp,
+    )
+    .unwrap();
+
+    assert_eq!(outcome.forest.len(), 1);
+    let root = &outcome.forest[0];
+    assert_eq!(root.id, "parent");
+    let cells: std::collections::HashMap<_, _> = root.cells.iter().cloned().collect();
+    assert_eq!(cells.get("title"), Some(&json!("Parent task")));
+    assert_eq!(cells.get("status"), Some(&json!("todo")));
 }

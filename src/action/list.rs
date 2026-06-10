@@ -9,13 +9,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::Value;
 
-use crate::action::{read, Warning};
+use crate::action::{inject_computed_columns, read, Warning};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::graph;
-use crate::model::{
-    is_done, TaskState, BLOCKED_BY_KEY, DEPS_KEY, ID_KEY, SUBTASKS_KEY, UNBLOCKS_KEY,
-};
+use crate::model::{is_done, TaskState, DEPS_KEY, ID_KEY};
 use crate::storage::EventStore;
 
 /// A `list` query: the filter criteria, the not-done / ready shortcuts, and the
@@ -49,10 +47,12 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
     let mut state = session.state;
     let workflow = &store.config().workflow;
 
-    // Criterion fields count as referenced, so a filter on a computed column
-    // (`unblocks=0`) injects it without --columns/--sort naming it.
-    let criteria_fields: Vec<&str> = criteria.iter().map(|c| c.field.as_str()).collect();
-    inject_computed_columns(store, &mut state, query.display_columns, &criteria_fields);
+    // The columns this query touches: what the frontend will display/sort, plus
+    // the criterion fields (so a filter on `unblocks=0` injects the column without
+    // --columns/--sort naming it).
+    let mut wanted: Vec<&str> = query.display_columns.iter().map(String::as_str).collect();
+    wanted.extend(criteria.iter().map(|c| c.field.as_str()));
+    inject_computed_columns(store, &mut state, &wanted);
 
     // Filtering context: declared relationship types resolve as filter fields
     // (forward by type name, reverse by inverse name); the reverse index is built
@@ -94,61 +94,6 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
         tasks,
         warnings: session.warnings,
     })
-}
-
-/// Inject the graph-computed columns onto `state`, but only when the query
-/// references them (a displayed/sorted column or a criterion field) — so default
-/// output stays unchanged unless asked. They are surfaced as ordinary fields, so
-/// `cell_value`/sorting/filtering handle them with no special-casing.
-///
-/// - `unblocks`/`blocked_by` — transitive not-done dependents / prerequisites
-///   over the blocker edges (numbers).
-/// - `subtasks` — a parent's `done/total` direct-child completion (string).
-fn inject_computed_columns(
-    store: &impl EventStore,
-    state: &mut HashMap<String, TaskState>,
-    display_columns: &[String],
-    criteria_fields: &[&str],
-) {
-    let wants =
-        |name: &str| display_columns.iter().any(|c| c == name) || criteria_fields.contains(&name);
-    let workflow = &store.config().workflow;
-
-    if wants(UNBLOCKS_KEY) || wants(BLOCKED_BY_KEY) {
-        let blockers = store.config().relationships.blocker_types();
-        let counts = graph::reachability_counts(
-            state,
-            &blockers,
-            &workflow.status_field,
-            &workflow.done_status,
-        );
-        for (id, task) in state.iter_mut() {
-            if let Some(&(unblocks, blocked_by)) = counts.get(id) {
-                task.custom_fields
-                    .insert(UNBLOCKS_KEY.to_string(), serde_json::json!(unblocks));
-                task.custom_fields
-                    .insert(BLOCKED_BY_KEY.to_string(), serde_json::json!(blocked_by));
-            }
-        }
-    }
-
-    if wants(SUBTASKS_KEY) {
-        let hierarchy = store.config().relationships.hierarchy_types();
-        let progress = graph::subtask_progress(
-            state,
-            &hierarchy,
-            &workflow.status_field,
-            &workflow.done_status,
-        );
-        for (id, task) in state.iter_mut() {
-            if let Some(&(done, total)) = progress.get(id) {
-                task.custom_fields.insert(
-                    SUBTASKS_KEY.to_string(),
-                    serde_json::json!(format!("{done}/{total}")),
-                );
-            }
-        }
-    }
 }
 
 /// A filter operator. `=`/`!=` compare the field's value against a JSON-coerced

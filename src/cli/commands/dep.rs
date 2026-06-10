@@ -10,7 +10,7 @@ use crate::action::dep::{Kids, Node};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::OutputArgs;
-use crate::model::{OpType, TaskState, ID_KEY, SUBTASKS_KEY};
+use crate::model::{OpType, TaskState, DEPS_KEY, ID_KEY, SUBTASKS_KEY};
 use crate::storage::EventStore;
 
 /// `ta dep` subcommands. Edges are `type=target` tokens; `type` must be declared
@@ -145,12 +145,23 @@ fn dep_tree(
     // `format`'s sort. Resolve the column here, default `[display].sort`.
     let column = sort.unwrap_or_else(|| store.config().display.sort.clone());
     let cmp = |a: &TaskState, b: &TaskState| crate::format::task_cmp(a, b, &column);
+    // The per-node columns are the configured display columns minus `id` (the node
+    // itself) and `deps` (the tree). No field name is hardcoded.
+    let columns: Vec<String> = store
+        .config()
+        .display
+        .columns
+        .iter()
+        .filter(|c| c.as_str() != ID_KEY && c.as_str() != DEPS_KEY)
+        .cloned()
+        .collect();
     let outcome = crate::action::dep::tree(
         store,
         &crate::action::dep::TreeQuery {
             roots: tasks,
             open,
             reverse,
+            columns: &columns,
         },
         &cmp,
     )?;
@@ -168,21 +179,22 @@ fn dep_tree(
     Ok(())
 }
 
-/// The colored label for one node: id, a shortened `title`, the edge tag
-/// (`[subtask]` magenta, `[type]` plain, nothing for `depends_on`/root) and its
-/// `[subtasks d/t]` rollup. A done node is dimmed and prefixed `✓`. The connectors
-/// and position markers (`(cycle)`/`(missing)`/`…`) are added by the caller.
+/// The colored label for one node: id, then each requested column's value
+/// (truncated), the edge tag (`[subtask]` magenta, `[type]` plain, nothing for
+/// `depends_on`/root) and its `[subtasks d/t]` rollup. A done node is dimmed and
+/// prefixed `✓`. The connectors and position markers (`(cycle)`/`(missing)`/`…`)
+/// are added by the caller.
 fn node_label(node: &Node, color: bool) -> String {
-    let title_part = if node.title.is_empty() {
-        String::new()
-    } else {
-        format!("  {}", crate::format::truncate(&node.title, TREE_TITLE_MAX))
-    };
+    let mut cells = String::new();
+    for (_, v) in &node.cells {
+        cells.push_str("  ");
+        cells.push_str(&crate::format::truncate(&render_cell(v), TREE_TITLE_MAX));
+    }
     let rollup = node
         .rollup
         .map_or(String::new(), |(d, t)| format!(" [subtasks {d}/{t}]"));
     if node.done {
-        let mut s = format!("✓ {}{title_part}", node.id);
+        let mut s = format!("✓ {}{cells}", node.id);
         if let Some(e) = &node.edge {
             s.push_str(" [");
             s.push_str(e);
@@ -192,7 +204,7 @@ fn node_label(node: &Node, color: bool) -> String {
         crate::format::sgr(&s, "2", color)
     } else {
         let mut s = crate::format::sgr(&node.id, "36", color);
-        s.push_str(&title_part);
+        s.push_str(&cells);
         if let Some(e) = &node.edge {
             let tag = format!(" [{e}]");
             s.push_str(&if e == "subtask" {
@@ -205,6 +217,16 @@ fn node_label(node: &Node, color: bool) -> String {
             s.push_str(&crate::format::sgr(&rollup, "33", color));
         }
         s
+    }
+}
+
+/// A column value as a one-line human string: the raw string for a JSON string,
+/// elements joined by `", "` for an array, else its compact JSON.
+fn render_cell(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Array(a) => a.iter().map(render_cell).collect::<Vec<_>>().join(", "),
+        other => other.to_string(),
     }
 }
 
@@ -245,14 +267,9 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool) {
 fn node_json(node: &Node) -> Value {
     let mut o = serde_json::Map::new();
     o.insert(ID_KEY.to_string(), Value::String(node.id.clone()));
-    if !node.title.is_empty() {
-        o.insert(
-            "title".to_string(),
-            Value::String(crate::format::truncate(&node.title, TREE_TITLE_MAX)),
-        );
-    }
-    if !node.status.is_empty() {
-        o.insert("status".to_string(), Value::String(node.status.clone()));
+    // Each requested column becomes a key, full value (json isn't truncated).
+    for (name, value) in &node.cells {
+        o.insert(name.clone(), value.clone());
     }
     o.insert("done".to_string(), Value::Bool(node.done));
     if let Some(e) = &node.edge {

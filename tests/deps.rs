@@ -175,7 +175,7 @@ fn dep_tree_nests_dependencies_and_collapses_shared_nodes() {
     assert!(tree.contains("└─ e"), "e nested under d: {tree}");
     // d (with its e subtree) is reached again under c, but was already expanded
     // under b — the second occurrence collapses rather than reprinting.
-    assert!(tree.contains("d …"), "shared node collapsed: {tree}");
+    assert!(tree.contains('…'), "shared node collapsed: {tree}");
 }
 
 #[test]
@@ -222,12 +222,14 @@ fn custom_blocker_relationship_gates_readiness() {
     assert!(lists_task(&ready, "b"), "b ready: {ready}");
     assert!(!lists_task(&ready, "a"), "a blocked by requires=b: {ready}");
 
-    // The tree walks the typed blocker edge and labels it.
+    // The tree walks the typed blocker edge and labels it; the status column
+    // (default display.columns) now shows next to each node.
     let tree = ta(&dir, &["dep", "tree", "a"]);
     assert!(
-        tree.contains("b [requires]"),
+        tree.contains("[requires]"),
         "typed blocker labelled: {tree}"
     );
+    assert!(tree.contains("open"), "status column shown in tree: {tree}");
 
     // A cycle through the custom blocker type is detected too.
     ta(&dir, &["dep", "add", "b", "requires=a"]);
@@ -414,11 +416,13 @@ fn dep_tree_marks_subtasks_and_rolls_up_progress() {
 
     let tree = ta(&dir, &["dep", "tree", "epic"]);
     assert!(
-        tree.contains("epic [subtasks 1/2]"),
+        tree.contains("[subtasks 1/2]"),
         "parent rolls up child completion: {tree}"
     );
-    assert!(tree.contains("a [subtask]"), "subtask tagged: {tree}");
-    assert!(tree.contains("b [subtask]"), "subtask tagged: {tree}");
+    assert!(
+        tree.matches("[subtask]").count() == 2,
+        "both subtasks tagged: {tree}"
+    );
     // A plain depends_on edge is a dependency, not a subtask — never tagged.
     assert!(
         tree.contains("dep1") && !tree.contains("dep1 [subtask]"),

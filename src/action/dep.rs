@@ -1,17 +1,19 @@
 //! `dep` group actions: add/remove typed edges, and the read views
-//! (`cycles`/`plan`; `tree` lands with the sorting extraction).
+//! (`cycles`/`plan`/`tree`).
 //!
 //! The write side resolves user-facing `type=target` edges to canonical stored
 //! edges, enforces the structural blocker invariants, and appends under the lock;
-//! the read side returns typed graph data (cycle lists, ordered prerequisites)
-//! plus warnings. Nothing here prints.
+//! the read side returns typed graph data (cycle lists, ordered prerequisites,
+//! the tree forest with the requested columns per node) plus warnings. No field
+//! name is hardcoded — `tree` fetches whatever columns the caller asks for.
+//! Nothing here prints.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
-use crate::action::{materialize, read, Warning};
+use crate::action::{inject_computed_columns, materialize, read, Warning};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::graph;
@@ -358,12 +360,17 @@ fn critical_path(
 
 /// One node of a dependency tree, built once for any frontend to render.
 ///
-/// `title` is the FULL task title — renderers truncate to taste, so this layer
-/// stays free of display concerns.
+/// `cells` carries the FULL value of each requested column the task has (no
+/// hardcoded field names — the caller chooses which columns); renderers truncate
+/// to taste, so this layer stays free of display concerns.
 pub struct Node {
     pub id: String,
-    pub title: String,
-    pub status: String,
+    /// `(column name, value)` for each [`TreeQuery::columns`] the task has, in
+    /// the order requested. The label the frontend shows is its own choice over
+    /// these — the domain assumes nothing about a "title" field.
+    pub cells: Vec<(String, Value)>,
+    /// Whether the task is done — the load-bearing use of the status field, kept
+    /// so the renderer can mark/dim done nodes.
     pub done: bool,
     /// Edge to the parent: `subtask` for a hierarchy edge, the type name for
     /// another non-`depends_on` blocker, `None` for `depends_on` or a root.
@@ -384,12 +391,16 @@ pub enum Kids {
     Missing,
 }
 
-/// A `tree` query: the root tasks (empty = every task nothing depends on), the
-/// `--open` prune, and sibling/root order reversal.
+/// A `tree` query.
+///
+/// The root tasks (empty = every task nothing depends on), the `--open` prune,
+/// sibling/root order reversal, and which columns to fetch per node (the
+/// frontend's display columns minus `id`/`deps`).
 pub struct TreeQuery<'a> {
     pub roots: &'a [String],
     pub open: bool,
     pub reverse: bool,
+    pub columns: &'a [String],
 }
 
 /// A `tree` read: the built-once forest plus any read warnings.
@@ -410,7 +421,12 @@ pub fn tree(
     cmp: &dyn Fn(&TaskState, &TaskState) -> Ordering,
 ) -> Result<TreeOutcome, DynError> {
     let session = read(store)?;
-    let state = session.state;
+    let mut state = session.state;
+    // Inject any graph-computed columns the query asked for (timestamps already
+    // arrive from `read`), via the same shared primitive `list` uses.
+    let wanted: Vec<&str> = query.columns.iter().map(String::as_str).collect();
+    inject_computed_columns(store, &mut state, &wanted);
+
     let blockers = store.config().relationships.blocker_types();
     let hierarchy = store.config().relationships.hierarchy_types();
     let wf = &store.config().workflow;
@@ -463,6 +479,7 @@ pub fn tree(
         reverse: query.reverse,
         open: query.open,
         open_subtrees: &open_subtrees,
+        columns: query.columns,
     };
     // Build the forest once; `build` marks a node expanded/on-path itself, so
     // roots start from empty state.
@@ -492,6 +509,8 @@ struct TreeCtx<'a> {
     open: bool,
     /// Tasks whose blocker-subtree contains at least one open task.
     open_subtrees: &'a HashSet<String>,
+    /// The columns to fetch into each node's `cells`.
+    columns: &'a [String],
 }
 
 /// Build the node for `id` (reached via `kind`), recursing over its sorted,
@@ -512,8 +531,7 @@ fn build(
     let Some(task) = ctx.state.get(id) else {
         return Node {
             id: id.to_string(),
-            title: String::new(),
-            status: String::new(),
+            cells: Vec::new(),
             done: false,
             edge: None,
             rollup: None,
@@ -521,20 +539,17 @@ fn build(
         };
     };
     let done = is_done(task, ctx.status_field, ctx.done_status);
-    let title = task
-        .custom_fields
-        .get("title")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let status = task
-        .custom_fields
-        .get(ctx.status_field)
-        .map(|v| match v {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
+    // The requested columns the task actually has, full values, in order — no
+    // field name is hardcoded; the frontend chose the columns.
+    let cells: Vec<(String, Value)> = ctx
+        .columns
+        .iter()
+        .filter_map(|col| {
+            task.custom_fields
+                .get(col)
+                .map(|v| (col.clone(), v.clone()))
         })
-        .unwrap_or_default();
+        .collect();
     let (rd, rt) = graph::subtask_counts(
         task,
         ctx.state,
@@ -568,8 +583,7 @@ fn build(
     };
     Node {
         id: id.to_string(),
-        title,
-        status,
+        cells,
         done,
         edge,
         rollup,
