@@ -65,6 +65,7 @@ $ TUTORIAL_NONINTERACTIVE=1 bash tutorials/run-all.sh
 | `06-orphans.sh` | Manufacture an orphaned event, see the stderr warning on a read, then drop it with `ta resolve`. |
 | `07-compaction.sh` | Create more events than `keep_events`, `compact`, and watch the baseline grow while the log shrinks (task state unchanged). |
 | `08-null-unset.sh` | Set a field, then `update <id> field=null` to unset it; confirm it's gone from `show`, `list --full`, and filter criteria. |
+| `09-schemas.sh` | Declare a `[task_types.bug]` schema; the write gate (whole-task, every violation in one error), constraints (`min_len`/enum/`max`/`pattern`), `+=`/`-=` on numeric and set fields, and the default life-cycle; then migrate two legacy untyped tasks in with `ta repair --schema --set-type-if-none`, ratcheting `untyped_tasks` allow→warn→deny. |
 
 ## How the helpers work (`lib.sh`)
 

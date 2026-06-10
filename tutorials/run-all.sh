@@ -11,7 +11,7 @@ set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Run the numbered scenario scripts in order. Globbing in sorted order gives
-# 01..08; lib.sh / run-all.sh / README are excluded by the numeric prefix.
+# 01..09; lib.sh / run-all.sh / README are excluded by the numeric prefix.
 scripts=("$DIR"/[0-9][0-9]-*.sh)
 
 for script in "${scripts[@]}"; do
