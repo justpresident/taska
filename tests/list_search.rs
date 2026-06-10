@@ -126,6 +126,51 @@ fn relationship_names_and_computed_columns_filter() {
 }
 
 #[test]
+fn comparison_operators_filter_numbers_and_dates() {
+    let dir = fresh_dir("cmp-ops");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    ta(&dir, &["create", "a", "status=open", "priority=1"]);
+    ta(&dir, &["create", "b", "status=open", "priority=3"]);
+    ta(&dir, &["create", "c", "status=open", "priority=5"]);
+    ta(&dir, &["dep", "add", "b", "depends_on=a"]); // a unblocks b
+    ta(&dir, &["dep", "add", "c", "depends_on=b"]); // and transitively c
+
+    // Numeric comparison (numeric, not lexical: 5 > 3, not "5" vs "3").
+    let ge = ta(&dir, &["list", "priority>=3", "--sort", "id"]);
+    assert!(
+        lists_task(&ge, "b") && lists_task(&ge, "c") && !lists_task(&ge, "a"),
+        "priority>=3 keeps b,c: {ge}"
+    );
+    let gt = ta(&dir, &["list", "priority>3"]);
+    assert!(
+        lists_task(&gt, "c") && !lists_task(&gt, "b"),
+        "strict > excludes the boundary: {gt}"
+    );
+
+    // A computed column compared, injected purely by being named in the filter.
+    let leverage = ta(&dir, &["list", "unblocks>0", "--sort", "id"]);
+    assert!(
+        lists_task(&leverage, "a") && lists_task(&leverage, "b") && !lists_task(&leverage, "c"),
+        "unblocks>0 finds tasks that unblock something: {leverage}"
+    );
+
+    // Date range over the injected RFC 3339 create_time (lexical = chronological):
+    // a past lower bound keeps everything, a far-future one drops it.
+    assert!(lists_task(
+        &ta(&dir, &["list", "create_time>=2000-01-01"]),
+        "a"
+    ));
+    assert!(!lists_task(
+        &ta(&dir, &["list", "create_time>=2999-01-01"]),
+        "a"
+    ));
+
+    // A cross-type compare never matches (number field vs string query).
+    assert!(!lists_task(&ta(&dir, &["list", "priority>=x"]), "a"));
+}
+
+#[test]
 fn sort_flag_orders_rows_with_reverse_and_configurable_default() {
     let dir = fresh_dir("sort");
     init_repo(&dir);

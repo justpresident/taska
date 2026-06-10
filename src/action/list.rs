@@ -1,10 +1,12 @@
 //! `list` action: the filtered task set.
 //!
 //! Compiles positional `field<op>value` criteria (`=` exact, `~` regex, `!=`/
-//! `!~` their negations), applies the `--open`/`--ready` shortcuts, injects the
-//! graph-computed columns a query references, and returns the matching tasks
-//! ordered by the query's sort column — rendering is the frontend's job.
+//! `!~` their negations, `>`/`>=`/`<`/`<=` ordering), applies the
+//! `--open`/`--ready` shortcuts, injects the graph-computed columns a query
+//! references, and returns the matching tasks ordered by the query's sort
+//! column — rendering is the frontend's job.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::Value;
@@ -13,7 +15,7 @@ use crate::action::{inject_computed_columns, read, Warning};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::graph;
-use crate::model::{is_done, task_cmp, TaskState, DEPS_KEY, ID_KEY};
+use crate::model::{cmp_json, is_done, task_cmp, TaskState, DEPS_KEY, ID_KEY};
 use crate::storage::EventStore;
 
 /// A `list` query: the filter criteria, the not-done / ready shortcuts, the
@@ -109,13 +111,18 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
 }
 
 /// A filter operator. `=`/`!=` compare the field's value against a JSON-coerced
-/// query; `~`/`!~` match a regex against the field's string form.
+/// query; `~`/`!~` match a regex against the field's string form; `>`/`>=`/`<`/
+/// `<=` order it against the query (see [`Matcher::Cmp`]).
 #[derive(Clone, Copy)]
 enum FilterOp {
     Eq,
     Ne,
     Re,
     NotRe,
+    Gt,
+    Ge,
+    Lt,
+    Le,
 }
 
 /// One parsed, compiled filter criterion: a field plus how to test it.
@@ -129,6 +136,11 @@ enum Matcher {
     Ne(Value),
     Re(regex::Regex),
     NotRe(regex::Regex),
+    /// An ordering comparison (`op` ∈ `Gt`/`Ge`/`Lt`/`Le`) of the field's value
+    /// against the JSON-coerced query, via the shared [`cmp_json`] order. The
+    /// comparison only holds when the two share a comparable type (both numbers,
+    /// strings, or bools) — a cross-type compare never matches.
+    Cmp(FilterOp, Value),
 }
 
 /// What a criterion's field resolves against beyond the task itself: the
@@ -184,7 +196,35 @@ impl Criterion {
             Matcher::Ne(q) => !values.iter().any(|v| v == q),
             Matcher::Re(re) => values.iter().any(|v| re.is_match(&value_string(v))),
             Matcher::NotRe(re) => !values.iter().any(|v| re.is_match(&value_string(v))),
+            Matcher::Cmp(op, q) => values.iter().any(|v| cmp_holds(*op, v, q)),
         }
+    }
+}
+
+/// Whether `v <op> q` holds under the shared [`cmp_json`] order, guarding
+/// cross-type compares: only two numbers, two strings, or two bools compare —
+/// anything else (number vs string) never matches, rather than ranking by type.
+/// Strings/dates therefore order lexicographically for free (RFC 3339 timestamps
+/// sort chronologically). There are no negated comparison forms: `<=` is the
+/// negation of `>`.
+fn cmp_holds(op: FilterOp, v: &Value, q: &Value) -> bool {
+    let comparable = matches!(
+        (v, q),
+        (Value::Number(_), Value::Number(_))
+            | (Value::String(_), Value::String(_))
+            | (Value::Bool(_), Value::Bool(_))
+    );
+    if !comparable {
+        return false;
+    }
+    let ord = cmp_json(v, q);
+    match op {
+        FilterOp::Gt => ord == Ordering::Greater,
+        FilterOp::Ge => ord != Ordering::Less,
+        FilterOp::Lt => ord == Ordering::Less,
+        FilterOp::Le => ord != Ordering::Greater,
+        // Non-comparison ops never build a `Matcher::Cmp`.
+        FilterOp::Eq | FilterOp::Ne | FilterOp::Re | FilterOp::NotRe => false,
     }
 }
 
@@ -249,6 +289,9 @@ fn compile_criterion(raw: &str) -> Result<Criterion, DynError> {
         FilterOp::Ne => Matcher::Ne(json_or_string(value)),
         FilterOp::Re => Matcher::Re(compile_regex(value)?),
         FilterOp::NotRe => Matcher::NotRe(compile_regex(value)?),
+        FilterOp::Gt | FilterOp::Ge | FilterOp::Lt | FilterOp::Le => {
+            Matcher::Cmp(op, json_or_string(value))
+        }
     };
     Ok(Criterion {
         field: field.to_string(),
@@ -257,14 +300,23 @@ fn compile_criterion(raw: &str) -> Result<Criterion, DynError> {
 }
 
 /// Split `field<op>value` at its FIRST operator, so an operator character inside
-/// the value (e.g. a regex `~`) doesn't fool the parser. `!` is only an operator
-/// when followed by `=` or `~`.
+/// the value (e.g. a regex `~`) doesn't fool the parser. `!`/`>`/`<` are
+/// two-char operators when followed by `=` (`!=`, `>=`, `<=`), one otherwise
+/// (`>`, `<`; a bare `!` is not an operator).
 fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
     let bytes = raw.as_bytes();
     for (i, &c) in bytes.iter().enumerate() {
         let (op, len) = match c {
             b'=' => (FilterOp::Eq, 1),
             b'~' => (FilterOp::Re, 1),
+            b'>' => match bytes.get(i + 1) {
+                Some(b'=') => (FilterOp::Ge, 2),
+                _ => (FilterOp::Gt, 1),
+            },
+            b'<' => match bytes.get(i + 1) {
+                Some(b'=') => (FilterOp::Le, 2),
+                _ => (FilterOp::Lt, 1),
+            },
             b'!' => match bytes.get(i + 1) {
                 Some(b'=') => (FilterOp::Ne, 2),
                 Some(b'~') => (FilterOp::NotRe, 2),
@@ -278,7 +330,7 @@ fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
         return Ok((&raw[..i], op, &raw[i + len..]));
     }
     Err(format!(
-        "invalid criterion `{raw}`: expected field=value, field~regex, field!=value, or field!~regex"
+        "invalid criterion `{raw}`: expected field=value, field~regex, field!=value, field!~regex, or a comparison (field>value, field>=value, field<value, field<=value)"
     )
     .into())
 }
@@ -343,6 +395,68 @@ mod tests {
         // The first operator wins, so a regex value may contain operators.
         let (field, _, value) = split_criterion("title~a=b").unwrap();
         assert_eq!((field, value), ("title", "a=b"));
+    }
+
+    #[test]
+    fn comparison_operators_compile_and_match() {
+        let t = task(
+            "api",
+            &[],
+            &[
+                ("priority", serde_json::json!(3)),
+                ("title", serde_json::json!("api server")),
+                ("created", serde_json::json!("2026-06-05")),
+            ],
+        );
+        let types = crate::config::RelationshipConfig::default().types;
+        let ctx = FilterCtx {
+            types: &types,
+            rev: None,
+        };
+        let matches = |s: &str| compile_criterion(s).unwrap().matches(&t, &ctx);
+
+        // Two-char vs one-char operators parse at the first operator byte.
+        assert!(matches!(
+            split_criterion("priority>=4").unwrap().1,
+            FilterOp::Ge
+        ));
+        assert!(matches!(
+            split_criterion("priority>4").unwrap().1,
+            FilterOp::Gt
+        ));
+        assert!(matches!(
+            split_criterion("priority<=4").unwrap().1,
+            FilterOp::Le
+        ));
+        assert!(matches!(
+            split_criterion("priority<4").unwrap().1,
+            FilterOp::Lt
+        ));
+
+        // Numeric comparison (not lexical): 3 < 10, so `priority<10` holds but
+        // a string compare would say "3" > "10".
+        assert!(matches("priority>2"));
+        assert!(!matches("priority>3"), "strict >, equal value excluded");
+        assert!(matches("priority>=3"), ">= includes the boundary");
+        assert!(matches("priority<10"), "numeric, not lexical");
+        assert!(matches("priority<=3"));
+        assert!(!matches("priority<3"));
+
+        // A cross-type compare never matches (number field vs string query, and
+        // vice versa) — rather than ranking number-before-string.
+        assert!(!matches("priority>=x"), "number field vs string query");
+        assert!(!matches("title>=3"), "string field vs number query");
+
+        // String/date fields order lexicographically — which is chronological for
+        // RFC 3339 / ISO dates.
+        assert!(matches("created>=2026-06-01"));
+        assert!(matches("created<2026-07-01"));
+        assert!(!matches("created>=2026-07-01"));
+        assert!(matches("title>=ant"), "lexical string order");
+
+        // An absent field offers no candidates, so every comparison is false.
+        assert!(!matches("missing>0"));
+        assert!(!matches("missing<=0"));
     }
 
     #[test]
