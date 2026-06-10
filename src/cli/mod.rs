@@ -378,10 +378,7 @@ fn enforce_format(store: &FileStore) -> Result<(), DynError> {
 /// store. Handlers depend only on the `EventStore` abstraction.
 fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), DynError> {
     match command {
-        Commands::Create { id, fields } => {
-            let workflow = store.config().workflow.clone();
-            cmd_create(store, &workflow, &id, &fields)
-        }
+        Commands::Create { id, fields } => cmd_create(store, &id, &fields),
         Commands::Update { id, fields } => cmd_update(store, &id, &fields),
         Commands::Dep { action } => {
             let types = store.config().relationships.types.clone();

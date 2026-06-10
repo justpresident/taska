@@ -1,0 +1,123 @@
+//! Integration test that drives the `action` layer DIRECTLY — no cli, no binary,
+//! no `format` — exactly as an external frontend (a TUI, a library consumer)
+//! would. This is the guard for the frontend-agnostic claim: it uses only the
+//! crate's public API (`taska::action::*` + `taska::storage::FileStore`), so if
+//! an action ever needs `cli` or `format`, or the public surface stops being
+//! enough to drive a command, this stops compiling.
+
+use serde_json::{json, Map};
+use taska::action;
+use taska::model::OpType;
+use taska::storage::{EventStore, FileStore};
+
+/// A throwaway file store under the system temp dir (outside the repo tree).
+fn provision(name: &str) -> FileStore {
+    let dir = std::env::temp_dir().join("taska-action-test").join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    FileStore::provision(dir.join(".taska")).unwrap()
+}
+
+/// Create a task through the write action with a CANONICAL payload (status under
+/// its canonical key) — the contract the action speaks.
+fn create(store: &FileStore, id: &str, title: &str, status: &str) {
+    let mut payload = Map::new();
+    payload.insert("title".to_string(), json!(title));
+    payload.insert("status".to_string(), json!(status));
+    action::write::create(store, id, payload, &Map::new()).unwrap();
+}
+
+#[test]
+fn drives_create_read_and_dep_through_the_action_api_only() {
+    let store = provision("crud");
+    create(&store, "a", "Task A", "todo");
+    create(&store, "b", "Task B", "todo");
+
+    // Add an edge: b depends_on a — through the dep action, types from config.
+    let types = store.config().relationships.types.clone();
+    let written = action::dep::apply_edges(
+        &store,
+        "b",
+        &["depends_on=a".to_string()],
+        &OpType::AddEdge,
+        &types,
+    )
+    .unwrap();
+    assert_eq!(written, 1, "one stored edge written");
+
+    // status: the typed summary, computed from the graph.
+    let outcome = action::status(&store).unwrap();
+    assert_eq!(outcome.summary.total, 2);
+    assert_eq!(outcome.summary.ready, 1, "a is ready (no deps)");
+    assert_eq!(outcome.summary.blocked, 1, "b is blocked by a");
+
+    // list: both tasks come back as data (unordered is fine here).
+    let list = action::list_tasks(
+        &store,
+        &action::ListQuery {
+            criteria: &[],
+            open: false,
+            ready: false,
+            display_columns: &[],
+        },
+    )
+    .unwrap();
+    assert_eq!(list.tasks.len(), 2);
+
+    // list --ready filters to the actionable task.
+    let ready = action::list_tasks(
+        &store,
+        &action::ListQuery {
+            criteria: &[],
+            open: false,
+            ready: true,
+            display_columns: &[],
+        },
+    )
+    .unwrap();
+    assert_eq!(ready.tasks.len(), 1);
+    assert_eq!(ready.tasks[0].id, "a");
+
+    // show: one task, with the INVERSE edge surfaced (b depends_on a ⇒ a `blocks` b).
+    let show = action::show(&store, "a").unwrap();
+    assert_eq!(show.task.id, "a");
+    assert_eq!(
+        show.task.custom_fields.get("blocks"),
+        Some(&json!(["b"])),
+        "inverse edge surfaced as a field: {:?}",
+        show.task.custom_fields
+    );
+
+    // No warnings on a clean store.
+    assert!(outcome.warnings.is_empty() && list.warnings.is_empty());
+}
+
+#[test]
+fn dep_plan_and_cycles_return_typed_graph_data() {
+    let store = provision("graph");
+    create(&store, "lib", "Library", "todo");
+    create(&store, "api", "API", "todo");
+    create(&store, "ui", "UI", "todo");
+    let types = store.config().relationships.types.clone();
+    let add = |task: &str, dep: &str| {
+        action::dep::apply_edges(
+            &store,
+            task,
+            &[format!("depends_on={dep}")],
+            &OpType::AddEdge,
+            &types,
+        )
+        .unwrap();
+    };
+    add("api", "lib"); // api -> lib
+    add("ui", "api"); // ui -> api -> lib
+
+    // plan toward ui: lib, api, ui in dependency order.
+    let plan = action::dep::plan(&store, &["ui".to_string()], false).unwrap();
+    let order: Vec<&str> = plan.steps.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(order, ["lib", "api", "ui"], "prerequisites first");
+
+    // no cycles in this DAG.
+    let cycles = action::dep::cycles(&store).unwrap();
+    assert!(cycles.cycles.is_empty());
+}

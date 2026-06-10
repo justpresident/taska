@@ -26,8 +26,8 @@ pub struct Session {
 /// render its own message.
 pub enum Warning {
     /// `n` events in the log target a task that doesn't exist — a dropped
-    /// `Create` (merge removal-union, a revert, or a hand edit). Cleared by
-    /// `ta resolve`.
+    /// `Create` (merge removal-union, a revert, or a hand edit). Cleared by the
+    /// `resolve` action.
     Orphans(usize),
     /// Tasks that don't conform to their `[task_types]` schema, one report line
     /// each. Read-tolerated by design (schemas are write-time law); a write to

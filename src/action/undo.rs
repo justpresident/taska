@@ -232,8 +232,8 @@ fn compensate(
 
 /// A dependency draft event with the `{ "target": <id>, "rel": <rel> }` payload
 /// shape `dep add` writes and the engine's `AddEdge`/`RemoveEdge` replay expects.
-/// The type is always explicit — an untyped event is the legacy shape
-/// `ta repair --migrate` exists to rewrite.
+/// The type is always explicit — an untyped event is the legacy shape the
+/// `repair` migrate action exists to rewrite.
 fn dep_event(op: OpType, task_id: &str, rel_type: &str, dep: &str) -> MutationEvent {
     let mut payload = Map::new();
     payload.insert(TARGET_KEY.to_string(), Value::String(dep.to_string()));
