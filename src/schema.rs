@@ -50,7 +50,7 @@ pub struct FieldOps {
     /// mangles — `version=3.10` guesses the number 3.1, but a declared string
     /// field wants "3.10". `@file`/`@-` values are already verbatim strings and
     /// have no entry. A `Map<String, Value>` (not strings) so the same
-    /// `cli::canonicalize_fields` keeps its keys aligned with `set`.
+    /// [`canonicalize_fields`] keeps its keys aligned with `set`.
     pub raw: Map<String, Value>,
 }
 
@@ -60,8 +60,8 @@ pub struct FieldOps {
 /// canonical keys ([`STATUS_KEY`]/[`TASK_TYPE_KEY`]); `[workflow] status_field`
 /// /`type_field` are *display* names. This is the one shared list of that
 /// mapping — the read pipeline renames canonical→display, the write side
-/// (`cli::canonicalize_fields`) renames display→canonical — so renaming either
-/// in config is free, with no data migration.
+/// ([`canonicalize_fields`]) renames display→canonical — so renaming either in
+/// config is free, with no data migration.
 pub const fn canonical_field_pairs(
     workflow: &crate::config::WorkflowConfig,
 ) -> [(&String, &'static str); 2] {
@@ -69,6 +69,38 @@ pub const fn canonical_field_pairs(
         (&workflow.status_field, STATUS_KEY),
         (&workflow.type_field, TASK_TYPE_KEY),
     ]
+}
+
+/// Map a write payload's configured DISPLAY field names onto their canonical
+/// storage keys, before vetting/appending.
+///
+/// The write-side inverse of the read pipeline's canonical→display rename, over
+/// the shared [`canonical_field_pairs`] list so the two boundaries can never
+/// disagree. Writing the canonical spelling directly while a different display
+/// name is configured is rejected: one writable name per concept per store.
+/// **Every frontend funnels its writes through this** (then [`vet_events`]) so
+/// the log stays canonical regardless of the configured display names — the CLI
+/// is one caller, not the owner.
+pub fn canonicalize_fields(
+    fields: &mut Map<String, Value>,
+    workflow: &crate::config::WorkflowConfig,
+) -> Result<(), DynError> {
+    for (display, canonical) in canonical_field_pairs(workflow) {
+        if display == canonical {
+            continue;
+        }
+        if fields.contains_key(canonical) {
+            return Err(format!(
+                "`{canonical}` is the canonical storage key of the configured `{display}` \
+                 field; set `{display}=` instead"
+            )
+            .into());
+        }
+        if let Some(value) = fields.remove(display.as_str()) {
+            fields.insert(canonical.to_string(), value);
+        }
+    }
+    Ok(())
 }
 
 /// The grandfathered-data report: every task whose RAW stored fields violate
@@ -842,6 +874,38 @@ fn dep_edge_exists(task: &TaskState, payload: &Map<String, Value>) -> bool {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonicalize_maps_display_status_and_rejects_the_canonical_spelling() {
+        use crate::config::WorkflowConfig;
+        let renamed = WorkflowConfig {
+            status_field: "state".to_string(),
+            ..WorkflowConfig::default()
+        };
+
+        // The configured display name maps onto the canonical storage key.
+        let mut fields = Map::new();
+        fields.insert("state".to_string(), serde_json::json!("open"));
+        canonicalize_fields(&mut fields, &renamed).unwrap();
+        assert_eq!(fields.get(STATUS_KEY), Some(&serde_json::json!("open")));
+        assert!(!fields.contains_key("state"), "display key consumed");
+
+        // Writing the canonical spelling directly is rejected while a different
+        // display name is configured — one writable name per concept.
+        let mut direct = Map::new();
+        direct.insert(STATUS_KEY.to_string(), serde_json::json!("x"));
+        let err = canonicalize_fields(&mut direct, &renamed).unwrap_err();
+        assert!(
+            err.to_string().contains("state"),
+            "points at display: {err}"
+        );
+
+        // Default name: canonical IS the display name; nothing to do.
+        let mut plain = Map::new();
+        plain.insert(STATUS_KEY.to_string(), serde_json::json!("open"));
+        canonicalize_fields(&mut plain, &WorkflowConfig::default()).unwrap();
+        assert_eq!(plain.get(STATUS_KEY), Some(&serde_json::json!("open")));
+    }
 
     #[test]
     fn schema_gate_validates_whole_tasks_and_lists_every_violation() {

@@ -18,12 +18,16 @@ fn provision(name: &str) -> FileStore {
     FileStore::provision(dir.join(".taska")).unwrap()
 }
 
-/// Create a task through the write action with a CANONICAL payload (status under
-/// its canonical key) — the contract the action speaks.
+/// Create a task the way a frontend would: build the payload with the configured
+/// DISPLAY field names, translate to canonical via the public
+/// [`taska::schema::canonicalize_fields`], then call the write action (which
+/// speaks canonical). No cli plumbing involved.
 fn create(store: &FileStore, id: &str, title: &str, status: &str) {
+    let workflow = &store.config().workflow;
     let mut payload = Map::new();
     payload.insert("title".to_string(), json!(title));
-    payload.insert("status".to_string(), json!(status));
+    payload.insert(workflow.status_field.clone(), json!(status));
+    taska::schema::canonicalize_fields(&mut payload, workflow).unwrap();
     action::write::create(store, id, payload, &Map::new()).unwrap();
 }
 
@@ -90,6 +94,31 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
 
     // No warnings on a clean store.
     assert!(outcome.warnings.is_empty() && list.warnings.is_empty());
+}
+
+#[test]
+fn write_prep_translates_display_names_to_canonical_via_public_api() {
+    // A frontend honoring a renamed `status_field` translates display→canonical
+    // through the PUBLIC schema helper before the write action — proving the
+    // write half is usable without the cli's (private) plumbing.
+    use taska::config::WorkflowConfig;
+    use taska::schema::canonicalize_fields;
+    let workflow = WorkflowConfig {
+        status_field: "state".to_string(),
+        ..WorkflowConfig::default()
+    };
+
+    let mut payload = Map::new();
+    payload.insert("state".to_string(), json!("done"));
+    payload.insert("title".to_string(), json!("X"));
+    canonicalize_fields(&mut payload, &workflow).unwrap();
+
+    assert!(
+        payload.contains_key("status"),
+        "display `state` → canonical `status`: {payload:?}"
+    );
+    assert!(!payload.contains_key("state"), "display key consumed");
+    assert_eq!(payload.get("title"), Some(&json!("X")), "others untouched");
 }
 
 #[test]

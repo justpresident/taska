@@ -1,8 +1,8 @@
 //! `ta create` — parse the `key=value` fields, then create via the shared write path.
 
-use crate::cli::{canonicalize_fields, parse_field_ops};
+use crate::cli::parse_field_ops;
 use crate::error::DynError;
-use crate::schema::FieldOps;
+use crate::schema::{canonicalize_fields, FieldOps};
 use crate::storage::EventStore;
 
 pub fn cmd_create(store: &impl EventStore, id: &str, fields: &[String]) -> Result<(), DynError> {

@@ -460,35 +460,6 @@ pub(crate) fn print_warnings(warnings: &[crate::action::Warning]) {
     }
 }
 
-/// Map configured DISPLAY field names onto their canonical storage keys, before
-/// vetting/appending — the write-side inverse of `action::read`'s read-side rename.
-/// The shared `(display, canonical)` list lives in
-/// [`schema::canonical_field_pairs`](crate::schema::canonical_field_pairs) so
-/// the two boundaries can never disagree. Writing the canonical spelling
-/// directly while a different display name is configured is rejected: one name
-/// per concept per store, never two writable spellings.
-pub(crate) fn canonicalize_fields(
-    fields: &mut Map<String, Value>,
-    workflow: &crate::config::WorkflowConfig,
-) -> Result<(), DynError> {
-    for (display, canonical) in crate::schema::canonical_field_pairs(workflow) {
-        if display == canonical {
-            continue;
-        }
-        if fields.contains_key(canonical) {
-            return Err(format!(
-                "`{canonical}` is the canonical storage key of the configured `{display}` \
-                 field; set `{display}=` instead"
-            )
-            .into());
-        }
-        if let Some(value) = fields.remove(display.as_str()) {
-            fields.insert(canonical.to_string(), value);
-        }
-    }
-    Ok(())
-}
-
 /// Parse `key=value` / `key+=value` tokens into two payload maps: fields to
 /// **set** (`=`) and fields to **append** to (`+=`). One `update` can mix both,
 /// which the caller emits as an `Update` event plus an `Append` event.
@@ -594,7 +565,6 @@ pub(crate) fn confirm(prompt: &str, force: bool) -> Result<bool, DynError> {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::model::STATUS_KEY;
 
     #[test]
     fn update_without_fields_is_rejected_by_parser() {
@@ -703,37 +673,5 @@ mod tests {
         );
         assert!(parse_field_ops(&["+=x".into()]).is_err(), "empty key");
         assert!(parse_field_ops(&["noeq".into()]).is_err(), "no operator");
-    }
-
-    #[test]
-    fn canonicalize_maps_display_status_and_rejects_the_canonical_spelling() {
-        use crate::config::WorkflowConfig;
-        let renamed = WorkflowConfig {
-            status_field: "state".to_string(),
-            ..WorkflowConfig::default()
-        };
-
-        // The configured display name maps onto the canonical storage key.
-        let mut fields = Map::new();
-        fields.insert("state".to_string(), serde_json::json!("open"));
-        canonicalize_fields(&mut fields, &renamed).unwrap();
-        assert_eq!(fields.get(STATUS_KEY), Some(&serde_json::json!("open")));
-        assert!(!fields.contains_key("state"), "display key consumed");
-
-        // Writing the canonical spelling directly is rejected while a different
-        // display name is configured — one writable name per concept.
-        let mut direct = Map::new();
-        direct.insert(STATUS_KEY.to_string(), serde_json::json!("x"));
-        let err = canonicalize_fields(&mut direct, &renamed).unwrap_err();
-        assert!(
-            err.to_string().contains("state"),
-            "points at display: {err}"
-        );
-
-        // Default name: canonical IS the display name; nothing to do.
-        let mut plain = Map::new();
-        plain.insert(STATUS_KEY.to_string(), serde_json::json!("open"));
-        canonicalize_fields(&mut plain, &WorkflowConfig::default()).unwrap();
-        assert_eq!(plain.get(STATUS_KEY), Some(&serde_json::json!("open")));
     }
 }

@@ -20,11 +20,13 @@ use std::process::Command;
 
 use serde_json::{Map, Value};
 
-use crate::cli::{canonicalize_fields, confirm, replay};
+use crate::cli::{confirm, replay};
 use crate::config::{Config, WorkflowConfig};
 use crate::error::DynError;
 use crate::model::TaskState;
-use crate::schema::{build_field_events, canonical_field_pairs, vet_events, FieldOps};
+use crate::schema::{
+    build_field_events, canonical_field_pairs, canonicalize_fields, vet_events, FieldOps,
+};
 use crate::storage::EventStore;
 
 pub fn cmd_edit(store: &impl EventStore, id: &str, as_json: bool) -> Result<(), DynError> {
