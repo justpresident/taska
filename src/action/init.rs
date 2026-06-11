@@ -48,7 +48,7 @@ pub struct InitOutcome {
 const BLOCK_BEGIN: &str = "<!-- BEGIN TASKA INTEGRATION";
 const BLOCK_END: &str = "<!-- END TASKA INTEGRATION -->";
 /// The block's schema version (bump when the body format changes).
-const BLOCK_VERSION: u32 = 1;
+const BLOCK_VERSION: u32 = 2;
 /// Candidate agent files. Every one that already exists is updated; if none do,
 /// the FIRST is created (`AGENTS.md` — the emerging cross-tool standard).
 const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
@@ -183,15 +183,19 @@ fn integration_block(facts: &prime::PrimeFacts) -> String {
         ),
         (
             format!("ta create <id> {tf}={} {}", ex.type_name, ex.req_example),
-            "file new work".to_string(),
+            "file work — rich notes: goal, approach, open Qs".to_string(),
         ),
         (
             format!("ta update <id> {sf}={}", ex.claim),
-            format!("set fields ({sf}={} to finish)", facts.done_status),
+            format!("=, +=, -=  ({sf}={} to finish)", facts.done_status),
         ),
         (
             format!("ta dep add <id> {}=<other>", ex.blocker),
-            "link a dependency".to_string(),
+            "record a prerequisite".to_string(),
+        ),
+        (
+            "ta update <id> notes+=\"…\"".to_string(),
+            "append a note (here and on related tasks)".to_string(),
         ),
     ];
     let width = cmds
@@ -208,16 +212,18 @@ fn integration_block(facts: &prime::PrimeFacts) -> String {
     let body = format!(
         "## Task tracking (taska)\n\
          \n\
-         This repo tracks tasks in a local, git-native store (`.taska/`) — drive it \
-         through the `ta` CLI, never hand-edit `.taska/`.\n\
+         This repo tracks work in a local, git-native store (`.taska/`) — drive it through \
+         the `ta` CLI, never hand-edit `.taska/`. The task schema (fields, statuses, types) \
+         is set by `.taska/config.toml` and differs per repo; run `ta prime` for THIS \
+         store's schema and the full workflow.\n\
          \n\
          ```bash\n\
          {cheat}\n\
          ```\n\
          \n\
-         Commit the `.taska/` change in the same commit as the code it describes, and \
-         file new work as you find it. Run `ta prime` for the full, always-current \
-         guide to THIS store's vocabulary."
+         File a task for each unit of work, with enough `notes` to act on it (goal, approach, \
+         open questions); set prerequisites with `ta dep`, and append progress to related \
+         tasks. Commit the `.taska/` change in the same commit as the code it describes."
     );
     let hash = short_hash(&body);
     format!("{BLOCK_BEGIN} v{BLOCK_VERSION} hash:{hash} -->\n{body}\n{BLOCK_END}")
@@ -262,6 +268,21 @@ mod tests {
         );
         assert!(b.contains("status=closed to finish"), "done status: {b}");
         assert!(b.contains("ta prime"), "points at the full guide: {b}");
+        // It teaches the dynamic schema and the task-filing discipline.
+        assert!(
+            b.contains("schema") && b.contains(".taska/config.toml"),
+            "explains the dynamic schema: {b}"
+        );
+        assert!(
+            b.contains("File a task for each unit of work")
+                && b.contains("open questions")
+                && b.contains("ta dep"),
+            "encourages rich tasks + dependencies: {b}"
+        );
+        assert!(
+            b.contains("append progress to related tasks"),
+            "encourages cross-task notes: {b}"
+        );
     }
 
     #[test]

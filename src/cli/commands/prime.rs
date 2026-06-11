@@ -63,18 +63,23 @@ fn describe_type(t: &TypeFacts, status_field: &str) -> String {
     format!("  - `{}`{close}: {body}", t.name)
 }
 
-/// The command cheat-sheet, comments aligned regardless of how long this store's
-/// status/type names make each command.
-fn command_block(f: &PrimeFacts, ex: &PrimeExamples) -> String {
-    let (sf, tf) = (&f.status_field, &f.type_field);
-    let (claim, type_name, req_example, blocker, filter) = (
-        &ex.claim,
-        &ex.type_name,
-        &ex.req_example,
-        &ex.blocker,
-        &ex.filter,
-    );
-    let commands: Vec<(String, String)> = vec![
+/// Align a `(command, comment)` cheat-sheet: pad commands to a common width so
+/// the `# comment`s line up regardless of this store's status/type name lengths.
+fn align(cmds: &[(String, String)]) -> String {
+    let width = cmds
+        .iter()
+        .map(|(c, _)| c.chars().count())
+        .max()
+        .unwrap_or(0);
+    cmds.iter()
+        .map(|(c, note)| format!("{c:<width$}  # {note}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The read/query cheat-sheet (config-tailored filter example).
+fn read_commands(ex: &PrimeExamples) -> String {
+    align(&[
         (
             "ta list --ready".to_string(),
             "actionable now: not done, all deps done".to_string(),
@@ -85,113 +90,152 @@ fn command_block(f: &PrimeFacts, ex: &PrimeExamples) -> String {
             "one task — every field, full notes".to_string(),
         ),
         (
-            format!("ta create <id> {tf}={type_name} {req_example}"),
+            format!("ta list {}", ex.filter),
+            "filter: = != =~ !~ > >= < <=".to_string(),
+        ),
+        (
+            "ta dep tree".to_string(),
+            "dependency tree (dep plan <goal> = ordered plan)".to_string(),
+        ),
+        ("ta status".to_string(), "counts".to_string()),
+    ])
+}
+
+/// The write cheat-sheet (config-tailored create/claim/close/link/note).
+fn write_commands(f: &PrimeFacts, ex: &PrimeExamples) -> String {
+    let (sf, tf) = (&f.status_field, &f.type_field);
+    align(&[
+        (
+            format!("ta create <id> {tf}={} {}", ex.type_name, ex.req_example),
             format!("file work ({sf} defaults to `{}`)", f.default_status),
         ),
         (
-            format!("ta update <id> {sf}={claim}"),
-            "set fields: = replace, += append, -= remove".to_string(),
+            format!("ta update <id> {sf}={}", ex.claim),
+            "set a field: = replace, += append, -= remove".to_string(),
         ),
         (
             format!("ta update <id> {sf}={}", f.done_status),
             "close it".to_string(),
         ),
         (
-            format!("ta dep add <id> {blocker}=<other>"),
-            "link a dep (also: ta dep tree, ta dep plan <goal>)".to_string(),
+            format!("ta dep add <id> {}=<other>", ex.blocker),
+            "record a prerequisite".to_string(),
         ),
         (
-            format!("ta list {filter}"),
-            "filter: = != =~ !~ > >= < <=".to_string(),
+            "ta update <id> notes+=\"…\"".to_string(),
+            "append a note (here and on related tasks)".to_string(),
         ),
-        ("ta status".to_string(), "counts".to_string()),
-    ];
-    let width = commands
-        .iter()
-        .map(|(c, _)| c.chars().count())
-        .max()
-        .unwrap_or(0);
-    commands
-        .iter()
-        .map(|(c, note)| format!("{c:<width$}  # {note}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    ])
 }
 
-/// Render the config-tailored markdown primer.
-fn render_guide(f: &PrimeFacts) -> String {
+/// The four "## Schema" bullets, config-tailored: status field + values (or
+/// free-form), declared types with their fields (or free-form), the relationship
+/// types, and the configured `ta list` columns.
+fn schema_section(f: &PrimeFacts) -> String {
     let (sf, tf) = (&f.status_field, &f.type_field);
-    let ex = examples(f);
-    let (claim, type_name, req_example) = (&ex.claim, &ex.type_name, &ex.req_example);
 
-    let statuses = if f.statuses.is_empty() {
-        "free-form".to_string()
+    let status_line = if f.statuses.is_empty() {
+        format!(
+            "- Status field `{sf}`: free-form (any value); done = `{}`, create defaults to `{}`.",
+            f.done_status, f.default_status
+        )
     } else {
-        f.statuses.join(" | ")
+        format!(
+            "- Status field `{sf}`: {} (done = `{}`, create defaults to `{}`).",
+            f.statuses.join(" | "),
+            f.done_status,
+            f.default_status
+        )
     };
-    let type_lines = if f.task_types.is_empty() {
-        "  - (none declared — `type` is unconstrained)".to_string()
+
+    let type_block = if f.task_types.is_empty() {
+        "- Types: none declared — tasks are free-form (any field name is accepted).".to_string()
     } else {
-        f.task_types
-            .iter()
-            .map(|t| describe_type(t, sf))
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut block = format!(
+            "- Type field `{tf}=` (untyped tasks: {}); declared types:",
+            f.untyped_tasks
+        );
+        for t in &f.task_types {
+            block.push('\n');
+            block.push_str(&describe_type(t, sf));
+        }
+        block
     };
-    let rel_lines = f
+
+    let rels = f
         .relationships
         .iter()
         .map(|r| {
             let note = if r.inverse.is_empty() {
-                "one-way".to_string()
+                ", one-way".to_string()
             } else if r.inverse == r.name {
-                "symmetric".to_string()
+                ", symmetric".to_string()
             } else {
-                format!("inverse `{}`", r.inverse)
+                format!(", inverse `{}`", r.inverse)
             };
-            format!("  - `{}` — {} ({note})", r.name, r.kind)
+            format!("`{}` ({}{note})", r.name, r.kind)
         })
         .collect::<Vec<_>>()
-        .join("\n");
-    let cmd_block = command_block(f, &ex);
+        .join(", ");
+
+    format!(
+        "{status_line}\n\
+         {type_block}\n\
+         - Relationships (for `ta dep`): {rels}.\n\
+         - `ta list` columns (config-driven): {}.",
+        f.columns.join(", ")
+    )
+}
+
+/// Render the config-tailored markdown primer.
+fn render_guide(f: &PrimeFacts) -> String {
+    let sf = &f.status_field;
+    let ex = examples(f);
     let s = &f.summary;
 
     format!(
-        "# taska (`ta`) — task tracking for this repo\n\
+        "# taska (`ta`) — task & dependency tracker for this repo\n\
          \n\
-         Tasks live in an append-only event log in `.taska/`, replayed to current \
-         state; concurrent edits on different branches merge automatically (a git \
-         merge driver). Mutate the store ONLY through `ta` — never hand-edit \
-         `.taska/*.jsonl`, and commit the `.taska/` change in the same commit as \
-         the code it describes.\n\
+         Tasks live in an append-only log in `.taska/`, replayed to current state; branches \
+         reconcile automatically via a git merge driver. Drive the store ONLY through `ta` \
+         (never hand-edit `.taska/*.jsonl`), and commit the `.taska/` change in the same \
+         commit as the code it describes.\n\
          \n\
-         ## This store's vocabulary\n\
-         - Status: field `{sf}` — {statuses} (done = `{done}`, new tasks default to `{default}`).\n\
-         - Types (set with `{tf}=`):\n\
-         {type_lines}\n\
-         \x20 Untyped tasks: {untyped}.\n\
-         - Relationships:\n\
-         {rel_lines}\n\
-         - Columns `ta list` shows: {columns}.\n\
+         ## Schema (dynamic — defined by `.taska/config.toml`, not hardcoded)\n\
+         Field names, statuses, types, and relationships are THIS store's config; another \
+         repo may differ, so `ta prime` each new store.\n\
+         {schema}\n\
          \n\
-         ## Core commands\n\
+         ## Read / query\n\
          ```bash\n\
-         {cmd_block}\n\
+         {read_block}\n\
          ```\n\
          \n\
-         ## Suggested agent loop\n\
-         1. `ta list --ready` — pick something actionable.\n\
-         2. `ta update <id> {sf}={claim}` — claim it.\n\
-         3. Do the work; record progress with `ta update <id> notes+=\"…\"` (or `notes=@-` to read multi-line notes from stdin).\n\
-         4. `ta update <id> {sf}={done}` — then commit the `.taska/` change in the same commit as the code.\n\
-         5. Found more work? File it: `ta create <id> {tf}={type_name} {req_example}`.\n\
+         ## Filing & tracking tasks\n\
+         File a task for each distinct piece of work — one per feature/bug, before or as you \
+         start it. Give `notes` enough for someone else to act without you: the goal and \
+         intended approach/implementation details, any open or design questions, and the \
+         context. Set prerequisites with `ta dep add`, and append to related tasks as things \
+         change so the trail stays current. Don't pass `{sf}=` on create (it defaults to \
+         `{default}`); read full notes with `ta show <id> --full`.\n\
+         ```bash\n\
+         {write_block}\n\
+         ```\n\
          \n\
-         {open} open ({ready} ready, {blocked} blocked), {closed} closed. \
-         Re-run `ta prime` any time to refresh this.\n",
-        done = f.done_status,
+         ## Working a task\n\
+         1. `ta list --ready` — pick actionable work.  2. `ta update <id> {sf}={claim}` — \
+         claim it.  3. do it, appending notes as you go.  4. `ta update <id> {sf}={done}` — \
+         then commit `.taska/` with the code.  5. file the follow-ups you discover.\n\
+         \n\
+         {open} open ({ready} ready, {blocked} blocked), {closed} closed. Re-run `ta prime` \
+         to refresh.\n",
+        schema = schema_section(f),
+        read_block = read_commands(&ex),
+        write_block = write_commands(f, &ex),
+        sf = sf,
         default = f.default_status,
-        untyped = f.untyped_tasks,
-        columns = f.columns.join(", "),
+        claim = ex.claim,
+        done = f.done_status,
         open = s.open,
         ready = s.ready,
         blocked = s.blocked,
@@ -223,7 +267,7 @@ mod tests {
             "close example uses done status: {g}"
         );
         assert!(
-            g.contains("`depends_on` — blocker (inverse `blocks`)"),
+            g.contains("`depends_on` (blocker, inverse `blocks`)"),
             "relationship described: {g}"
         );
         // The create example lists the required fields (any order) but not status,
@@ -237,6 +281,45 @@ mod tests {
         assert!(
             !g.contains("status=\"…\""),
             "create omits the stamped status field: {g}"
+        );
+    }
+
+    #[test]
+    fn guide_explains_the_dynamic_schema_and_task_filing() {
+        let g = guide();
+        // The schema is framed as config-defined, not fixed.
+        assert!(
+            g.contains("Schema (dynamic"),
+            "schema framed as dynamic: {g}"
+        );
+        assert!(
+            g.contains("config-driven") && g.contains("id, title, status"),
+            "names the configured columns: {g}"
+        );
+        // The task-filing discipline is spelled out: rich notes, open questions,
+        // dependencies, cross-task notes.
+        assert!(
+            g.contains("File a task for each distinct piece of work"),
+            "when to file: {g}"
+        );
+        assert!(
+            g.contains("open or design questions"),
+            "encourages recording open questions: {g}"
+        );
+        assert!(g.contains("ta dep add"), "encourages dependencies: {g}");
+        assert!(
+            g.contains("append to related tasks") && g.contains("notes+="),
+            "encourages cross-task notes: {g}"
+        );
+    }
+
+    #[test]
+    fn guide_is_free_form_when_no_schema_is_declared() {
+        use crate::test_support::InMemoryStore;
+        let g = render_guide(&prime(&InMemoryStore::default()).unwrap().facts);
+        assert!(
+            g.contains("free-form") && g.contains("any field name is accepted"),
+            "explains the free-form fallback: {g}"
         );
     }
 
