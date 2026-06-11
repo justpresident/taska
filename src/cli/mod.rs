@@ -82,11 +82,11 @@ enum Commands {
     },
     /// Delete a task: `ta delete <id>` (errors if it doesn't exist)
     Delete { id: String },
-    /// List tasks, optionally filtered: `ta list status~open priority=3 --open`
+    /// List tasks, optionally filtered: `ta list status=~open priority=3 --open`
     List {
         /// Filter criteria, all of which must match: `field=value` (exact),
-        /// `field~regex` (or `field=~regex`), `field!=value`, `field!~regex`, or a
-        /// comparison `field>value`/`>=`/`<`/`<=` (numbers compare numerically,
+        /// `field=~regex` (perl/bash spelling), `field!=value`, `field!~regex`, or
+        /// a comparison `field>value`/`>=`/`<`/`<=` (numbers compare numerically,
         /// strings/dates lexicographically; a cross-type compare never matches).
         /// Quote comparisons so the shell doesn't treat `>`/`<` as redirection:
         /// `ta list 'unblocks>0' 'priority>=4'`. `field` may be a task field,

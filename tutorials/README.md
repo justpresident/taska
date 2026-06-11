@@ -57,7 +57,7 @@ $ TUTORIAL_NONINTERACTIVE=1 bash tutorials/run-all.sh
 
 | Script | What it teaches |
 |---|---|
-| `01-basics.sh` | Create tasks with arbitrary fields; `list` (aligned table), `--columns`, `--full`, `--format json`; filter criteria (`status=open`, `title~API`); `show <id>`. |
+| `01-basics.sh` | Create tasks with arbitrary fields; `list` (aligned table), `--columns`, `--full`, `--format json`; filter criteria (`status=open`, `title=~API`); `show <id>`. |
 | `02-dependencies.sh` | `dep add` to add `depends_on` edges; `dep tree`; `list --ready` showing only unblocked tasks; closing a dependency to unblock the dependent. |
 | `03-merge.sh` | Two branches editing concurrently: a clean auto-merge (different fields), a same-field conflict under `surface` (`ta resolve`), and the same conflict resolved silently under `theirs` / `latest`. |
 | `04-undo.sh` | `undo` of an uncommitted action (truncates) vs. a committed one (compensating event, with a before→after preview); `--count`, `--remove` (with its DANGER warning), and the confirmation prompt. |

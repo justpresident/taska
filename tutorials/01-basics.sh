@@ -27,9 +27,9 @@ say "'--format json' emits the same fields as a parseable array — ideal for ag
 run ta list --format json
 pause
 
-say "'ta list' filters by AND-combined criteria: '=' exact, '~' regex, '!=' / '!~' negated."
+say "'ta list' filters by AND-combined criteria: '=' exact, '=~' regex, '!=' / '!~' negated."
 run ta list status=open
-run ta list 'title~API' status=open
+run ta list 'title=~API' status=open
 pause
 
 say "'ta show <id>' shows a single task with ALL of its own fields."

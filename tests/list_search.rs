@@ -39,8 +39,8 @@ fn list_supports_regex_negation_and_combined_criteria() {
         "AND: {both}"
     );
 
-    // `~` is a regex over the field's string form; numbers match too.
-    let re = ta(&dir, &["list", r"priority~^[12]$"]);
+    // `=~` is a regex over the field's string form; numbers match too.
+    let re = ta(&dir, &["list", r"priority=~^[12]$"]);
     assert!(
         lists_task(&re, "db") && lists_task(&re, "web") && !lists_task(&re, "api"),
         "regex on numeric field: {re}"
@@ -56,16 +56,20 @@ fn list_supports_regex_negation_and_combined_criteria() {
         lists_task(&ta(&dir, &["list", "deps=api"]), "web"),
         "deps query"
     );
-    assert!(lists_task(&ta(&dir, &["list", "id~^a"]), "api"), "id regex");
-    // The `=~`/`!=~` spellings are synonyms for `~`/`!~`.
+    // The regex operator is `=~` (perl/bash spelling), its negation `!~`.
     assert!(
         lists_task(&ta(&dir, &["list", "id=~^a"]), "api"),
-        "id=~ regex (perl/bash spelling)"
+        "id=~ regex"
     );
-    let nre = ta(&dir, &["list", "status!=~^op"]);
+    let nre = ta(&dir, &["list", "status!~^op"]);
     assert!(
         lists_task(&nre, "db") && !lists_task(&nre, "api"),
-        "!=~ negated regex: {nre}"
+        "!~ negated regex: {nre}"
+    );
+    // A bare `~` is no longer an operator.
+    assert!(
+        !run(ta_bin(), &dir, &["list", "id~^a"]).status.success(),
+        "bare ~ rejected"
     );
 
     // `deps=<x>` matches a target under ANY relationship type, info included —
@@ -117,7 +121,7 @@ fn relationship_names_and_computed_columns_filter() {
     assert!(lists_task(&ta(&dir, &["list", "relates_to=c1"]), "other"));
 
     // Regex operators compose with edge fields.
-    let re = ta(&dir, &["list", "subtask_of~^ep"]);
+    let re = ta(&dir, &["list", "subtask_of=~^ep"]);
     assert!(lists_task(&re, "c1") && lists_task(&re, "c2"), "{re}");
 
     // A computed column used ONLY as a filter is injected: c1 transitively
@@ -132,7 +136,7 @@ fn relationship_names_and_computed_columns_filter() {
     assert!(!run(ta_bin(), &dir, &["list", "nooperator"])
         .status
         .success());
-    assert!(!run(ta_bin(), &dir, &["list", "title~["]).status.success());
+    assert!(!run(ta_bin(), &dir, &["list", "title=~["]).status.success());
 }
 
 #[test]
@@ -259,7 +263,7 @@ fn sort_flag_orders_rows_with_reverse_and_configurable_default() {
         &dir,
         &[
             "list",
-            "priority~.",
+            "priority=~.",
             "--sort",
             "priority",
             "--columns",

@@ -1,9 +1,9 @@
 //! `list` action: the filtered task set.
 //!
-//! Compiles positional `field<op>value` criteria (`=` exact, `~` regex — also
-//! spelled `=~` —, `!=`/`!~` their negations, `>`/`>=`/`<`/`<=` ordering),
-//! applies the `--open`/`--ready` shortcuts, injects the graph-computed columns a
-//! query references, and returns the matching tasks ordered by the query's sort
+//! Compiles positional `field<op>value` criteria (`=` exact, `=~` regex, `!=`/
+//! `!~` their negations, `>`/`>=`/`<`/`<=` ordering), applies the
+//! `--open`/`--ready` shortcuts, injects the graph-computed columns a query
+//! references, and returns the matching tasks ordered by the query's sort
 //! column — rendering is the frontend's job.
 
 use std::cmp::Ordering;
@@ -111,9 +111,8 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
 }
 
 /// A filter operator. `=`/`!=` compare the field's value against a JSON-coerced
-/// query; `~`/`!~` (also spelled `=~`/`!=~`) match a regex against the field's
-/// string form; `>`/`>=`/`<`/`<=` order it against the query (see
-/// [`Matcher::Cmp`]).
+/// query; `=~`/`!~` match a regex against the field's string form; `>`/`>=`/`<`/
+/// `<=` order it against the query (see [`Matcher::Cmp`]).
 #[derive(Clone, Copy)]
 enum FilterOp {
     Eq,
@@ -189,7 +188,7 @@ impl Criterion {
     /// Whether `task` satisfies this criterion. A field offers zero or more
     /// candidate values (absent→none, a scalar→one, a multi-valued field — a
     /// set/array, `deps`, a relationship type — one per element). The positive
-    /// forms (`=`/`~`/comparisons) pass if ANY candidate matches; the negated
+    /// forms (`=`/`=~`/comparisons) pass if ANY candidate matches; the negated
     /// forms (`!=`/`!~`) are their logical NOT, so they pass when NONE does — and
     /// thus also when the field is empty or absent.
     fn matches(&self, task: &TaskState, ctx: &FilterCtx) -> bool {
@@ -284,7 +283,7 @@ fn field_values(task: &TaskState, field: &str, ctx: &FilterCtx) -> Vec<Value> {
 }
 
 /// A JSON value's string form for regex matching: the raw string for a JSON
-/// string, else its compact JSON (so `priority~^3$` can match the number 3).
+/// string, else its compact JSON (so `priority=~^3$` can match the number 3).
 fn value_string(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -314,19 +313,18 @@ fn compile_criterion(raw: &str) -> Result<Criterion, DynError> {
 }
 
 /// Split `field<op>value` at its FIRST operator, so an operator character inside
-/// the value (e.g. a regex `~`) doesn't fool the parser. The regex match accepts
-/// either spelling — `~`/`=~` (and `!~`/`!=~` for its negation) — so perl/bash
-/// muscle memory works. `=`/`!`/`>`/`<` peek the next byte(s) for their longer
-/// forms (`=~`, `!=`, `!~`, `!=~`, `>=`, `<=`); a bare `!` is not an operator.
+/// the value (e.g. a regex's `~`) doesn't fool the parser. The regex match is
+/// `=~` (perl/bash spelling), its negation `!~`. `=`/`!`/`>`/`<` peek the next
+/// byte for their two-char forms (`=~`, `!=`, `!~`, `>=`, `<=`); a bare `!` or
+/// `~` is not an operator.
 fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
     let bytes = raw.as_bytes();
     for (i, &c) in bytes.iter().enumerate() {
         let (op, len) = match c {
             b'=' => match bytes.get(i + 1) {
-                Some(b'~') => (FilterOp::Re, 2), // `=~` synonym for `~`
+                Some(b'~') => (FilterOp::Re, 2), // `=~` regex match
                 _ => (FilterOp::Eq, 1),
             },
-            b'~' => (FilterOp::Re, 1),
             b'>' => match bytes.get(i + 1) {
                 Some(b'=') => (FilterOp::Ge, 2),
                 _ => (FilterOp::Gt, 1),
@@ -335,10 +333,9 @@ fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
                 Some(b'=') => (FilterOp::Le, 2),
                 _ => (FilterOp::Lt, 1),
             },
-            b'!' => match (bytes.get(i + 1), bytes.get(i + 2)) {
-                (Some(b'='), Some(b'~')) => (FilterOp::NotRe, 3), // `!=~` synonym for `!~`
-                (Some(b'='), _) => (FilterOp::Ne, 2),
-                (Some(b'~'), _) => (FilterOp::NotRe, 2),
+            b'!' => match bytes.get(i + 1) {
+                Some(b'=') => (FilterOp::Ne, 2),
+                Some(b'~') => (FilterOp::NotRe, 2),
                 _ => continue,
             },
             _ => continue,
@@ -348,8 +345,15 @@ fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
         }
         return Ok((&raw[..i], op, &raw[i + len..]));
     }
+    // A bare `~` was the old regex spelling — point it at `=~`.
+    if raw.contains('~') {
+        return Err(format!(
+            "invalid criterion `{raw}`: the regex match operator is `=~` (e.g. `field=~regex`), its negation `!~`; a bare `~` is not an operator"
+        )
+        .into());
+    }
     Err(format!(
-        "invalid criterion `{raw}`: expected field=value, field~regex (or field=~regex), field!=value, field!~regex, or a comparison (field>value, field>=value, field<value, field<=value)"
+        "invalid criterion `{raw}`: expected field=value, field=~regex, field!=value, field!~regex, or a comparison (field>value, field>=value, field<value, field<=value)"
     )
     .into())
 }
@@ -391,23 +395,23 @@ mod tests {
         assert!(matches("status=open"));
         assert!(!matches("status=closed"));
         assert!(matches("priority=3"), "number coercion");
-        assert!(matches(r"status~^op"), "regex on string");
-        assert!(matches(r"priority~^3$"), "regex on number's string form");
+        assert!(matches(r"status=~^op"), "regex on string");
+        assert!(matches(r"priority=~^3$"), "regex on number's string form");
         assert!(matches("status!=closed"));
         assert!(!matches("status!~^op"));
 
-        // `=~`/`!=~` are accepted synonyms for `~`/`!~` (perl/bash spelling).
+        // The regex operator is `=~` (perl/bash spelling), its negation `!~`.
         assert!(matches!(
             split_criterion("status=~^op").unwrap().1,
             FilterOp::Re
         ));
         assert!(matches!(
-            split_criterion("status!=~^op").unwrap().1,
+            split_criterion("status!~^op").unwrap().1,
             FilterOp::NotRe
         ));
-        assert!(matches(r"status=~^op"), "=~ matches like ~");
-        assert!(!matches(r"status!=~^op"), "!=~ negates like !~");
-        // The plain `=`/`!=` are unaffected when `~` doesn't follow.
+        // A bare `~` is no longer an operator (it was the old spelling).
+        assert!(compile_criterion("status~^op").is_err(), "bare ~ rejected");
+        // `=`/`!=` still parse as themselves when no `~` follows.
         assert!(matches!(
             split_criterion("status=open").unwrap().1,
             FilterOp::Eq
@@ -430,10 +434,10 @@ mod tests {
         // Parse errors: no operator, empty field, bad regex.
         assert!(compile_criterion("nooperator").is_err());
         assert!(compile_criterion("=value").is_err());
-        assert!(compile_criterion("title~[").is_err());
+        assert!(compile_criterion("title=~[").is_err());
 
         // The first operator wins, so a regex value may contain operators.
-        let (field, _, value) = split_criterion("title~a=b").unwrap();
+        let (field, _, value) = split_criterion("title=~a=b").unwrap();
         assert_eq!((field, value), ("title", "a=b"));
     }
 
@@ -537,8 +541,8 @@ mod tests {
         assert!(m("missing!=anything"), "absent field passes negation");
 
         // Regex runs per element: anchors bind to a member, not the JSON blob.
-        assert!(m(r"tags~^urgent$"));
-        assert!(!m(r"tags~,"), "no member contains the serialization comma");
+        assert!(m(r"tags=~^urgent$"));
+        assert!(!m(r"tags=~,"), "no member contains the serialization comma");
 
         // Numeric comparison holds when any member qualifies.
         assert!(m("scores>=8"));
@@ -575,7 +579,7 @@ mod tests {
         assert!(matches(&child, "depends_on=lib"));
         assert!(!matches(&epic, "depends_on=lib"), "epic has no such edge");
         assert!(matches(&epic, "has_subtask=child"));
-        assert!(matches(&child, r"depends_on~^li"), "regex over targets");
+        assert!(matches(&child, r"depends_on=~^li"), "regex over targets");
 
         // Inverse names resolve the reverse direction (as `show` surfaces them).
         assert!(matches(&child, "subtask_of=epic"), "child's parent");

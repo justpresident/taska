@@ -34,7 +34,7 @@ fn auto_timestamps_lifecycle_search_and_compaction() {
 
     // The times are ordinary string fields: searchable and selectable as columns.
     assert!(
-        lists_task(&ta(&dir, &["list", "create_time~^20"]), "api"),
+        lists_task(&ta(&dir, &["list", "create_time=~^20"]), "api"),
         "searchable by create_time"
     );
 
