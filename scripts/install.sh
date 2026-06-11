@@ -10,9 +10,11 @@
 #   ✅  curl -fsSL … | bash        ✅  bash install.sh        ❌  source install.sh
 #
 # Environment overrides:
-#   TASKA_VERSION      release tag to install (default: the latest), e.g. v0.5.0
-#   TASKA_INSTALL_DIR  directory to install `ta` into
-#                      (default: /usr/local/bin if writable, else ~/.local/bin)
+#   TASKA_VERSION         release tag to install (default: the latest), e.g. v0.5.0
+#   TASKA_INSTALL_DIR     directory to install `ta` into
+#                         (default: /usr/local/bin if writable, else ~/.local/bin)
+#   TASKA_NO_MODIFY_PATH  set to 1 to NOT touch your shell rc; just print the
+#                         PATH line to add yourself
 set -euo pipefail
 
 REPO="justpresident/taska"
@@ -91,6 +93,52 @@ resolve_version() {
   [ -n "$VERSION" ] || die "no published release found for $REPO (set TASKA_VERSION, or 'cargo install ${CRATE}')"
 }
 
+# --- put the install dir on PATH for future shells -------------------------
+# Detects the login shell from $SHELL, appends the right line to its rc file
+# (idempotently), unless the dir is already on PATH or TASKA_NO_MODIFY_PATH=1.
+ensure_on_path() {
+  local dir="$1"
+  case ":${PATH:-}:" in
+    *":$dir:"*) return 0 ;; # already on PATH — nothing to do
+  esac
+
+  # Pick the rc file and the line to add, by the user's login shell.
+  local shell rc line
+  shell="${SHELL:-/bin/sh}"
+  shell="${shell##*/}"
+  case "$shell" in
+    zsh) rc="${ZDOTDIR:-$HOME}/.zshrc"; line="export PATH=\"$dir:\$PATH\"" ;;
+    bash)
+      # macOS login shells read ~/.bash_profile; Linux interactive read ~/.bashrc.
+      if [ "$(uname -s)" = "Darwin" ]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi
+      line="export PATH=\"$dir:\$PATH\"" ;;
+    fish) rc="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"; line="fish_add_path \"$dir\"" ;;
+    *) rc="$HOME/.profile"; line="export PATH=\"$dir:\$PATH\"" ;;
+  esac
+
+  if [ "${TASKA_NO_MODIFY_PATH:-0}" = "1" ]; then
+    warn "$dir is not on your PATH (TASKA_NO_MODIFY_PATH is set, so leaving $rc untouched). Add:"
+    printf '    %s\n' "$line" >&2
+    return 0
+  fi
+
+  # Idempotent: if the rc already references the dir, just remind how to activate.
+  if [ -f "$rc" ] && grep -Fq "$dir" "$rc" 2>/dev/null; then
+    info "$dir is already configured in $rc — restart your shell, or run: $line"
+    return 0
+  fi
+
+  mkdir -p "${rc%/*}" 2>/dev/null || true
+  if printf '\n# Added by the taska installer (%s)\n%s\n' "$BIN" "$line" >>"$rc" 2>/dev/null; then
+    ok "Added $dir to your PATH in $rc"
+    info "Restart your shell, or run this now to use ${BIN} immediately:"
+    printf '    %s\n' "$line" >&2
+  else
+    warn "couldn't write $rc — add $dir to your PATH manually:"
+    printf '    %s\n' "$line" >&2
+  fi
+}
+
 # --- fall back to building from crates.io ----------------------------------
 fallback_cargo() {
   if have cargo; then
@@ -151,13 +199,7 @@ main() {
   [ "$(uname -s)" = "Darwin" ] && xattr -d com.apple.quarantine "${dir}/${BIN}" 2>/dev/null || true
 
   ok "Installed ${BIN} to ${dir}/${BIN}"
-
-  case ":${PATH:-}:" in
-    *":${dir}:"*) ;;
-    *)
-      warn "${dir} is not on your PATH — add it to your shell profile (~/.bashrc, ~/.zshrc, …):"
-      printf '    export PATH="%s:$PATH"\n' "$dir" >&2 ;;
-  esac
+  ensure_on_path "$dir"
 
   printf '\n' >&2
   "${dir}/${BIN}" --version >&2 2>/dev/null || true

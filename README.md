@@ -46,7 +46,7 @@ The quick way — a prebuilt `ta` for Linux/macOS, no Rust toolchain needed:
 $ curl -fsSL https://raw.githubusercontent.com/justpresident/taska/master/scripts/install.sh | bash
 ```
 
-It picks the right binary for your OS/arch from the [latest release](https://github.com/justpresident/taska/releases/latest), verifies its checksum, and installs to `/usr/local/bin` (or `~/.local/bin` if that isn't writable). Override the location with `TASKA_INSTALL_DIR=…` or pin a tag with `TASKA_VERSION=v0.5.0`; on an unsupported platform it falls back to `cargo install`. Prefer to read before you pipe? It's [`scripts/install.sh`](scripts/install.sh).
+It picks the right binary for your OS/arch from the [latest release](https://github.com/justpresident/taska/releases/latest), verifies its checksum, installs to `/usr/local/bin` (or `~/.local/bin` if that isn't writable), and — if that directory isn't on your `PATH` — adds it to your shell's rc file (`.zshrc`/`.bashrc`/`.bash_profile`/`config.fish`/`.profile`, detected from `$SHELL`). Override the location with `TASKA_INSTALL_DIR=…`, pin a tag with `TASKA_VERSION=v0.5.0`, or skip the rc edit with `TASKA_NO_MODIFY_PATH=1`; on an unsupported platform it falls back to `cargo install`. Prefer to read before you pipe? It's [`scripts/install.sh`](scripts/install.sh).
 
 Or, with Rust installed, from crates.io:
 
