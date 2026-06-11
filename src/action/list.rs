@@ -201,12 +201,18 @@ impl Criterion {
     }
 }
 
-/// Whether `v <op> q` holds under the shared [`cmp_json`] order, guarding
-/// cross-type compares: only two numbers, two strings, or two bools compare —
-/// anything else (number vs string) never matches, rather than ranking by type.
-/// Strings/dates therefore order lexicographically for free (RFC 3339 timestamps
-/// sort chronologically). There are no negated comparison forms: `<=` is the
-/// negation of `>`.
+/// Whether `v <op> q` holds under the shared [`cmp_json`] order. Comparisons are
+/// SCALAR-only: a candidate and the query compare just when both are numbers,
+/// both strings, or both bools. Every other pairing yields no match —
+/// - a cross-type pair (number vs string) doesn't rank by type, and
+/// - a COMPOSITE value (a `set`/`array`/object field) is never ordered against a
+///   scalar, mirroring `=` (which also treats a multi-valued field as one whole
+///   value: `scores=8` doesn't match the set `{3,8}` either). Element/membership
+///   queries on such a field go through `~` over its string form (`scores~8`).
+///
+/// Within a type it's [`cmp_json`], so strings/dates order lexicographically for
+/// free (RFC 3339 timestamps sort chronologically). There are no negated forms:
+/// `<=` is the negation of `>`.
 fn cmp_holds(op: FilterOp, v: &Value, q: &Value) -> bool {
     let comparable = matches!(
         (v, q),
@@ -406,6 +412,8 @@ mod tests {
                 ("priority", serde_json::json!(3)),
                 ("title", serde_json::json!("api server")),
                 ("created", serde_json::json!("2026-06-05")),
+                // A composite (set/array) field value — one whole candidate.
+                ("scores", serde_json::json!([3, 8])),
             ],
         );
         let types = crate::config::RelationshipConfig::default().types;
@@ -457,6 +465,21 @@ mod tests {
         // An absent field offers no candidates, so every comparison is false.
         assert!(!matches("missing>0"));
         assert!(!matches("missing<=0"));
+
+        // Comparisons are scalar-only: a composite (set/array) field value never
+        // orders against a scalar — mirroring `=`, which also treats the whole
+        // value as one (`scores=8` wouldn't match {3,8} either). Membership goes
+        // through `~` on the string form (`scores~8`), not a comparison.
+        assert!(
+            !matches("scores>=5"),
+            "set/array value: no comparison match"
+        );
+        assert!(!matches("scores>1"));
+        assert!(!matches("scores<100"));
+        assert!(
+            matches(r"scores~8"),
+            "membership is the regex's job, not >/<"
+        );
     }
 
     #[test]
