@@ -22,7 +22,7 @@ pub enum AgentFileStatus {
     Created,
     /// The file existed; `init` spliced in a new/changed block.
     Updated,
-    /// The file already held exactly this block — left untouched.
+    /// The file already held exactly this block - left untouched.
     Unchanged,
 }
 
@@ -42,21 +42,21 @@ pub struct InitOutcome {
 ///
 /// The BEGIN line also carries a version and a content hash, so a re-run can
 /// splice a fresh block in place and a human/tool can see at a glance whether
-/// it's current. Existing files in the wild carry these exact strings — treat
+/// it's current. Existing files in the wild carry these exact strings - treat
 /// them as a format contract; don't rename without a migration story.
 const BLOCK_BEGIN: &str = "<!-- BEGIN TASKA INTEGRATION";
 const BLOCK_END: &str = "<!-- END TASKA INTEGRATION -->";
 /// The block's schema version (bump when the guidance text changes).
 const BLOCK_VERSION: u32 = 4;
 /// Candidate agent files. Every one that already exists is updated; if none do,
-/// the FIRST is created (`AGENTS.md` — the emerging cross-tool standard).
+/// the FIRST is created (`AGENTS.md` - the emerging cross-tool standard).
 const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 
 /// Provision the store idempotently, (re)register the git merge driver, and sync
 /// the agent-integration block.
 ///
 /// Reuse a discoverable store (so re-running from anywhere in the repo is
-/// idempotent), else create one at the SCM root — committed there, the store
+/// idempotent), else create one at the SCM root - committed there, the store
 /// travels with the repo and every clone's walk-up discovery finds it; only a
 /// plain directory (no SCM above) keeps it at the cwd. The driver is always
 /// (re)registered, and the integration block is always re-synced, so re-running
@@ -73,7 +73,7 @@ pub fn init() -> Result<InitOutcome, DynError> {
     };
 
     // Provision honors the (possibly user-edited) config, creating any newly
-    // configured log files — re-running `init` is how a `[store]` path change is
+    // configured log files - re-running `init` is how a `[store]` path change is
     // applied.
     let store = FileStore::provision(base_dir)?;
     let repo_root = store
@@ -84,7 +84,7 @@ pub fn init() -> Result<InitOutcome, DynError> {
 
     // The block is config-AGNOSTIC (durable bare commands + working habits +
     // pointers to `ta prime`/`--help`), so it needs nothing from the store and
-    // never drifts as the config changes — `ta prime` carries the dynamic detail.
+    // never drifts as the config changes - `ta prime` carries the dynamic detail.
     let agent_files = sync_agent_files(&repo_root, &integration_block())?;
 
     Ok(InitOutcome {
@@ -168,23 +168,23 @@ fn splice_block(existing: &str, block: &str) -> Option<String> {
 /// store's field/status/type/relationship names), the durable working habits,
 /// and pointers to `ta prime` (for the dynamic, config-tailored schema and
 /// examples) and `ta <command> --help` (for flags). Because it names nothing that
-/// can change, it never drifts as the config evolves — the same block fits every
+/// can change, it never drifts as the config evolves - the same block fits every
 /// store, and re-running `init` only rewrites it when this guidance text changes.
 fn integration_block() -> String {
-    // Bare command shapes — `<field>`/`<type>`/`<target>` placeholders, never a
+    // Bare command shapes - `<field>`/`<type>`/`<target>` placeholders, never a
     // configured name. The aligned comments line up via the longest command.
     let cmds: [(&str, &str); 6] = [
         (
             "ta list --ready",
             "actionable work: not done, all deps done",
         ),
-        ("ta show <id> --full", "one task — every field, full notes"),
+        ("ta show <id> --full", "one task - every field, full notes"),
         (
-            "ta create <id> <field>=<value> …",
-            "file new work (the status field defaults — don't set it)",
+            "ta create <id> <field>=<value> ...",
+            "file new work (the status field defaults - don't set it)",
         ),
         (
-            "ta update <id> <field>=<value> …",
+            "ta update <id> <field>=<value> ...",
             "=, +=, -=  (set / append / remove)",
         ),
         ("ta dep add <id> <type>=<target>", "link a dependency"),
@@ -204,7 +204,7 @@ fn integration_block() -> String {
     let body = format!(
         "## Task tracking (taska)\n\
          \n\
-         This repo tracks work in a local, git-native store (`.taska/`) — drive it through the \
+         This repo tracks work in a local, git-native store (`.taska/`) - drive it through the \
          `ta` CLI, never hand-edit `.taska/`. Field names, statuses, task types, and \
          relationships are defined by `.taska/config.toml` and vary per repo, so run `ta prime` \
          for THIS store's schema and copy-paste-ready examples, and `ta <command> --help` for a \
@@ -221,7 +221,7 @@ fn integration_block() -> String {
          - For long or multi-line values, read from stdin (`<field>=@-`) or a file \
          (`<field>=@FILE`) instead of quoting on the command line (`+=`/`-=` accept `@` too).\n\
          - Set prerequisites with `ta dep add`, and append progress to related tasks \
-         (`<field>+=…`) as things change so the trail stays current.\n\
+         (`<field>+=...`) as things change so the trail stays current.\n\
          - Read a task's full, untruncated notes with `ta show <id> --full`.\n\
          - Commit the `.taska/` change in the same commit as the code it describes; if the \
          store has pending changes unrelated to what you're starting, commit those first."
@@ -253,7 +253,7 @@ mod tests {
             b.trim_end().ends_with(BLOCK_END),
             "ends with the marker: {b}"
         );
-        // Pointers to the dynamic guide and per-command help — not baked-in detail.
+        // Pointers to the dynamic guide and per-command help - not baked-in detail.
         assert!(b.contains("ta prime"), "points at the dynamic guide: {b}");
         assert!(b.contains("--help"), "points at per-command help: {b}");
         // Config-AGNOSTIC: generic placeholders, never a configured field/type/

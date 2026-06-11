@@ -1,6 +1,6 @@
 //! `prime` action: a config-tailored snapshot of the store's conventions.
 //!
-//! The data behind `ta prime` — this store's workflow vocabulary (status field
+//! The data behind `ta prime` - this store's workflow vocabulary (status field
 //! and values, the type field), its declared task types and relationship types,
 //! the displayed columns, and a count summary. Gathered as typed [`PrimeFacts`]
 //! the frontend renders into an agent primer (the CLI builds a markdown guide;
@@ -20,7 +20,7 @@ use crate::storage::EventStore;
 #[derive(Serialize, Debug, Clone)]
 pub struct FieldFacts {
     pub name: String,
-    /// The declared kind (`string`, `enum`, `uint`, `set<string>`, …).
+    /// The declared kind (`string`, `enum`, `uint`, `set<string>`, ...).
     pub kind: String,
     pub required: bool,
     /// Declared enum values (empty for non-enum fields).
@@ -64,7 +64,7 @@ pub struct SummaryFacts {
 /// The config-tailored snapshot behind `ta prime`.
 ///
 /// This store's workflow vocabulary, declared types/relationships, displayed
-/// columns, and a count summary — enough for an agent to drive `ta` against THIS
+/// columns, and a count summary - enough for an agent to drive `ta` against THIS
 /// store. Serializes directly for `ta prime --format json`.
 #[derive(Serialize, Debug, Clone)]
 pub struct PrimeFacts {
@@ -73,7 +73,7 @@ pub struct PrimeFacts {
     pub default_status: String,
     pub done_status: String,
     /// The declared status enum values, if the status field is declared an enum
-    /// (else empty — the store accepts free-form status strings).
+    /// (else empty - the store accepts free-form status strings).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub statuses: Vec<String>,
     /// The display name of the type field (`[workflow] type_field`).
@@ -95,7 +95,7 @@ pub struct PrimeOutcome {
 /// Runnable example tokens derived from the facts.
 ///
 /// A status to claim with, a type + its required fields to create with, a blocker
-/// to link, a field to filter on — all config-derived, so every example a
+/// to link, a field to filter on - all config-derived, so every example a
 /// frontend weaves from them is runnable against THIS store. Shared by the CLI
 /// primer and the `ta init` integration block.
 pub struct PrimeExamples {
@@ -103,8 +103,8 @@ pub struct PrimeExamples {
     pub claim: String,
     /// The first declared type's name (or `task` when none is declared).
     pub type_name: String,
-    /// That type's required fields as `name="…"` tokens (minus the status field,
-    /// which `create` stamps), space-joined; `title="…"` when none are declared.
+    /// That type's required fields as `name="..."` tokens (minus the status field,
+    /// which `create` stamps), space-joined; `title="..."` when none are declared.
     pub req_example: String,
     /// The first gating relationship type (a `dep add` example).
     pub blocker: String,
@@ -131,12 +131,12 @@ pub fn examples(f: &PrimeFacts) -> PrimeExamples {
             t.fields
                 .iter()
                 .filter(|x| x.required && x.name != *sf)
-                .map(|x| format!("{}=\"…\"", x.name))
+                .map(|x| format!("{}=\"...\"", x.name))
                 .collect()
         })
         .unwrap_or_default();
     let req_example = if req_fields.is_empty() {
-        "title=\"…\"".to_string()
+        "title=\"...\"".to_string()
     } else {
         req_fields.join(" ")
     };
@@ -208,7 +208,7 @@ fn build_facts(config: &Config, summary: &StatusSummary) -> PrimeFacts {
 
     // The status enum values: the declared values of the (display-named) status
     // field wherever a type declares it an enum, deduped in first-seen order.
-    // Empty when no type constrains the status — a free-form-status store.
+    // Empty when no type constrains the status - a free-form-status store.
     let mut statuses: Vec<String> = Vec::new();
     for def in config.task_types.types.values() {
         if let Some(schema) = def.fields.get(&workflow.status_field) {
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn facts_are_free_form_without_a_schema() {
         // `Config::default()` declares no task types, so the status is free-form
-        // and there are no type facts — the facts must say so, not invent an enum.
+        // and there are no type facts - the facts must say so, not invent an enum.
         let facts = prime(&InMemoryStore::default()).unwrap().facts;
         assert!(facts.statuses.is_empty(), "no declared status enum");
         assert!(facts.task_types.is_empty(), "no declared types");

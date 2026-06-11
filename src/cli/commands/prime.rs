@@ -1,8 +1,8 @@
-//! `ta prime` — print a config-tailored agent primer for this store.
+//! `ta prime` - print a config-tailored agent primer for this store.
 //!
 //! The structured facts come from [`crate::action::prime`]; this file renders
 //! them into a markdown guide (human) and passes the same facts to `emit` as JSON
-//! (`--format json`). The guide is plain text — no color — so it satisfies the
+//! (`--format json`). The guide is plain text - no color - so it satisfies the
 //! output-consistency contract trivially. It reads THIS store's vocabulary, so a
 //! renamed status field or a freshly declared type is reflected automatically.
 
@@ -33,9 +33,9 @@ fn describe_field(f: &FieldFacts) -> String {
     }
 }
 
-/// One task type as a bullet: ``  - `name`: required …; optional ….``
+/// One task type as a bullet: ``  - `name`: required ...; optional ....``
 ///
-/// The status field is omitted — it has its own dedicated line above, so
+/// The status field is omitted - it has its own dedicated line above, so
 /// repeating its enum here would be noise.
 fn describe_type(t: &TypeFacts, status_field: &str) -> String {
     let fields = || t.fields.iter().filter(|f| f.name != status_field);
@@ -87,7 +87,7 @@ fn read_commands(ex: &PrimeExamples) -> String {
         ("ta list --open".to_string(), "the open backlog".to_string()),
         (
             "ta show <id> --full".to_string(),
-            "one task — every field, full notes".to_string(),
+            "one task - every field, full notes".to_string(),
         ),
         (
             format!("ta list {}", ex.filter),
@@ -122,7 +122,7 @@ fn write_commands(f: &PrimeFacts, ex: &PrimeExamples) -> String {
             "record a prerequisite".to_string(),
         ),
         (
-            "ta update <id> notes+=\"…\"".to_string(),
+            "ta update <id> notes+=\"...\"".to_string(),
             "append a note (here and on related tasks)".to_string(),
         ),
     ])
@@ -149,7 +149,7 @@ fn schema_section(f: &PrimeFacts) -> String {
     };
 
     let type_block = if f.task_types.is_empty() {
-        "- Types: none declared — tasks are free-form (any field name is accepted).".to_string()
+        "- Types: none declared - tasks are free-form (any field name is accepted).".to_string()
     } else {
         let mut block = format!(
             "- Type field `{tf}=` (untyped tasks: {}); declared types:",
@@ -194,14 +194,14 @@ fn render_guide(f: &PrimeFacts) -> String {
     let s = &f.summary;
 
     format!(
-        "# taska (`ta`) — task & dependency tracker for this repo\n\
+        "# taska (`ta`) - task & dependency tracker for this repo\n\
          \n\
          Tasks live in an append-only log in `.taska/`, replayed to current state; branches \
          reconcile automatically via a git merge driver. Drive the store ONLY through `ta` \
          (never hand-edit `.taska/*.jsonl`), and commit the `.taska/` change in the same \
          commit as the code it describes.\n\
          \n\
-         ## Schema (dynamic — defined by `.taska/config.toml`, not hardcoded)\n\
+         ## Schema (dynamic - defined by `.taska/config.toml`, not hardcoded)\n\
          Field names, statuses, types, and relationships are THIS store's config; another \
          repo may differ, so `ta prime` each new store.\n\
          {schema}\n\
@@ -212,10 +212,10 @@ fn render_guide(f: &PrimeFacts) -> String {
          ```\n\
          \n\
          ## Filing & tracking tasks\n\
-         File a task for each distinct piece of work — one per feature/bug, before or as you \
+         File a task for each distinct piece of work - one per feature/bug, before or as you \
          start it. Give `notes` enough for someone else to act without you: the goal and \
          intended approach/implementation details, any open or design questions, and the \
-         context — for long or multi-line values, read them from stdin (`notes=@-`) or a file \
+         context - for long or multi-line values, read them from stdin (`notes=@-`) or a file \
          (`notes=@FILE`) on any `ta create`/`ta update` instead of quoting on the command line \
          (`+=` takes `@` too). Set prerequisites with `ta dep add`, and append to related tasks \
          as things change so the trail stays current. Don't pass `{sf}=` on create (it defaults \
@@ -225,12 +225,12 @@ fn render_guide(f: &PrimeFacts) -> String {
          ```\n\
          \n\
          Keep git history coherent: the eventlog change and the code it describes belong in one \
-         commit — if the store has pending `.taska/` changes unrelated to what you're starting, \
+         commit - if the store has pending `.taska/` changes unrelated to what you're starting, \
          commit those first.\n\
          \n\
          ## Working a task\n\
-         1. `ta list --ready` — pick actionable work.  2. `ta update <id> {sf}={claim}` — \
-         claim it.  3. do it, appending notes as you go.  4. `ta update <id> {sf}={done}` — \
+         1. `ta list --ready` - pick actionable work.  2. `ta update <id> {sf}={claim}` - \
+         claim it.  3. do it, appending notes as you go.  4. `ta update <id> {sf}={done}` - \
          then commit `.taska/` with the code.  5. file the follow-ups you discover.\n\
          \n\
          {open} open ({ready} ready, {blocked} blocked), {closed} closed. Re-run `ta prime` \
@@ -282,10 +282,10 @@ mod tests {
             g.contains("ta create <id> type=task "),
             "create example: {g}"
         );
-        assert!(g.contains("title=\"…\""), "create lists title: {g}");
-        assert!(g.contains("notes=\"…\""), "create lists notes: {g}");
+        assert!(g.contains("title=\"...\""), "create lists title: {g}");
+        assert!(g.contains("notes=\"...\""), "create lists notes: {g}");
         assert!(
-            !g.contains("status=\"…\""),
+            !g.contains("status=\"...\""),
             "create omits the stamped status field: {g}"
         );
     }
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn guide_has_no_ansi_escapes() {
-        // The primer is plain markdown — never colored — so it satisfies the
+        // The primer is plain markdown - never colored - so it satisfies the
         // output-consistency contract unconditionally.
         assert!(!guide().contains('\u{1b}'), "guide must be escape-free");
     }
