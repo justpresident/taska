@@ -17,9 +17,7 @@ use crate::action::{inject_computed_columns, materialize, read, Warning};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::graph;
-use crate::model::{
-    is_done, task_cmp, MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, TARGET_KEY,
-};
+use crate::model::{is_done, task_cmp, MutationEvent, OpType, TaskState, REL_KEY, TARGET_KEY};
 use crate::schema::vet_events;
 use crate::storage::EventStore;
 
@@ -473,6 +471,7 @@ pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, D
         hierarchy: &hierarchy,
         status_field: &wf.status_field,
         done_status: &wf.done_status,
+        default_blocker: store.config().relationships.default_blocker(),
         sort: query.sort,
         reverse: query.reverse,
         open: query.open,
@@ -502,6 +501,11 @@ struct TreeCtx<'a> {
     hierarchy: &'a BTreeSet<String>,
     status_field: &'a str,
     done_status: &'a str,
+    /// The default blocker type (the configured first `blocker`-kind type, e.g.
+    /// `depends_on`). Its edge tag is hidden since it's the tree's implied default
+    /// relation; every other type is tagged. `None` only for a store with no
+    /// blocker type (which `Config::validate` rejects).
+    default_blocker: Option<&'a str>,
     /// The column siblings are ordered by (via [`task_cmp`]).
     sort: &'a str,
     reverse: bool,
@@ -524,7 +528,9 @@ fn build(
 ) -> Node {
     let edge = match kind {
         Some(k) if ctx.hierarchy.contains(k) => Some("subtask".to_string()),
-        Some(k) if k != DEPENDS_ON => Some(k.to_string()),
+        // Tag every blocker type except the default (its name is the implied
+        // default relation of the tree, so showing it would just be noise).
+        Some(k) if ctx.default_blocker != Some(k) => Some(k.to_string()),
         _ => None,
     };
     let Some(task) = ctx.state.get(id) else {

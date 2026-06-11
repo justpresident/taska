@@ -248,6 +248,37 @@ fn custom_blocker_relationship_gates_readiness() {
 }
 
 #[test]
+fn dep_tree_hides_the_configured_default_blocker_not_literal_depends_on() {
+    let dir = fresh_dir("default-blocker-tag");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // Add a blocker type whose name sorts BEFORE `depends_on`, so it (not
+    // `depends_on`) becomes the default blocker — the first blocker type by name.
+    let cfg = dir.join(".taska/config.toml");
+    let mut text = fs::read_to_string(&cfg).unwrap();
+    text.push_str("\n[relationships.consumes]\nkind = \"blocker\"\ninverse = \"consumed_by\"\n");
+    fs::write(&cfg, text).unwrap();
+
+    for id in ["a", "b", "c"] {
+        ta(&dir, &["create", id, "status=open"]);
+    }
+    ta(&dir, &["dep", "add", "a", "consumes=b"]); // via the (new) default blocker
+    ta(&dir, &["dep", "add", "a", "depends_on=c"]); // via a now-non-default blocker
+
+    let tree = ta(&dir, &["dep", "tree", "a"]);
+    // The configured default blocker's tag is hidden (it's the implied relation),
+    // and `depends_on` — no longer the default — is tagged like any other type.
+    assert!(
+        !tree.contains("[consumes]"),
+        "the configured default blocker is not tagged: {tree}"
+    );
+    assert!(
+        tree.contains("[depends_on]"),
+        "depends_on is tagged once it's not the default: {tree}"
+    );
+}
+
+#[test]
 fn informational_relationship_does_not_gate_readiness() {
     let dir = fresh_dir("info-rel");
     init_repo(&dir);

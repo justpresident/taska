@@ -27,9 +27,7 @@ use serde_json::{Map, Value};
 
 use crate::config::OnConflict;
 use crate::error::DynError;
-use crate::model::{
-    edge_rel, edge_target, MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, TARGET_KEY,
-};
+use crate::model::{edge_rel, edge_target, MutationEvent, OpType, TaskState, REL_KEY, TARGET_KEY};
 
 /// `ta git-merge %O %A %B` — reconcile diverged mutation logs into `current`.
 ///
@@ -651,14 +649,10 @@ fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &m
         };
         let mut payload = Map::new();
         payload.insert(TARGET_KEY.to_string(), Value::String(target.clone()));
-        // Every edge carries an explicit type now (no implicit `depends_on`).
         payload.insert(REL_KEY.to_string(), Value::String(rel_type.clone()));
-        // Label the edge by type unless it's the default `depends_on`.
-        let label = if rel_type == DEPENDS_ON {
-            target.clone()
-        } else {
-            format!("{rel_type}:{target}")
-        };
+        // Provenance labels every edge by its type uniformly — `type:target` —
+        // so the `_meta` record names which typed edge was resolved.
+        let label = format!("{rel_type}:{target}");
         let item = ResolvedItem {
             field: None,
             dep: Some(label.clone()),
