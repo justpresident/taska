@@ -40,7 +40,15 @@ The default setup installs a custom merge driver — via `.gitattributes` — fo
 
 ## Install
 
-With Rust installed, from crates.io:
+The quick way — a prebuilt `ta` for Linux/macOS, no Rust toolchain needed:
+
+```console
+$ curl -fsSL https://raw.githubusercontent.com/justpresident/taska/master/scripts/install.sh | bash
+```
+
+It picks the right binary for your OS/arch from the [latest release](https://github.com/justpresident/taska/releases/latest), verifies its checksum, and installs to `/usr/local/bin` (or `~/.local/bin` if that isn't writable). Override the location with `TASKA_INSTALL_DIR=…` or pin a tag with `TASKA_VERSION=v0.5.0`; on an unsupported platform it falls back to `cargo install`. Prefer to read before you pipe? It's [`scripts/install.sh`](scripts/install.sh).
+
+Or, with Rust installed, from crates.io:
 
 ```console
 $ cargo install taska        # installs the `ta` binary
