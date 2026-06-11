@@ -65,24 +65,30 @@ fn init_updates_existing_file_in_place_and_is_idempotent() {
     assert_eq!(claude, claude2, "re-run is byte-identical");
 }
 
-/// Re-running init re-syncs the block to the current config — renaming the status
-/// field re-tailors the cheat-sheet, still as a single block.
+/// The block is config-AGNOSTIC, so it does NOT change when the config changes —
+/// renaming the status field leaves it byte-identical. (The dynamic, tailored
+/// detail lives in `ta prime`, which the block points at.)
 #[test]
-fn init_resyncs_the_block_to_the_current_config() {
-    let dir = fresh_dir("init-resync");
+fn init_block_is_config_agnostic() {
+    let dir = fresh_dir("init-agnostic");
     init_repo(&dir);
     ta(&dir, &["init"]);
+    let before = fs::read_to_string(dir.join("AGENTS.md")).unwrap();
+
     ta(&dir, &["config", "set", "workflow.status_field", "state"]);
     ta(&dir, &["init"]);
+    let after = fs::read_to_string(dir.join("AGENTS.md")).unwrap();
 
-    let agents = fs::read_to_string(dir.join("AGENTS.md")).unwrap();
-    assert!(
-        agents.contains("ta update <id> state="),
-        "block tracks the renamed field: {agents}"
-    );
     assert_eq!(
-        agents.matches("BEGIN TASKA INTEGRATION").count(),
-        1,
-        "still exactly one block: {agents}"
+        before, after,
+        "static block is unaffected by a config change"
+    );
+    assert!(
+        before.contains("ta prime"),
+        "points at the dynamic guide: {before}"
+    );
+    assert!(
+        !before.contains("state="),
+        "carries no status-field literal: {before}"
     );
 }

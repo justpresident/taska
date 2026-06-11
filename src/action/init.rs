@@ -6,7 +6,6 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use crate::action::prime;
 use crate::error::DynError;
 use crate::git;
 use crate::storage::FileStore;
@@ -47,8 +46,8 @@ pub struct InitOutcome {
 /// them as a format contract; don't rename without a migration story.
 const BLOCK_BEGIN: &str = "<!-- BEGIN TASKA INTEGRATION";
 const BLOCK_END: &str = "<!-- END TASKA INTEGRATION -->";
-/// The block's schema version (bump when the body format changes).
-const BLOCK_VERSION: u32 = 3;
+/// The block's schema version (bump when the guidance text changes).
+const BLOCK_VERSION: u32 = 4;
 /// Candidate agent files. Every one that already exists is updated; if none do,
 /// the FIRST is created (`AGENTS.md` — the emerging cross-tool standard).
 const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
@@ -83,13 +82,10 @@ pub fn init() -> Result<InitOutcome, DynError> {
         .to_path_buf();
     git::setup(&repo_root)?;
 
-    // Best-effort: a store whose config can't be read still gets its driver set
-    // up (the integration block is a nicety, not load-bearing). The next `ta`
-    // command surfaces a real config problem through the normal gate.
-    let agent_files = match prime::prime(&store) {
-        Ok(outcome) => sync_agent_files(&repo_root, &integration_block(&outcome.facts))?,
-        Err(_) => Vec::new(),
-    };
+    // The block is config-AGNOSTIC (durable bare commands + working habits +
+    // pointers to `ta prime`/`--help`), so it needs nothing from the store and
+    // never drifts as the config changes — `ta prime` carries the dynamic detail.
+    let agent_files = sync_agent_files(&repo_root, &integration_block())?;
 
     Ok(InitOutcome {
         store: store_outcome,
@@ -166,37 +162,33 @@ fn splice_block(existing: &str, block: &str) -> Option<String> {
     Some(out)
 }
 
-/// Build the marker-delimited integration block from the config-tailored facts —
-/// a condensed, runnable cheat-sheet that points at `ta prime` for the full,
-/// always-current guide (kept deliberately small per taska's non-intrusive bent).
-fn integration_block(facts: &prime::PrimeFacts) -> String {
-    let ex = prime::examples(facts);
-    let (sf, tf) = (&facts.status_field, &facts.type_field);
-    let cmds: Vec<(String, String)> = vec![
+/// Build the marker-delimited integration block.
+///
+/// Deliberately CONFIG-AGNOSTIC: bare command shapes (placeholders, not this
+/// store's field/status/type/relationship names), the durable working habits,
+/// and pointers to `ta prime` (for the dynamic, config-tailored schema and
+/// examples) and `ta <command> --help` (for flags). Because it names nothing that
+/// can change, it never drifts as the config evolves — the same block fits every
+/// store, and re-running `init` only rewrites it when this guidance text changes.
+fn integration_block() -> String {
+    // Bare command shapes — `<field>`/`<type>`/`<target>` placeholders, never a
+    // configured name. The aligned comments line up via the longest command.
+    let cmds: [(&str, &str); 6] = [
         (
-            "ta list --ready".to_string(),
-            "pick actionable work".to_string(),
+            "ta list --ready",
+            "actionable work: not done, all deps done",
+        ),
+        ("ta show <id> --full", "one task — every field, full notes"),
+        (
+            "ta create <id> <field>=<value> …",
+            "file new work (the status field defaults — don't set it)",
         ),
         (
-            "ta show <id> --full".to_string(),
-            "full details of one task".to_string(),
+            "ta update <id> <field>=<value> …",
+            "=, +=, -=  (set / append / remove)",
         ),
-        (
-            format!("ta create <id> {tf}={} {}", ex.type_name, ex.req_example),
-            "file work — rich notes: goal, approach, open Qs".to_string(),
-        ),
-        (
-            format!("ta update <id> {sf}={}", ex.claim),
-            format!("=, +=, -=  ({sf}={} to finish)", facts.done_status),
-        ),
-        (
-            format!("ta dep add <id> {}=<other>", ex.blocker),
-            "record a prerequisite".to_string(),
-        ),
-        (
-            "ta update <id> notes+=\"…\"".to_string(),
-            "append a note (here and on related tasks)".to_string(),
-        ),
+        ("ta dep add <id> <type>=<target>", "link a dependency"),
+        ("ta status", "counts"),
     ];
     let width = cmds
         .iter()
@@ -212,20 +204,27 @@ fn integration_block(facts: &prime::PrimeFacts) -> String {
     let body = format!(
         "## Task tracking (taska)\n\
          \n\
-         This repo tracks work in a local, git-native store (`.taska/`) — drive it through \
-         the `ta` CLI, never hand-edit `.taska/`. The task schema (fields, statuses, types) \
-         is set by `.taska/config.toml` and differs per repo; run `ta prime` for THIS \
-         store's schema and the full workflow.\n\
+         This repo tracks work in a local, git-native store (`.taska/`) — drive it through the \
+         `ta` CLI, never hand-edit `.taska/`. Field names, statuses, task types, and \
+         relationships are defined by `.taska/config.toml` and vary per repo, so run `ta prime` \
+         for THIS store's schema and copy-paste-ready examples, and `ta <command> --help` for a \
+         command's flags.\n\
          \n\
          ```bash\n\
          {cheat}\n\
          ```\n\
          \n\
-         File a task for each unit of work, with enough `notes` to act on it (goal, approach, \
-         open questions — pipe long notes via `notes=@-` from stdin, or `notes=@FILE`); set \
-         prerequisites with `ta dep`, and append progress to related tasks. Commit the \
-         `.taska/` change with the code it describes — flushing any unrelated pending change \
-         first."
+         Working habits:\n\
+         - File a task for each distinct piece of work, before or as you start it, with `notes` \
+         rich enough for someone else to act on: the goal, intended approach/implementation \
+         details, and any open or design questions.\n\
+         - For long or multi-line values, read from stdin (`<field>=@-`) or a file \
+         (`<field>=@FILE`) instead of quoting on the command line (`+=`/`-=` accept `@` too).\n\
+         - Set prerequisites with `ta dep add`, and append progress to related tasks \
+         (`<field>+=…`) as things change so the trail stays current.\n\
+         - Read a task's full, untruncated notes with `ta show <id> --full`.\n\
+         - Commit the `.taska/` change in the same commit as the code it describes; if the \
+         store has pending changes unrelated to what you're starting, commit those first."
     );
     let hash = short_hash(&body);
     format!("{BLOCK_BEGIN} v{BLOCK_VERSION} hash:{hash} -->\n{body}\n{BLOCK_END}")
@@ -244,51 +243,44 @@ fn short_hash(s: &str) -> String {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::test_support::store_with_schema;
-
-    fn block() -> String {
-        integration_block(&prime::prime(&store_with_schema()).unwrap().facts)
-    }
 
     #[test]
-    fn block_is_marker_delimited_and_config_tailored() {
-        let b = block();
+    fn block_is_marker_delimited_and_config_agnostic() {
+        let b = integration_block();
         assert!(b.starts_with(BLOCK_BEGIN), "begins with the marker: {b}");
         assert!(b.contains("hash:"), "carries a content hash: {b}");
         assert!(
             b.trim_end().ends_with(BLOCK_END),
             "ends with the marker: {b}"
         );
-        // The cheat-sheet uses the store's actual vocabulary.
+        // Pointers to the dynamic guide and per-command help — not baked-in detail.
+        assert!(b.contains("ta prime"), "points at the dynamic guide: {b}");
+        assert!(b.contains("--help"), "points at per-command help: {b}");
+        // Config-AGNOSTIC: generic placeholders, never a configured field/type/
+        // status/relationship literal.
         assert!(
-            b.contains("ta create <id> type=task"),
-            "create example: {b}"
+            b.contains("ta create <id> <field>=<value>"),
+            "generic create shape: {b}"
         );
         assert!(
-            b.contains("ta update <id> status=in_progress"),
-            "claim example: {b}"
+            !b.contains("type=task") && !b.contains("depends_on") && !b.contains("=todo"),
+            "no config-specific literals: {b}"
         );
-        assert!(b.contains("status=closed to finish"), "done status: {b}");
-        assert!(b.contains("ta prime"), "points at the full guide: {b}");
-        // It teaches the dynamic schema and the task-filing discipline.
+        // The durable working habits are present.
         assert!(
-            b.contains("schema") && b.contains(".taska/config.toml"),
-            "explains the dynamic schema: {b}"
-        );
-        assert!(
-            b.contains("File a task for each unit of work")
-                && b.contains("open questions")
-                && b.contains("ta dep"),
-            "encourages rich tasks + dependencies: {b}"
+            b.contains("File a task for each distinct piece of work")
+                && b.contains("open or design questions")
+                && b.contains("ta dep add"),
+            "filing discipline + dependencies: {b}"
         );
         assert!(
             b.contains("append progress to related tasks"),
-            "encourages cross-task notes: {b}"
+            "cross-task notes: {b}"
         );
-        assert!(b.contains("notes=@-"), "documents stdin note input: {b}");
+        assert!(b.contains("<field>=@-"), "stdin/file input: {b}");
         assert!(
-            b.contains("flushing any unrelated pending change"),
-            "advises flushing unrelated pending changes first: {b}"
+            b.contains("unrelated to what you're starting"),
+            "commit hygiene: {b}"
         );
     }
 

@@ -262,7 +262,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 
 | Command | Description |
 |---|---|
-| `ta init` | Create the store, register the git merge drivers, and write/refresh a config-tailored agent-integration block in `AGENTS.md` (created if neither it nor `CLAUDE.md` exists) and any existing `CLAUDE.md` — a small marker-delimited cheat-sheet that points at `ta prime`. Idempotent (re-running re-syncs the block to the current config); run once per clone |
+| `ta init` | Create the store, register the git merge drivers, and write/refresh a small, **config-agnostic** agent-integration block in `AGENTS.md` (created if neither it nor `CLAUDE.md` exists) and any existing `CLAUDE.md` — bare command shapes + durable working habits + pointers to `ta prime` (for this store's schema and ready-to-run examples) and `ta <command> --help`. Marker-delimited and idempotent; run once per clone |
 | `ta create <id> [field=value ...]` | Create a task with arbitrary fields |
 | `ta update <id> <field=value \| field+=value ...>` | `=` sets a field; `+=` appends to a text field (one entry per line). Mix both in one command. Appends merge conflict-free (concurrent appends accumulate) |
 | `ta dep add <task> <type>=<target> …` | Add typed relationship edge(s); each `type` must be declared in `[relationships]` (e.g. `ta dep add api depends_on=db relates_to=ui`). A `hierarchy` type like `has_subtask` makes a parent/child edge that gates like a blocker but renders distinctly. Rejects a second blocking edge between the same pair, or a second parent for a task |
