@@ -9,7 +9,7 @@ use crate::action::{list_tasks, ListQuery};
 use crate::cli::print_warnings;
 use crate::config::DisplayConfig;
 use crate::error::DynError;
-use crate::format::{print_tasks, referenced_columns, DisplayArgs};
+use crate::format::{print_tasks, referenced_columns, DisplayArgs, RowStyle};
 use crate::model::TaskState;
 use crate::storage::EventStore;
 
@@ -50,10 +50,15 @@ pub fn cmd_list(
     };
 
     let blockers = store.config().relationships.blocker_types();
+    let workflow = &store.config().workflow;
+    let style = RowStyle {
+        status_field: &workflow.status_field,
+        done_status: &workflow.done_status,
+    };
     // Resolve the effective layout (flag, else `[display].list_layout`).
     let mut display = display.clone();
     display.layout = Some(display.layout.unwrap_or(cfg.list_layout));
     let tasks: Vec<&TaskState> = outcome.tasks.iter().collect();
-    print_tasks(&tasks, &display, cfg, &blockers, empty);
+    print_tasks(&tasks, &display, cfg, &blockers, style, empty);
     Ok(())
 }

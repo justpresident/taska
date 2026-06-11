@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::action::dep::{Kids, Node};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
-use crate::format::OutputArgs;
+use crate::format::{OutputArgs, RowStyle};
 use crate::model::{OpType, DEPS_KEY, ID_KEY, SUBTASKS_KEY};
 use crate::storage::EventStore;
 
@@ -170,52 +170,61 @@ fn dep_tree(
         crate::format::emit(output, human, &Value::Array(Vec::new()));
         return Ok(());
     }
-    // Render the built-once forest to BOTH human and JSON.
+    // Render the built-once forest to BOTH human and JSON. The shared RowStyle
+    // gives the tree the same per-column / done coloring as a `list` row.
     let value = Value::Array(outcome.forest.iter().map(node_json).collect());
-    let human = render_human_forest(&outcome.forest, color);
+    let workflow = &store.config().workflow;
+    let style = crate::format::RowStyle {
+        status_field: &workflow.status_field,
+        done_status: &workflow.done_status,
+    };
+    let human = render_human_forest(&outcome.forest, color, style);
     crate::format::emit(output, &human, &value);
     Ok(())
 }
 
-/// The colored label for one node: id, then each requested column's value
-/// The edge tag (`[subtask]` magenta, `[type]` plain, nothing for the default
-/// blocker / a root) LEADS the label — so the relationship that reached this node
-/// reads first — then the id (cyan), each requested column's value (truncated),
-/// and the `[subtasks d/t]` rollup. A done node is dimmed and prefixed `✓`. The
-/// connectors and position markers (`(cycle)`/`(missing)`/`…`) are added by the
-/// caller.
-fn node_label(node: &Node, color: bool) -> String {
-    let mut cells = String::new();
-    for (_, v) in &node.cells {
-        cells.push_str("  ");
-        cells.push_str(&crate::format::truncate(&render_cell(v), TREE_TITLE_MAX));
-    }
-    let rollup = node
-        .rollup
-        .map_or(String::new(), |(d, t)| format!(" [subtasks {d}/{t}]"));
-    // The edge tag leads, with a trailing space before the id. On a done node it
-    // stays plain (the whole label is dimmed below); otherwise `[subtask]` is
-    // magenta, other types plain.
-    let edge = node.edge.as_deref().map_or(String::new(), |e| {
+/// The label for one node. The edge tag (`[subtask]` magenta, `[type]` plain,
+/// nothing for the default blocker / a root) LEADS — so the relationship that
+/// reached this node reads first — then the id and each requested column's value
+/// (truncated), then the `[subtasks d/t]` rollup. The id/columns are colored by
+/// the shared [`RowStyle`], identical to a `list` row (id cyan, the status column
+/// green); a done node greys whole (dim) and is prefixed `✓`. The connectors and
+/// position markers (`(cycle)`/`(missing)`/`…`) are added by the caller.
+fn node_label(node: &Node, color: bool, style: RowStyle) -> String {
+    let done = node.done;
+    let paint = |text: &str, col: &str| crate::format::paint_cell(text, col, done, style, color);
+    // The edge tag leads, with a trailing space before the id: `[subtask]`
+    // magenta when open, any tag dim on a done node, other types plain.
+    let mut s = node.edge.as_deref().map_or(String::new(), |e| {
         let tag = format!("[{e}] ");
-        if !node.done && e == "subtask" {
+        if done {
+            crate::format::sgr(&tag, "2", color)
+        } else if e == "subtask" {
             crate::format::sgr(&tag, "35", color)
         } else {
             tag
         }
     });
-    if node.done {
-        let s = format!("{edge}✓ {}{cells}{rollup}", node.id);
-        crate::format::sgr(&s, "2", color)
-    } else {
-        let mut s = edge;
-        s.push_str(&crate::format::sgr(&node.id, "36", color));
-        s.push_str(&cells);
-        if !rollup.is_empty() {
-            s.push_str(&crate::format::sgr(&rollup, "33", color));
-        }
-        s
+    if done {
+        s.push_str(&crate::format::sgr("✓ ", "2", color));
     }
+    s.push_str(&paint(&node.id, ID_KEY));
+    for (col, v) in &node.cells {
+        s.push_str("  ");
+        s.push_str(&paint(
+            &crate::format::truncate(&render_cell(v), TREE_TITLE_MAX),
+            col,
+        ));
+    }
+    if let Some((d, t)) = node.rollup {
+        let rollup = format!(" [subtasks {d}/{t}]");
+        s.push_str(&crate::format::sgr(
+            &rollup,
+            if done { "2" } else { "33" },
+            color,
+        ));
+    }
+    s
 }
 
 /// A column value as a one-line human string: the raw string for a JSON string,
@@ -229,17 +238,17 @@ fn render_cell(v: &Value) -> String {
 }
 
 /// Render the forest to the ASCII tree with box-drawing connectors.
-fn render_human_forest(forest: &[Node], color: bool) -> String {
+fn render_human_forest(forest: &[Node], color: bool, style: RowStyle) -> String {
     let mut out = String::new();
     for node in forest {
-        out.push_str(&node_label(node, color));
+        out.push_str(&node_label(node, color, style));
         out.push('\n');
-        push_kids(node, "", &mut out, color);
+        push_kids(node, "", &mut out, color, style);
     }
     out.trim_end_matches('\n').to_string()
 }
 
-fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool) {
+fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool, style: RowStyle) {
     let Kids::Children(kids) = &node.kids else {
         return;
     };
@@ -248,7 +257,7 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool) {
         let last = i + 1 == n;
         out.push_str(prefix);
         out.push_str(if last { "└─ " } else { "├─ " });
-        out.push_str(&node_label(kid, color));
+        out.push_str(&node_label(kid, color, style));
         match &kid.kids {
             Kids::Missing => out.push_str(" (missing)"),
             Kids::Cycle => out.push_str(" (cycle)"),
@@ -257,7 +266,7 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool) {
         }
         out.push('\n');
         let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
-        push_kids(kid, &child_prefix, out, color);
+        push_kids(kid, &child_prefix, out, color, style);
     }
 }
 

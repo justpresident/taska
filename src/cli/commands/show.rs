@@ -7,7 +7,7 @@ use crate::action::show;
 use crate::cli::print_warnings;
 use crate::config::DisplayConfig;
 use crate::error::DynError;
-use crate::format::{full_columns, render_rows, DisplayArgs};
+use crate::format::{full_columns, render_rows, DisplayArgs, RowStyle};
 use crate::storage::EventStore;
 
 /// Show a single task by id, defaulting to ALL of its fields (unlike `list`,
@@ -36,9 +36,14 @@ pub fn cmd_show(
     let mut display = display.clone();
     display.layout = Some(display.layout.unwrap_or(cfg.show_layout));
     let blockers = store.config().relationships.blocker_types();
+    let workflow = &store.config().workflow;
+    let style = RowStyle {
+        status_field: &workflow.status_field,
+        done_status: &workflow.done_status,
+    };
     println!(
         "{}",
-        render_rows(&tasks, &columns, &display, cfg, &blockers)
+        render_rows(&tasks, &columns, &display, cfg, &blockers, style)
     );
     Ok(())
 }

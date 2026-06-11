@@ -13,7 +13,7 @@ use clap::{Args, ValueEnum};
 use serde_json::Value;
 
 use crate::config::{DisplayConfig, Layout};
-use crate::model::{cell_value, TaskState, DEPS_KEY, ID_KEY};
+use crate::model::{cell_value, is_done, TaskState, DEPS_KEY, ID_KEY};
 
 /// Wrap `text` in an ANSI SGR sequence when `on`, else return it unchanged. Uses
 /// the terminal's NAMED 16-color palette (which the user's theme remaps for
@@ -26,16 +26,56 @@ pub(crate) fn sgr(text: &str, code: &str, on: bool) -> String {
     }
 }
 
-/// The SGR code a value column is painted with in human output: the built-in
-/// `id` (cyan) plus a `status` field (green). Everything else is left plain
-/// (headers/labels are bolded separately; `deps` styles itself per type group,
-/// see [`group_sgr`]).
-fn column_sgr(column: &str) -> Option<&'static str> {
-    match column {
-        ID_KEY => Some("36"),   // cyan
-        "status" => Some("32"), // green
-        _ => None,
+/// The workflow context every human task-renderer needs to color a row the SAME
+/// way: which display column is the status field (painted green), and the done
+/// values (a DONE task's whole row greys, overriding the column colors). Built
+/// once per render from the workflow config and threaded through every renderer
+/// (table, record, tree) — THE one place row coloring is decided, so all commands
+/// agree and a new task-rendering command inherits it for free.
+#[derive(Clone, Copy)]
+pub(crate) struct RowStyle<'a> {
+    pub status_field: &'a str,
+    pub done_status: &'a str,
+}
+
+impl RowStyle<'_> {
+    /// Whether a task counts as done under this workflow (so its whole row greys).
+    pub(crate) fn is_done(&self, task: &TaskState) -> bool {
+        is_done(task, self.status_field, self.done_status)
     }
+
+    /// The SGR code a `column` cell takes on a maybe-`done` task: a done task
+    /// dims every column uniformly (grey row); otherwise the built-in `id` is
+    /// cyan and the CONFIGURED status column green. `deps` is `None` — it styles
+    /// its own type groups (and dims them whole when done) via [`deps_cell`].
+    fn cell_sgr(&self, column: &str, done: bool) -> Option<&'static str> {
+        if column == DEPS_KEY {
+            None
+        } else if done {
+            Some("2") // dim / grey
+        } else if column == ID_KEY {
+            Some("36") // cyan
+        } else if column == self.status_field {
+            Some("32") // green
+        } else {
+            None
+        }
+    }
+}
+
+/// Paint `text` with the shared cell style for `column` on a maybe-`done` task —
+/// the ONE coloring decision every task renderer uses, so all output is
+/// consistent. Plain when `color` is off or the column carries no style.
+pub(crate) fn paint_cell(
+    text: &str,
+    column: &str,
+    done: bool,
+    style: RowStyle,
+    color: bool,
+) -> String {
+    style
+        .cell_sgr(column, done)
+        .map_or_else(|| text.to_string(), |code| sgr(text, code, color))
 }
 
 /// The SGR code for one deps-cell type group: a relationship type that gates
@@ -143,9 +183,10 @@ pub(crate) fn print_tasks(
     display: &DisplayArgs,
     cfg: &DisplayConfig,
     blockers: &BTreeSet<String>,
+    style: RowStyle,
     empty: &str,
 ) {
-    println!("{}", render(tasks, display, cfg, blockers, empty));
+    println!("{}", render(tasks, display, cfg, blockers, style, empty));
 }
 
 /// Render tasks per the display args. The selected columns decide *which* fields
@@ -156,6 +197,7 @@ fn render(
     display: &DisplayArgs,
     cfg: &DisplayConfig,
     blockers: &BTreeSet<String>,
+    style: RowStyle,
     empty: &str,
 ) -> String {
     // Only the human table needs an explicit empty placeholder; json/jsonl render
@@ -164,7 +206,7 @@ fn render(
         return empty.to_string();
     }
     let columns = resolve_columns(display, cfg, tasks);
-    render_rows(tasks, &columns, display, cfg, blockers)
+    render_rows(tasks, &columns, display, cfg, blockers, style)
 }
 
 /// Dispatch the chosen `--format` over an already-resolved column set. Shared by
@@ -177,6 +219,7 @@ pub(crate) fn render_rows(
     display: &DisplayArgs,
     cfg: &DisplayConfig,
     blockers: &BTreeSet<String>,
+    style: RowStyle,
 ) -> String {
     match display.output.format {
         OutputFormat::Json => render_json(tasks, columns),
@@ -190,8 +233,9 @@ pub(crate) fn render_rows(
                     &truncation_caps(columns, display, cfg),
                     color,
                     blockers,
+                    style,
                 ),
-                Layout::List => render_records(tasks, columns, color, blockers),
+                Layout::List => render_records(tasks, columns, color, blockers, style),
             }
         }
     }
@@ -204,10 +248,11 @@ fn render_records(
     columns: &[String],
     color: bool,
     blockers: &BTreeSet<String>,
+    style: RowStyle,
 ) -> String {
     tasks
         .iter()
-        .map(|t| render_record(t, columns, color, blockers))
+        .map(|t| render_record(t, columns, color, blockers, style))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -226,17 +271,26 @@ fn deps_groups(task: &TaskState) -> Vec<(String, String)> {
 /// Build the deps table cell: the type groups joined by `"; "`, truncated on the
 /// PLAIN text to `cap` (0 = no limit, ellipsis when cut — mirroring [`truncate`],
 /// which can't be reused because cutting styled text would slice escape
-/// sequences), each surviving group wrapped per its kind when `color`. Returns
-/// the possibly SGR-laden cell together with its plain display width, so the
-/// table pads on visible characters.
+/// sequences), each surviving group wrapped per its kind when `color` — or, on a
+/// `done` task, dimmed whole so the row stays uniformly grey. Returns the
+/// possibly SGR-laden cell together with its plain display width, so the table
+/// pads on visible characters.
 fn deps_cell(
     task: &TaskState,
     blockers: &BTreeSet<String>,
     cap: usize,
     color: bool,
+    done: bool,
 ) -> (String, usize) {
     let groups = deps_groups(task);
-    let style = |rel: &str, text: &str| sgr(text, group_sgr(blockers.contains(rel)), color);
+    let style = |rel: &str, text: &str| {
+        let code = if done {
+            "2"
+        } else {
+            group_sgr(blockers.contains(rel))
+        };
+        sgr(text, code, color)
+    };
     let total = groups.iter().map(|(_, t)| t.chars().count()).sum::<usize>()
         + groups.len().saturating_sub(1) * 2;
     if cap == 0 || total <= cap {
@@ -358,15 +412,17 @@ pub(crate) fn full_columns(tasks: &[&TaskState], cfg: &DisplayConfig) -> Vec<Str
 
 /// Render the aligned human table. `caps[i]` is the truncation width for column
 /// `i` (0 = no limit); the caller derives it from config/`--full` per column.
-/// When `color`, headers are bolded, id/status cells get their palette colors,
-/// and the deps cell carries per-type-group styling. Each cell travels with its
-/// plain display width, so alignment is exact even around escape sequences.
+/// When `color`, headers are bolded and each row is styled by the shared
+/// [`RowStyle`]: a done task's row greys, else `id`/the status column take their
+/// palette colors and `deps` carries per-type-group styling. Each cell travels
+/// with its plain display width, so alignment is exact even around escapes.
 fn render_human(
     tasks: &[&TaskState],
     columns: &[String],
     caps: &[usize],
     color: bool,
     blockers: &BTreeSet<String>,
+    style: RowStyle,
 ) -> String {
     let headers: Vec<(String, usize)> = columns
         .iter()
@@ -376,15 +432,17 @@ fn render_human(
             (h, w)
         })
         .collect();
+    let dones: Vec<bool> = tasks.iter().map(|t| style.is_done(t)).collect();
     let rows: Vec<Vec<(String, usize)>> = tasks
         .iter()
-        .map(|t| {
+        .zip(&dones)
+        .map(|(t, &done)| {
             columns
                 .iter()
                 .enumerate()
                 .map(|(i, c)| {
                     if c == DEPS_KEY {
-                        deps_cell(t, blockers, caps[i], color)
+                        deps_cell(t, blockers, caps[i], color, done)
                     } else {
                         let cell = truncate(&human_cell(t, c), caps[i]);
                         let w = cell.chars().count();
@@ -402,10 +460,11 @@ fn render_human(
         })
         .collect();
     let mut lines = vec![emit_row(&headers, &widths, color, |_| Some("1"))];
-    lines.extend(
-        rows.iter()
-            .map(|r| emit_row(r, &widths, color, |i| column_sgr(columns[i].as_str()))),
-    );
+    lines.extend(rows.iter().zip(&dones).map(|(r, &done)| {
+        emit_row(r, &widths, color, |i| {
+            style.cell_sgr(columns[i].as_str(), done)
+        })
+    }));
     lines.join("\n")
 }
 
@@ -419,24 +478,33 @@ pub(crate) fn render_record(
     columns: &[String],
     color: bool,
     blockers: &BTreeSet<String>,
+    style: RowStyle,
 ) -> String {
+    let done = style.is_done(task);
     let label_w = columns.iter().map(String::len).max().unwrap_or(0) + 1; // +1 for ':'
     let indent = " ".repeat(label_w + 1);
     let mut lines = Vec::new();
     for col in columns {
+        // Labels stay bold (they're structural, like the table's header); only
+        // the VALUES take the shared row style, so a done task's values grey.
         let label = sgr(&format!("{:<label_w$}", format!("{col}:")), "1", color);
-        // The value's display lines: deps puts one type group per line, each
-        // styled by its kind; anything else is the human cell continued across
-        // its own newlines, the first line carrying the column color.
         let parts: Vec<String> = if col == DEPS_KEY {
+            // One type group per line: styled by kind, or dimmed whole when done.
             deps_groups(task)
                 .into_iter()
-                .map(|(rel, text)| sgr(&text, group_sgr(blockers.contains(&rel)), color))
+                .map(|(rel, text)| {
+                    let code = if done {
+                        "2"
+                    } else {
+                        group_sgr(blockers.contains(&rel))
+                    };
+                    sgr(&text, code, color)
+                })
                 .collect()
         } else {
             let value = human_cell(task, col);
             let mut parts: Vec<String> = value.split('\n').map(str::to_string).collect();
-            if let Some(code) = column_sgr(col) {
+            if let Some(code) = style.cell_sgr(col, done) {
                 if color && parts.first().is_some_and(|f| !f.is_empty()) {
                     parts[0] = sgr(&parts[0], code, true);
                 }
@@ -572,6 +640,14 @@ mod tests {
         BTreeSet::from(["depends_on".to_string()])
     }
 
+    /// The default-config row style: status column `status`, done value `closed`.
+    fn style() -> RowStyle<'static> {
+        RowStyle {
+            status_field: "status",
+            done_status: "closed",
+        }
+    }
+
     /// A task with both a gating (`depends_on`) and an info (`relates_to`) edge.
     fn mixed_edges_task() -> TaskState {
         let mut t = task("api", &["db", "web"], &[]);
@@ -640,6 +716,7 @@ mod tests {
             &truncation_caps(&cols, &full, &cfg),
             false,
             &blockers(),
+            style(),
         );
         let header: Vec<String> = human
             .lines()
@@ -694,12 +771,12 @@ mod tests {
 
         // Plain, uncapped: groups joined by `; `, width = visible chars.
         let plain = "depends_on: db, web; relates_to: x";
-        let (cell, w) = deps_cell(&t, &blockers(), 0, false);
+        let (cell, w) = deps_cell(&t, &blockers(), 0, false, false);
         assert_eq!(cell, plain);
         assert_eq!(w, plain.chars().count());
 
         // Colored: the gating group is bold, the info group dim, width unchanged.
-        let (cell, w) = deps_cell(&t, &blockers(), 0, true);
+        let (cell, w) = deps_cell(&t, &blockers(), 0, true, false);
         assert_eq!(
             cell,
             "\x1b[1mdepends_on: db, web\x1b[0m; \x1b[2mrelates_to: x\x1b[0m"
@@ -708,19 +785,26 @@ mod tests {
 
         // Truncation cuts on the PLAIN text (`truncate` semantics: cap-1 + `…`),
         // never mid-escape; the cut group keeps its styling.
-        let (cell, w) = deps_cell(&t, &blockers(), 10, false);
+        let (cell, w) = deps_cell(&t, &blockers(), 10, false, false);
         assert_eq!(cell, "depends_o…");
         assert_eq!(w, 10);
-        let (cell, w) = deps_cell(&t, &blockers(), 25, true);
+        let (cell, w) = deps_cell(&t, &blockers(), 25, true, false);
         assert_eq!(
             cell,
             "\x1b[1mdepends_on: db, web\x1b[0m; \x1b[2mrel\x1b[0m…"
         );
         assert_eq!(w, 25);
 
+        // A done task dims the whole deps cell (grey), overriding the kind colors.
+        let (cell, _) = deps_cell(&t, &blockers(), 0, true, true);
+        assert_eq!(
+            cell, "\x1b[2mdepends_on: db, web\x1b[0m; \x1b[2mrelates_to: x\x1b[0m",
+            "done: both groups dim"
+        );
+
         // No edges at all: empty cell, zero width.
         assert_eq!(
-            deps_cell(&task("t", &[], &[]), &blockers(), 0, true),
+            deps_cell(&task("t", &[], &[]), &blockers(), 0, true, false),
             (String::new(), 0)
         );
     }
@@ -729,7 +813,7 @@ mod tests {
     fn record_view_puts_one_deps_type_group_per_line() {
         let t = mixed_edges_task();
         let cols = vec!["id".to_string(), "deps".to_string()];
-        let out = render_record(&t, &cols, false, &blockers());
+        let out = render_record(&t, &cols, false, &blockers(), style());
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines[1], "deps: depends_on: db, web", "first group: {out}");
         assert_eq!(
@@ -738,7 +822,7 @@ mod tests {
             "next group continues indented: {out}"
         );
         // Colored: bold gating group on the label line, dim info continuation.
-        let colored = render_record(&t, &cols, true, &blockers());
+        let colored = render_record(&t, &cols, true, &blockers(), style());
         assert!(
             colored.contains("\x1b[1mdepends_on: db, web\x1b[0m"),
             "bold group: {colored:?}"
@@ -753,7 +837,14 @@ mod tests {
     fn human_has_header_and_unquoted_values() {
         let t = task("api", &["db"], &[("status", serde_json::json!("open"))]);
         let d = display(OutputFormat::Human, false, Some(&["id", "status", "deps"]));
-        let out = render(&[&t], &d, &DisplayConfig::default(), &blockers(), "(none)");
+        let out = render(
+            &[&t],
+            &d,
+            &DisplayConfig::default(),
+            &blockers(),
+            style(),
+            "(none)",
+        );
         assert!(
             out.contains("ID") && out.contains("STATUS"),
             "header: {out}"
@@ -777,7 +868,7 @@ mod tests {
 
         // color=true: id cyan (36), status green (32), headers + gating deps
         // groups bold (1), info groups dim (2), reset.
-        let colored = render_human(&[&t], &cols, &caps, true, &blockers());
+        let colored = render_human(&[&t], &cols, &caps, true, &blockers(), style());
         assert!(colored.contains("\x1b[36m"), "id cyan: {colored:?}");
         assert!(colored.contains("\x1b[32m"), "status green: {colored:?}");
         assert!(
@@ -793,12 +884,12 @@ mod tests {
         assert!(colored.contains("api") && colored.contains("open"));
 
         // color=false: not a single escape byte.
-        let plain = render_human(&[&t], &cols, &caps, false, &blockers());
+        let plain = render_human(&[&t], &cols, &caps, false, &blockers(), style());
         assert!(!plain.contains('\x1b'), "no escapes when off: {plain:?}");
 
         // The record view colors too, and stays clean when off.
-        assert!(render_record(&t, &cols, true, &blockers()).contains('\x1b'));
-        assert!(!render_record(&t, &cols, false, &blockers()).contains('\x1b'));
+        assert!(render_record(&t, &cols, true, &blockers(), style()).contains('\x1b'));
+        assert!(!render_record(&t, &cols, false, &blockers(), style()).contains('\x1b'));
 
         // JSON is never colored, even via the shared render path.
         let json = render(
@@ -806,9 +897,34 @@ mod tests {
             &display(OutputFormat::Json, false, Some(&["id", "status"])),
             &DisplayConfig::default(),
             &blockers(),
+            style(),
             "(none)",
         );
         assert!(!json.contains('\x1b'), "json never colored: {json:?}");
+    }
+
+    #[test]
+    fn done_task_greys_uniformly_while_open_keeps_column_colors() {
+        // The shared row style (also used by `dep tree`): an OPEN task keeps its
+        // per-column colors; a DONE task greys whole, overriding them. This is the
+        // consistency every task-rendering command inherits.
+        let cols = vec!["id".to_string(), "status".to_string()];
+        let caps = [0, 0];
+
+        let open = task("a", &[], &[("status", serde_json::json!("open"))]);
+        let o = render_human(&[&open], &cols, &caps, true, &blockers(), style());
+        assert!(
+            o.contains("\x1b[36m") && o.contains("\x1b[32m"),
+            "open: id cyan + status green: {o:?}"
+        );
+
+        let done = task("b", &[], &[("status", serde_json::json!("closed"))]);
+        let d = render_human(&[&done], &cols, &caps, true, &blockers(), style());
+        assert!(d.contains("\x1b[2m"), "done: cells dim/grey: {d:?}");
+        assert!(
+            !d.contains("\x1b[36m") && !d.contains("\x1b[32m"),
+            "done overrides the column colors: {d:?}"
+        );
     }
 
     #[test]
@@ -831,6 +947,7 @@ mod tests {
             &args,
             &DisplayConfig::default(),
             &blockers(),
+            style(),
             "(none)",
         );
         assert!(out.trim_start().starts_with('['), "array: {out}");
@@ -857,6 +974,7 @@ mod tests {
             &d,
             &DisplayConfig::default(),
             &blockers(),
+            style(),
             "(none)",
         );
         // --full unions the column set: both x and y appear across the array.
@@ -870,7 +988,14 @@ mod tests {
             "absent fields omitted, not null: {out}"
         );
 
-        let empty = render(&[], &d, &DisplayConfig::default(), &blockers(), "(none)");
+        let empty = render(
+            &[],
+            &d,
+            &DisplayConfig::default(),
+            &blockers(),
+            style(),
+            "(none)",
+        );
         assert_eq!(empty, "[]", "empty json is []");
     }
 
@@ -884,6 +1009,7 @@ mod tests {
             &d,
             &DisplayConfig::default(),
             &blockers(),
+            style(),
             "(none)",
         );
         let lines: Vec<&str> = out.lines().collect();
@@ -912,7 +1038,14 @@ mod tests {
 
         // Empty input yields no lines.
         assert_eq!(
-            render(&[], &d, &DisplayConfig::default(), &blockers(), "(none)"),
+            render(
+                &[],
+                &d,
+                &DisplayConfig::default(),
+                &blockers(),
+                style(),
+                "(none)"
+            ),
             ""
         );
     }
@@ -943,6 +1076,7 @@ mod tests {
             &display(OutputFormat::Human, true, None),
             &cfg,
             &blockers(),
+            style(),
             "(none)",
         );
         assert!(full.contains(long), "--full prints untruncated: {full}");
@@ -954,6 +1088,7 @@ mod tests {
             &display(OutputFormat::Human, false, None),
             &cfg,
             &blockers(),
+            style(),
             "(none)",
         );
         assert!(!default.contains(long), "default truncates: {default}");
@@ -965,6 +1100,7 @@ mod tests {
             &display(OutputFormat::Human, false, Some(&["id", "notes"])),
             &cfg,
             &blockers(),
+            style(),
             "(none)",
         );
         assert!(cols.contains('…'), "--columns still truncates: {cols}");
@@ -995,6 +1131,7 @@ mod tests {
             &display(OutputFormat::Human, false, None),
             &cfg,
             &blockers(),
+            style(),
             "(none)",
         );
         // notes keeps all 20 chars (override 60 > 20, no ellipsis); summary is cut.
@@ -1010,6 +1147,7 @@ mod tests {
             &display(OutputFormat::Human, true, None),
             &cfg,
             &blockers(),
+            style(),
             "(none)",
         );
         assert!(!full.contains('…'), "--full disables truncation: {full}");
@@ -1028,7 +1166,7 @@ mod tests {
             ],
         );
         let cols = full_columns(&[&t], &DisplayConfig::default());
-        let out = render_record(&t, &cols, false, &blockers());
+        let out = render_record(&t, &cols, false, &blockers(), style());
 
         // One field per line: `id` value is `api`, status its own line.
         assert!(
