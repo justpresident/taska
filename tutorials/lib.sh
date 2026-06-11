@@ -39,16 +39,16 @@ if ! command -v ta >/dev/null 2>&1; then
   exit 1
 fi
 
-# say <text...> — print a line of narration in a distinct bold style.
+# say <text...> — print a line of narration in a dimmed style.
 say() {
-  printf '%s## %s%s\n' "$_C_BOLD$_C_CYAN" "$*" "$_C_RESET"
+  printf '%s## %s%s\n' "$_C_DIM$_C_CYAN" "$*" "$_C_RESET"
 }
 
 # run <cmd...> — echo the command prefixed with `$ `, run it for real so the
 # learner sees the actual output, then print a trailing blank line. The command's
 # own exit status is preserved (returned), so a caller can react to a failure.
 run() {
-  printf '%s$ %s%s\n' "$_C_DIM" "$*" "$_C_RESET"
+  printf '%s$ %s%s\n' "$_C_BOLD" "$*" "$_C_RESET"
   "$@"
   local status=$?
   printf '\n'

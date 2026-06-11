@@ -71,8 +71,8 @@ $ TUTORIAL_NONINTERACTIVE=1 bash tutorials/run-all.sh
 
 Every script sources `lib.sh`, which provides:
 
-- `say <text>` — bold narration, prefixed with `## `.
-- `run <cmd...>` — echoes the command (prefixed `$ `), runs it for real, then a
+- `say <text>` — dimmed narration, prefixed with `## `.
+- `run <cmd...>` — echoes the command in bold (prefixed `$ `), runs it for real, then a
   blank line, so you see the command and its actual output together.
 - `pause` — waits for Enter, but returns immediately when non-interactive.
 - `fresh_repo` — makes a throwaway `mktemp` repo outside this tree, `git init`s
