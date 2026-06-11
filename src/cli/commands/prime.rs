@@ -215,12 +215,18 @@ fn render_guide(f: &PrimeFacts) -> String {
          File a task for each distinct piece of work — one per feature/bug, before or as you \
          start it. Give `notes` enough for someone else to act without you: the goal and \
          intended approach/implementation details, any open or design questions, and the \
-         context. Set prerequisites with `ta dep add`, and append to related tasks as things \
-         change so the trail stays current. Don't pass `{sf}=` on create (it defaults to \
-         `{default}`); read full notes with `ta show <id> --full`.\n\
+         context — for long or multi-line values, read them from stdin (`notes=@-`) or a file \
+         (`notes=@FILE`) on any `ta create`/`ta update` instead of quoting on the command line \
+         (`+=` takes `@` too). Set prerequisites with `ta dep add`, and append to related tasks \
+         as things change so the trail stays current. Don't pass `{sf}=` on create (it defaults \
+         to `{default}`); read full notes with `ta show <id> --full`.\n\
          ```bash\n\
          {write_block}\n\
          ```\n\
+         \n\
+         Keep git history coherent: the eventlog change and the code it describes belong in one \
+         commit — if the store has pending `.taska/` changes unrelated to what you're starting, \
+         commit those first.\n\
          \n\
          ## Working a task\n\
          1. `ta list --ready` — pick actionable work.  2. `ta update <id> {sf}={claim}` — \
@@ -310,6 +316,15 @@ mod tests {
         assert!(
             g.contains("append to related tasks") && g.contains("notes+="),
             "encourages cross-task notes: {g}"
+        );
+        // Stdin/file input for long notes, and commit hygiene.
+        assert!(
+            g.contains("notes=@-") && g.contains("notes=@FILE"),
+            "documents stdin/file note input: {g}"
+        );
+        assert!(
+            g.contains("unrelated to what you're starting"),
+            "advises flushing unrelated pending changes first: {g}"
         );
     }
 

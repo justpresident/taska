@@ -48,7 +48,7 @@ pub struct InitOutcome {
 const BLOCK_BEGIN: &str = "<!-- BEGIN TASKA INTEGRATION";
 const BLOCK_END: &str = "<!-- END TASKA INTEGRATION -->";
 /// The block's schema version (bump when the body format changes).
-const BLOCK_VERSION: u32 = 2;
+const BLOCK_VERSION: u32 = 3;
 /// Candidate agent files. Every one that already exists is updated; if none do,
 /// the FIRST is created (`AGENTS.md` — the emerging cross-tool standard).
 const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
@@ -222,8 +222,10 @@ fn integration_block(facts: &prime::PrimeFacts) -> String {
          ```\n\
          \n\
          File a task for each unit of work, with enough `notes` to act on it (goal, approach, \
-         open questions); set prerequisites with `ta dep`, and append progress to related \
-         tasks. Commit the `.taska/` change in the same commit as the code it describes."
+         open questions — pipe long notes via `notes=@-` from stdin, or `notes=@FILE`); set \
+         prerequisites with `ta dep`, and append progress to related tasks. Commit the \
+         `.taska/` change with the code it describes — flushing any unrelated pending change \
+         first."
     );
     let hash = short_hash(&body);
     format!("{BLOCK_BEGIN} v{BLOCK_VERSION} hash:{hash} -->\n{body}\n{BLOCK_END}")
@@ -282,6 +284,11 @@ mod tests {
         assert!(
             b.contains("append progress to related tasks"),
             "encourages cross-task notes: {b}"
+        );
+        assert!(b.contains("notes=@-"), "documents stdin note input: {b}");
+        assert!(
+            b.contains("flushing any unrelated pending change"),
+            "advises flushing unrelated pending changes first: {b}"
         );
     }
 
