@@ -178,10 +178,12 @@ fn dep_tree(
 }
 
 /// The colored label for one node: id, then each requested column's value
-/// (truncated), the edge tag (`[subtask]` magenta, `[type]` plain, nothing for
-/// `depends_on`/root) and its `[subtasks d/t]` rollup. A done node is dimmed and
-/// prefixed `✓`. The connectors and position markers (`(cycle)`/`(missing)`/`…`)
-/// are added by the caller.
+/// The edge tag (`[subtask]` magenta, `[type]` plain, nothing for the default
+/// blocker / a root) LEADS the label — so the relationship that reached this node
+/// reads first — then the id (cyan), each requested column's value (truncated),
+/// and the `[subtasks d/t]` rollup. A done node is dimmed and prefixed `✓`. The
+/// connectors and position markers (`(cycle)`/`(missing)`/`…`) are added by the
+/// caller.
 fn node_label(node: &Node, color: bool) -> String {
     let mut cells = String::new();
     for (_, v) in &node.cells {
@@ -191,26 +193,24 @@ fn node_label(node: &Node, color: bool) -> String {
     let rollup = node
         .rollup
         .map_or(String::new(), |(d, t)| format!(" [subtasks {d}/{t}]"));
-    if node.done {
-        let mut s = format!("✓ {}{cells}", node.id);
-        if let Some(e) = &node.edge {
-            s.push_str(" [");
-            s.push_str(e);
-            s.push(']');
+    // The edge tag leads, with a trailing space before the id. On a done node it
+    // stays plain (the whole label is dimmed below); otherwise `[subtask]` is
+    // magenta, other types plain.
+    let edge = node.edge.as_deref().map_or(String::new(), |e| {
+        let tag = format!("[{e}] ");
+        if !node.done && e == "subtask" {
+            crate::format::sgr(&tag, "35", color)
+        } else {
+            tag
         }
-        s.push_str(&rollup);
+    });
+    if node.done {
+        let s = format!("{edge}✓ {}{cells}{rollup}", node.id);
         crate::format::sgr(&s, "2", color)
     } else {
-        let mut s = crate::format::sgr(&node.id, "36", color);
+        let mut s = edge;
+        s.push_str(&crate::format::sgr(&node.id, "36", color));
         s.push_str(&cells);
-        if let Some(e) = &node.edge {
-            let tag = format!(" [{e}]");
-            s.push_str(&if e == "subtask" {
-                crate::format::sgr(&tag, "35", color)
-            } else {
-                tag
-            });
-        }
         if !rollup.is_empty() {
             s.push_str(&crate::format::sgr(&rollup, "33", color));
         }
