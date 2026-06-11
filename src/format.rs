@@ -485,9 +485,14 @@ pub(crate) fn render_record(
     let indent = " ".repeat(label_w + 1);
     let mut lines = Vec::new();
     for col in columns {
-        // Labels stay bold (they're structural, like the table's header); only
-        // the VALUES take the shared row style, so a done task's values grey.
-        let label = sgr(&format!("{:<label_w$}", format!("{col}:")), "1", color);
+        // A done task's WHOLE record greys: the label loses its bold for dim, and
+        // every value line dims. An open task keeps the bold label and per-column
+        // value color (which only the single-line id/status columns carry).
+        let label = sgr(
+            &format!("{:<label_w$}", format!("{col}:")),
+            if done { "2" } else { "1" },
+            color,
+        );
         let parts: Vec<String> = if col == DEPS_KEY {
             // One type group per line: styled by kind, or dimmed whole when done.
             deps_groups(task)
@@ -502,14 +507,16 @@ pub(crate) fn render_record(
                 })
                 .collect()
         } else {
-            let value = human_cell(task, col);
-            let mut parts: Vec<String> = value.split('\n').map(str::to_string).collect();
-            if let Some(code) = style.cell_sgr(col, done) {
-                if color && parts.first().is_some_and(|f| !f.is_empty()) {
-                    parts[0] = sgr(&parts[0], code, true);
-                }
-            }
-            parts
+            // Style EVERY line, not just the first — so a done task's multi-line
+            // value (e.g. `notes`) greys whole, not just its opening line.
+            let code = style.cell_sgr(col, done);
+            human_cell(task, col)
+                .split('\n')
+                .map(|line| match code {
+                    Some(c) if color && !line.is_empty() => sgr(line, c, true),
+                    _ => line.to_string(),
+                })
+                .collect()
         };
         let first = parts.first().map_or("", String::as_str);
         lines.push(format!("{label} {first}").trim_end().to_string());
@@ -924,6 +931,31 @@ mod tests {
         assert!(
             !d.contains("\x1b[36m") && !d.contains("\x1b[32m"),
             "done overrides the column colors: {d:?}"
+        );
+    }
+
+    #[test]
+    fn done_record_greys_label_and_every_value_line() {
+        // `show` on a closed task: the whole record recedes — labels dim (no bold)
+        // and EVERY line of a multi-line value greys (regression: only the first
+        // line did).
+        let t = task(
+            "t",
+            &[],
+            &[
+                ("status", serde_json::json!("closed")),
+                ("notes", serde_json::json!("line one\nline two")),
+            ],
+        );
+        let cols = vec!["status".to_string(), "notes".to_string()];
+        let out = render_record(&t, &cols, true, &blockers(), style());
+        assert!(
+            out.contains("\x1b[2mline one\x1b[0m") && out.contains("\x1b[2mline two\x1b[0m"),
+            "both notes lines dim: {out:?}"
+        );
+        assert!(
+            !out.contains("\x1b[1m") && !out.contains("\x1b[32m"),
+            "no bold/green survives on a done record: {out:?}"
         );
     }
 
