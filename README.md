@@ -263,7 +263,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 | `ta dep cycles` | Report cycles in the blocker graph (`depends_on` plus any `blocker`/`hierarchy` relationship edges) |
 | `ta dep plan <goal> …` | A goal's not-done transitive prerequisites in dependency order — "do exactly these, in this order". `--critical` narrows to the longest single chain (the critical path) |
 | `ta delete <id>` | Delete a task |
-| `ta list [criteria...] [--open] [--ready]` | List tasks, optionally filtered by AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`, or a comparison `field>value`/`>=`/`<`/`<=` (numbers numerically, strings/dates lexicographically — quote them so the shell keeps `>`/`<`: `ta list 'unblocks>0' 'priority>=4'`); `field` may be a task field, `id`, `deps` (a target under any relationship type), a relationship type or inverse name (`depends_on=db`, `subtask_of=epic`, `blocks=api`), or a computed column (`unblocks=0`). `--open` limits to not-done tasks; `--ready` to not-done tasks whose dependencies are all done. With no criteria, lists everything |
+| `ta list [criteria...] [--open] [--ready]` | List tasks, optionally filtered by AND-combined criteria: `field=value` (exact), `field~regex`, `field!=value`, `field!~regex`, or a comparison `field>value`/`>=`/`<`/`<=` (numbers numerically, strings/dates lexicographically — quote them so the shell keeps `>`/`<`: `ta list 'unblocks>0' 'priority>=4'`); `field` may be a task field, `id`, `deps` (a target under any relationship type), a relationship type or inverse name (`depends_on=db`, `subtask_of=epic`, `blocks=api`), or a computed column (`unblocks=0`); a multi-valued field (set/array, `deps`, relationship type) matches if any element does (see [Filtering](#filtering)). `--open` limits to not-done tasks; `--ready` to not-done tasks whose dependencies are all done. With no criteria, lists everything |
 | `ta show <id>` | Show one task as a readable vertical record — every field, untruncated, one `field: value` line each, plus the inverse edges pointing at it (`blocks`, `subtask_of`, …) as their own fields (`--format json`/`jsonl` for machine output) |
 | `ta status` | Summary counts: total, per-status (discovered from the data), blocked, ready, and closed (`--format json`/`jsonl` for a machine-readable object) |
 | `ta undo [--count N] [--remove] [--force]` | Reverse the last N events: truncate uncommitted ones, append compensating events for committed ones (`--remove` to force truncation) |
@@ -284,6 +284,24 @@ Every command that prints data — `list`, `show`, `status`, and `dep tree`/`pla
 Human output is **colored** when stdout is a terminal — `id` cyan, `status` green, headers bold, and the `deps` type groups styled by kind (readiness-gating types bold, informational ones dim), using the terminal's named 16-color palette so it adapts to your light/dark theme. Color auto-disables when output isn't a TTY (pipes, redirects) and for `--format json`/`jsonl`, so machine output and `grep` stay clean; `--no-color` or the `NO_COLOR` env var turns it off explicitly.
 
 `list` also offers a few **computed** columns for triage — `unblocks` (how many still-open tasks this one transitively unblocks — "finish it to free up N"), `blocked_by` (how many still-open prerequisites it's waiting on), and `subtasks` (a parent's `done/total` child completion). The first two behave like numeric fields, so `--sort unblocks --reverse` surfaces the highest-leverage work and `--sort blocked_by` the most-stuck. They're opt-in: computed only when named in `--columns`/`--sort` or the configured columns, so default and `--full`/json output are untouched.
+
+### Filtering
+
+`ta list` takes any number of positional `field<op>value` criteria, AND-combined — a task must satisfy all of them:
+
+| Criterion | Matches |
+|---|---|
+| `field=value` | exact equality (value JSON-coerced, so `priority=3` is the number 3) |
+| `field!=value` | not equal |
+| `field~regex` | regex over the value's string form |
+| `field!~regex` | regex that does not match |
+| `field>value` · `>=` · `<` · `<=` | ordering — numbers numerically, strings/dates lexicographically; a cross-type compare never matches |
+
+`field` may be a task field, `id`, `deps` (a target under any relationship type), a relationship type or inverse name (`depends_on=db`, `subtask_of=epic`, `blocks=api`), or a computed column (`unblocks`, `blocked_by`, `subtasks`).
+
+**Single- vs multi-valued fields.** Most fields hold one value. A `set`/`array` field, `deps`, and relationship types are *multi-valued*, and a criterion tests **each element**: the positive operators (`=`, `~`, `>`, …) match if **any** element does, and `!=`/`!~` hold when **none** does (so also when the field is empty or absent). So `tags=urgent` is set membership, `scores>=5` is "some score ≥ 5", and `tags!=wip` is "wip is not a member". (An `enum` field is single-valued — filter it with a plain `severity=high`.)
+
+Dates work for free: the computed timestamps are RFC 3339 strings, so a lexicographic range *is* a chronological one — `ta list 'create_time>=2026-06-01'`. Quote any comparison so the shell doesn't read `>`/`<` as redirection (`ta list 'unblocks>0' 'priority>=4'`). `--open` limits to not-done tasks; `--ready` to not-done tasks whose dependencies are all done.
 
 ## Storage layout
 

@@ -171,6 +171,45 @@ fn comparison_operators_filter_numbers_and_dates() {
 }
 
 #[test]
+fn multivalued_custom_fields_filter_by_membership() {
+    let dir = fresh_dir("membership");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // Array-valued custom fields (JSON-coerced), like deps, match per element.
+    ta(
+        &dir,
+        &[
+            "create",
+            "a",
+            r#"tags=["urgent","backend"]"#,
+            "scores=[3,8]",
+        ],
+    );
+    ta(&dir, &["create", "b", r#"tags=["frontend"]"#, "scores=[1]"]);
+
+    // `=` is membership; only `a` has the `urgent` tag.
+    let urgent = ta(&dir, &["list", "tags=urgent"]);
+    assert!(
+        lists_task(&urgent, "a") && !lists_task(&urgent, "b"),
+        "tags=urgent is membership: {urgent}"
+    );
+
+    // `!=` holds when the value is NOT a member (so `b`, which lacks `urgent`).
+    let not_urgent = ta(&dir, &["list", "tags!=urgent"]);
+    assert!(
+        lists_task(&not_urgent, "b") && !lists_task(&not_urgent, "a"),
+        "tags!=urgent excludes the member: {not_urgent}"
+    );
+
+    // A numeric comparison holds when ANY element qualifies: a has 8, b maxes at 1.
+    let high = ta(&dir, &["list", "scores>=5"]);
+    assert!(
+        lists_task(&high, "a") && !lists_task(&high, "b"),
+        "scores>=5 matches the set with a member >= 5: {high}"
+    );
+}
+
+#[test]
 fn sort_flag_orders_rows_with_reverse_and_configurable_default() {
     let dir = fresh_dir("sort");
     init_repo(&dir);

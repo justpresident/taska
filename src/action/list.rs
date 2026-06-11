@@ -186,9 +186,11 @@ fn inverse_index(
 
 impl Criterion {
     /// Whether `task` satisfies this criterion. A field offers zero or more
-    /// candidate values (a custom field is absent→none; `deps` is one per edge);
-    /// equality/regex pass if ANY candidate matches. The negated forms are the
-    /// logical NOT, so they also hold when the field is absent.
+    /// candidate values (absent→none, a scalar→one, a multi-valued field — a
+    /// set/array, `deps`, a relationship type — one per element). The positive
+    /// forms (`=`/`~`/comparisons) pass if ANY candidate matches; the negated
+    /// forms (`!=`/`!~`) are their logical NOT, so they pass when NONE does — and
+    /// thus also when the field is empty or absent.
     fn matches(&self, task: &TaskState, ctx: &FilterCtx) -> bool {
         let values = field_values(task, &self.field, ctx);
         match &self.matcher {
@@ -201,14 +203,12 @@ impl Criterion {
     }
 }
 
-/// Whether `v <op> q` holds under the shared [`cmp_json`] order. Comparisons are
-/// SCALAR-only: a candidate and the query compare just when both are numbers,
-/// both strings, or both bools. Every other pairing yields no match —
-/// - a cross-type pair (number vs string) doesn't rank by type, and
-/// - a COMPOSITE value (a `set`/`array`/object field) is never ordered against a
-///   scalar, mirroring `=` (which also treats a multi-valued field as one whole
-///   value: `scores=8` doesn't match the set `{3,8}` either). Element/membership
-///   queries on such a field go through `~` over its string form (`scores~8`).
+/// Whether a single candidate `v <op> q` holds under the shared [`cmp_json`]
+/// order. Comparisons are SCALAR: `v` and the query compare just when both are
+/// numbers, both strings, or both bools; any other pairing (a cross-type
+/// number-vs-string, or a non-scalar element) yields no match rather than ranking
+/// by type. A multi-valued field is compared element by element (see
+/// [`field_values`]), so `scores>=5` holds when ANY member does.
 ///
 /// Within a type it's [`cmp_json`], so strings/dates order lexicographically for
 /// free (RFC 3339 timestamps sort chronologically). There are no negated forms:
@@ -237,9 +237,12 @@ fn cmp_holds(op: FilterOp, v: &Value, q: &Value) -> bool {
 /// The JSON value(s) a field offers for matching: the `id`; each relationship
 /// target under ANY type (`deps`); a declared relationship type or inverse name
 /// (the edge targets of that type, resp. the tasks whose edge of that type points
-/// here — a symmetric type is both, so both directions union); or a single custom
-/// field (empty when the task lacks it). Relationship names are reserved as field
-/// names, so the dispatch is unambiguous.
+/// here — a symmetric type is both, so both directions union); or a custom
+/// field's value — flattened to one candidate PER ELEMENT when it's an array
+/// (a `set`/`array` field), the whole value when it's a scalar, none when absent.
+/// So every multi-valued field (custom array, `deps`, relationship type) matches
+/// element-wise alike. Relationship names are reserved as field names, so the
+/// dispatch is unambiguous.
 fn field_values(task: &TaskState, field: &str, ctx: &FilterCtx) -> Vec<Value> {
     match field {
         ID_KEY => vec![Value::String(task.id.clone())],
@@ -253,7 +256,11 @@ fn field_values(task: &TaskState, field: &str, ctx: &FilterCtx) -> Vec<Value> {
             let forward = ctx.types.contains_key(field);
             let inverse = is_inverse_name(field, ctx.types);
             if !forward && !inverse {
-                return task.custom_fields.get(field).cloned().into_iter().collect();
+                return match task.custom_fields.get(field) {
+                    Some(Value::Array(items)) => items.clone(),
+                    Some(value) => vec![value.clone()],
+                    None => Vec::new(),
+                };
             }
             let mut values = Vec::new();
             if forward {
@@ -466,20 +473,50 @@ mod tests {
         assert!(!matches("missing>0"));
         assert!(!matches("missing<=0"));
 
-        // Comparisons are scalar-only: a composite (set/array) field value never
-        // orders against a scalar — mirroring `=`, which also treats the whole
-        // value as one (`scores=8` wouldn't match {3,8} either). Membership goes
-        // through `~` on the string form (`scores~8`), not a comparison.
-        assert!(
-            !matches("scores>=5"),
-            "set/array value: no comparison match"
+        // A set/array field compares element-wise: the comparison holds when ANY
+        // member does. scores = [3, 8].
+        assert!(matches("scores>=5"), "8 >= 5");
+        assert!(matches("scores>1"), "both members exceed 1");
+        assert!(matches("scores<100"));
+        assert!(!matches("scores>10"), "no member > 10");
+        assert!(!matches("scores<2"), "no member < 2");
+    }
+
+    #[test]
+    fn multivalued_fields_match_any_element() {
+        // A custom array/set field flattens to one candidate per element, so every
+        // operator works on membership — uniformly with `deps`/relationship fields.
+        let t = task(
+            "api",
+            &[],
+            &[
+                ("tags", serde_json::json!(["urgent", "backend"])),
+                ("scores", serde_json::json!([3, 8])),
+            ],
         );
-        assert!(!matches("scores>1"));
-        assert!(!matches("scores<100"));
-        assert!(
-            matches(r"scores~8"),
-            "membership is the regex's job, not >/<"
-        );
+        let types = crate::config::RelationshipConfig::default().types;
+        let ctx = FilterCtx {
+            types: &types,
+            rev: None,
+        };
+        let m = |s: &str| compile_criterion(s).unwrap().matches(&t, &ctx);
+
+        // `=` is membership; `!=` holds when NOT a member (and when absent).
+        assert!(m("tags=urgent"));
+        assert!(m("tags=backend"));
+        assert!(!m("tags=frontend"));
+        assert!(m("tags!=frontend"), "frontend is not a member");
+        assert!(!m("tags!=urgent"), "urgent IS a member");
+        assert!(m("missing!=anything"), "absent field passes negation");
+
+        // Regex runs per element: anchors bind to a member, not the JSON blob.
+        assert!(m(r"tags~^urgent$"));
+        assert!(!m(r"tags~,"), "no member contains the serialization comma");
+
+        // Numeric comparison holds when any member qualifies.
+        assert!(m("scores>=8"));
+        assert!(!m("scores>8"));
+        assert!(m("scores<5"), "3 < 5");
     }
 
     #[test]

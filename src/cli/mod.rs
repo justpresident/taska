@@ -92,8 +92,11 @@ enum Commands {
         /// `ta list 'unblocks>0' 'priority>=4'`. `field` may be a task field,
         /// `id`, `deps` (any edge), a relationship type (`depends_on=x`) or
         /// inverse name (`subtask_of=epic`, `blocks=x`), or a computed column
-        /// (`unblocks`/`blocked_by`/`subtasks`). With none given, lists every
-        /// task.
+        /// (`unblocks`/`blocked_by`/`subtasks`). A MULTI-VALUED field (a set/
+        /// array field, `deps`, or a relationship type) matches if ANY element
+        /// does — `tags=urgent` (member), `scores>=5` (some score >= 5) — while
+        /// `!=`/`!~` hold when NONE does (so also when it's empty/absent). With
+        /// none given, lists every task.
         criteria: Vec<String>,
         /// Only tasks that are not done (status is not the configured done value)
         #[arg(long)]
