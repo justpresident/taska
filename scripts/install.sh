@@ -87,7 +87,7 @@ resolve_version() {
   local json
   json="$(fetch "https://api.github.com/repos/$REPO/releases/latest")" \
     || die "couldn't reach the GitHub releases API for $REPO"
-  VERSION="$(printf '%s' "$json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)"
+  VERSION="$(printf '%s' "$json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
   [ -n "$VERSION" ] || die "no published release found for $REPO (set TASKA_VERSION, or 'cargo install ${CRATE}')"
 }
 
@@ -113,7 +113,9 @@ main() {
   local asset base
   asset="${BIN}-${VERSION}-${TARGET}.tar.gz"
   base="https://github.com/${REPO}/releases/download/${VERSION}"
-  tmp="$(mktemp -d)"
+  # A template (trailing X's) is portable: GNU mktemp defaults one, BSD/macOS
+  # mktemp requires it.
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/taska.XXXXXXXX")" || die "couldn't create a temp dir"
 
   info "Downloading ${asset}"
   download "${base}/${asset}" "${tmp}/${asset}" || { warn "download failed (${base}/${asset})"; fallback_cargo; }
@@ -134,7 +136,7 @@ main() {
 
   tar -xzf "${tmp}/${asset}" -C "$tmp" || die "failed to extract ${asset}"
   local src="${tmp}/${BIN}-${VERSION}-${TARGET}/${BIN}"
-  [ -f "$src" ] || src="$(find "$tmp" -type f -name "$BIN" | head -n1)"
+  [ -f "$src" ] || src="$(find "$tmp" -type f -name "$BIN" | head -n 1)"
   [ -n "${src:-}" ] && [ -f "$src" ] || die "the archive did not contain the ${BIN} binary"
 
   local dir
