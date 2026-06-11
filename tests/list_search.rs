@@ -57,6 +57,16 @@ fn list_supports_regex_negation_and_combined_criteria() {
         "deps query"
     );
     assert!(lists_task(&ta(&dir, &["list", "id~^a"]), "api"), "id regex");
+    // The `=~`/`!=~` spellings are synonyms for `~`/`!~`.
+    assert!(
+        lists_task(&ta(&dir, &["list", "id=~^a"]), "api"),
+        "id=~ regex (perl/bash spelling)"
+    );
+    let nre = ta(&dir, &["list", "status!=~^op"]);
+    assert!(
+        lists_task(&nre, "db") && !lists_task(&nre, "api"),
+        "!=~ negated regex: {nre}"
+    );
 
     // `deps=<x>` matches a target under ANY relationship type, info included —
     // the filter sees exactly what the deps column shows.

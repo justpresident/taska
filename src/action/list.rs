@@ -1,9 +1,9 @@
 //! `list` action: the filtered task set.
 //!
-//! Compiles positional `field<op>value` criteria (`=` exact, `~` regex, `!=`/
-//! `!~` their negations, `>`/`>=`/`<`/`<=` ordering), applies the
-//! `--open`/`--ready` shortcuts, injects the graph-computed columns a query
-//! references, and returns the matching tasks ordered by the query's sort
+//! Compiles positional `field<op>value` criteria (`=` exact, `~` regex — also
+//! spelled `=~` —, `!=`/`!~` their negations, `>`/`>=`/`<`/`<=` ordering),
+//! applies the `--open`/`--ready` shortcuts, injects the graph-computed columns a
+//! query references, and returns the matching tasks ordered by the query's sort
 //! column — rendering is the frontend's job.
 
 use std::cmp::Ordering;
@@ -111,8 +111,9 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
 }
 
 /// A filter operator. `=`/`!=` compare the field's value against a JSON-coerced
-/// query; `~`/`!~` match a regex against the field's string form; `>`/`>=`/`<`/
-/// `<=` order it against the query (see [`Matcher::Cmp`]).
+/// query; `~`/`!~` (also spelled `=~`/`!=~`) match a regex against the field's
+/// string form; `>`/`>=`/`<`/`<=` order it against the query (see
+/// [`Matcher::Cmp`]).
 #[derive(Clone, Copy)]
 enum FilterOp {
     Eq,
@@ -313,14 +314,18 @@ fn compile_criterion(raw: &str) -> Result<Criterion, DynError> {
 }
 
 /// Split `field<op>value` at its FIRST operator, so an operator character inside
-/// the value (e.g. a regex `~`) doesn't fool the parser. `!`/`>`/`<` are
-/// two-char operators when followed by `=` (`!=`, `>=`, `<=`), one otherwise
-/// (`>`, `<`; a bare `!` is not an operator).
+/// the value (e.g. a regex `~`) doesn't fool the parser. The regex match accepts
+/// either spelling — `~`/`=~` (and `!~`/`!=~` for its negation) — so perl/bash
+/// muscle memory works. `=`/`!`/`>`/`<` peek the next byte(s) for their longer
+/// forms (`=~`, `!=`, `!~`, `!=~`, `>=`, `<=`); a bare `!` is not an operator.
 fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
     let bytes = raw.as_bytes();
     for (i, &c) in bytes.iter().enumerate() {
         let (op, len) = match c {
-            b'=' => (FilterOp::Eq, 1),
+            b'=' => match bytes.get(i + 1) {
+                Some(b'~') => (FilterOp::Re, 2), // `=~` synonym for `~`
+                _ => (FilterOp::Eq, 1),
+            },
             b'~' => (FilterOp::Re, 1),
             b'>' => match bytes.get(i + 1) {
                 Some(b'=') => (FilterOp::Ge, 2),
@@ -330,9 +335,10 @@ fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
                 Some(b'=') => (FilterOp::Le, 2),
                 _ => (FilterOp::Lt, 1),
             },
-            b'!' => match bytes.get(i + 1) {
-                Some(b'=') => (FilterOp::Ne, 2),
-                Some(b'~') => (FilterOp::NotRe, 2),
+            b'!' => match (bytes.get(i + 1), bytes.get(i + 2)) {
+                (Some(b'='), Some(b'~')) => (FilterOp::NotRe, 3), // `!=~` synonym for `!~`
+                (Some(b'='), _) => (FilterOp::Ne, 2),
+                (Some(b'~'), _) => (FilterOp::NotRe, 2),
                 _ => continue,
             },
             _ => continue,
@@ -343,7 +349,7 @@ fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
         return Ok((&raw[..i], op, &raw[i + len..]));
     }
     Err(format!(
-        "invalid criterion `{raw}`: expected field=value, field~regex, field!=value, field!~regex, or a comparison (field>value, field>=value, field<value, field<=value)"
+        "invalid criterion `{raw}`: expected field=value, field~regex (or field=~regex), field!=value, field!~regex, or a comparison (field>value, field>=value, field<value, field<=value)"
     )
     .into())
 }
@@ -389,6 +395,27 @@ mod tests {
         assert!(matches(r"priority~^3$"), "regex on number's string form");
         assert!(matches("status!=closed"));
         assert!(!matches("status!~^op"));
+
+        // `=~`/`!=~` are accepted synonyms for `~`/`!~` (perl/bash spelling).
+        assert!(matches!(
+            split_criterion("status=~^op").unwrap().1,
+            FilterOp::Re
+        ));
+        assert!(matches!(
+            split_criterion("status!=~^op").unwrap().1,
+            FilterOp::NotRe
+        ));
+        assert!(matches(r"status=~^op"), "=~ matches like ~");
+        assert!(!matches(r"status!=~^op"), "!=~ negates like !~");
+        // The plain `=`/`!=` are unaffected when `~` doesn't follow.
+        assert!(matches!(
+            split_criterion("status=open").unwrap().1,
+            FilterOp::Eq
+        ));
+        assert!(matches!(
+            split_criterion("status!=open").unwrap().1,
+            FilterOp::Ne
+        ));
 
         // Built-in id and deps fields.
         assert!(matches("id=api"));

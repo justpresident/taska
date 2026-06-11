@@ -293,9 +293,11 @@ Human output is **colored** when stdout is a terminal — `id` cyan, `status` gr
 |---|---|
 | `field=value` | exact equality (value JSON-coerced, so `priority=3` is the number 3) |
 | `field!=value` | not equal |
-| `field~regex` | regex over the value's string form |
-| `field!~regex` | regex that does not match |
+| `field~regex` (or `field=~regex`) | regex over the value's string form |
+| `field!~regex` (or `field!=~regex`) | regex that does not match |
 | `field>value` · `>=` · `<` · `<=` | ordering — numbers numerically, strings/dates lexicographically; a cross-type compare never matches |
+
+The regex operators accept both spellings — `~`/`!~` and the perl/bash-style `=~`/`!=~` — so use whichever you have in muscle memory.
 
 `field` may be a task field, `id`, `deps` (a target under any relationship type), a relationship type or inverse name (`depends_on=db`, `subtask_of=epic`, `blocks=api`), or a computed column (`unblocks`, `blocked_by`, `subtasks`).
 

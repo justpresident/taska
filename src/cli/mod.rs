@@ -85,10 +85,10 @@ enum Commands {
     /// List tasks, optionally filtered: `ta list status~open priority=3 --open`
     List {
         /// Filter criteria, all of which must match: `field=value` (exact),
-        /// `field~regex`, `field!=value`, `field!~regex`, or a comparison
-        /// `field>value`/`>=`/`<`/`<=` (numbers compare numerically, strings/
-        /// dates lexicographically; a cross-type compare never matches). Quote
-        /// comparisons so the shell doesn't treat `>`/`<` as redirection:
+        /// `field~regex` (or `field=~regex`), `field!=value`, `field!~regex`, or a
+        /// comparison `field>value`/`>=`/`<`/`<=` (numbers compare numerically,
+        /// strings/dates lexicographically; a cross-type compare never matches).
+        /// Quote comparisons so the shell doesn't treat `>`/`<` as redirection:
         /// `ta list 'unblocks>0' 'priority>=4'`. `field` may be a task field,
         /// `id`, `deps` (any edge), a relationship type (`depends_on=x`) or
         /// inverse name (`subtask_of=epic`, `blocks=x`), or a computed column
