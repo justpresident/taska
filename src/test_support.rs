@@ -66,6 +66,32 @@ pub fn store_without_timestamps() -> InMemoryStore {
     store
 }
 
+/// An in-memory store whose config DECLARES a schema — the `task` type (required
+/// `title`/`notes`, a `status` enum, an optional `priority` enum) and a
+/// `depends_on` blocker — for tests that need a rich, non-default vocabulary
+/// (`Config::default()` declares no task types, so its status is free-form).
+pub fn store_with_schema() -> InMemoryStore {
+    let toml = r#"
+[workflow]
+status_field = "status"
+done_status = "closed"
+default_status = "todo"
+type_field = "type"
+
+[relationships]
+depends_on = { kind = "blocker", inverse = "blocks" }
+
+[task_types.task]
+closed = true
+fields = { title = { type = "string", required = true }, notes = { type = "string", required = true }, status = { type = "enum", values = ["todo", "in_progress", "closed"], required = true }, priority = { type = "enum", values = ["low", "medium", "high"] } }
+"#;
+    let config = toml::from_str(toml).expect("test schema config parses");
+    InMemoryStore {
+        config,
+        ..Default::default()
+    }
+}
+
 /// Build a [`TaskState`] from an id, dependency ids, and `(key, value)` fields.
 pub fn task(id: &str, deps: &[&str], fields: &[(&str, Value)]) -> TaskState {
     let mut relationships = std::collections::BTreeMap::new();

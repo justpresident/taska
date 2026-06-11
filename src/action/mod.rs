@@ -10,7 +10,7 @@
 //! renders it however it likes.
 //!
 //! Every command drives through here: `read`, the display actions
-//! (`list`/`show`/`status`), the `dep` group, `write::{create,update,delete}`,
+//! (`list`/`show`/`status`/`prime`), the `dep` group, `write::{create,update,delete}`,
 //! the plan→apply pairs (`undo`/`resolve`), `compact`, `repair`, `config`, and
 //! `init`. [`materialize`] is the shared raw-materialization primitive every
 //! write/maintenance action uses (so it lives here, not in any one sibling).
@@ -28,6 +28,7 @@ pub mod config;
 pub mod dep;
 pub mod init;
 pub mod list;
+pub mod prime;
 pub mod read;
 pub mod repair;
 pub mod resolve;
@@ -37,6 +38,7 @@ pub mod undo;
 pub mod write;
 
 pub use list::{list_tasks, ListOutcome, ListQuery};
+pub use prime::{prime, PrimeFacts, PrimeOutcome};
 pub use read::{read, Session, Warning};
 pub use show::{show, ShowOutcome};
 pub use status::{status, StatusOutcome, StatusSummary};

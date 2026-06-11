@@ -99,6 +99,22 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
         show.task.custom_fields
     );
 
+    // prime: the config-tailored facts, as structured data — drivable without the
+    // cli's markdown rendering (an external frontend would render its own).
+    let prime = action::prime(&store).unwrap();
+    assert_eq!(prime.facts.status_field, "status");
+    assert_eq!(prime.facts.done_status, "closed");
+    assert_eq!(prime.facts.summary.total, 2);
+    assert!(
+        prime
+            .facts
+            .relationships
+            .iter()
+            .any(|r| r.name == "depends_on"),
+        "relationships surfaced: {:?}",
+        prime.facts.relationships
+    );
+
     // No warnings on a clean store.
     assert!(outcome.warnings.is_empty() && list.warnings.is_empty());
 }

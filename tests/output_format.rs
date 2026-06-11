@@ -307,6 +307,7 @@ fn output_commands_are_format_and_color_consistent() {
         vec!["list"],
         vec!["show", "a"],
         vec!["status"],
+        vec!["prime"],
         vec!["dep", "cycles"],
         vec!["dep", "plan", "a"],
         vec!["dep", "tree"],

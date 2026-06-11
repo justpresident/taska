@@ -31,7 +31,8 @@ use crate::storage::{EventStore, FileStore};
 mod commands;
 use commands::{
     cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_edit, cmd_init, cmd_list,
-    cmd_repair, cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction, DepAction,
+    cmd_prime, cmd_repair, cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction,
+    DepAction,
 };
 
 use crate::schema::FieldOps;
@@ -132,6 +133,11 @@ enum Commands {
     },
     /// Summary counts: total, per-status, blocked, ready, closed
     Status {
+        #[command(flatten)]
+        output: OutputArgs,
+    },
+    /// Print a config-tailored agent primer for this store (`--format json` for the raw facts)
+    Prime {
         #[command(flatten)]
         output: OutputArgs,
     },
@@ -428,6 +434,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
         Commands::Show { id, display } => cmd_show(store, &id, &display, &store.config().display),
         Commands::Edit { id, json, toml: _ } => cmd_edit(store, &id, json),
         Commands::Status { output } => cmd_status(store, &output),
+        Commands::Prime { output } => cmd_prime(store, &output),
         Commands::Undo {
             count,
             force,
