@@ -432,7 +432,10 @@ mod tests {
             json!("done"),
             "update overwrote create"
         );
-        assert_eq!(state["b"].depends_on(), vec!["a".to_string()]);
+        assert_eq!(
+            state["b"].relationships["depends_on"],
+            vec!["a".to_string()]
+        );
     }
 
     #[test]
@@ -532,7 +535,10 @@ mod tests {
         ];
         let state = Engine::materialize_state(Vec::new(), mutations, "closed");
         let a = &state["a"];
-        assert_eq!(a.depends_on(), vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(
+            a.relationships["depends_on"],
+            vec!["b".to_string(), "c".to_string()]
+        );
         assert_eq!(a.relationships["relates_to"], vec!["e".to_string()]);
     }
 
@@ -580,7 +586,7 @@ mod tests {
 
         assert_eq!(state["a"].custom_fields["status"], json!("done"));
         assert!(
-            state["a"].depends_on().is_empty(),
+            !state["a"].relationships.contains_key("depends_on"),
             "dep removed from baseline task"
         );
     }
@@ -640,7 +646,7 @@ mod tests {
         ];
         let state = Engine::materialize_state(Vec::new(), mutations, "closed");
         assert_eq!(
-            state["a"].depends_on(),
+            state["a"].relationships["depends_on"],
             vec!["b".to_string()],
             "no duplicate dep"
         );

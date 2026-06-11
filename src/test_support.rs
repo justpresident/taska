@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::config::{Config, TimestampConfig};
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs, OutputFormat};
-use crate::model::{MutationEvent, TaskState, DEPENDS_ON};
+use crate::model::{MutationEvent, TaskState};
 use crate::storage::EventStore;
 
 /// In-memory [`EventStore`] fake: no disk, no locks, no git.
@@ -71,7 +71,7 @@ pub fn task(id: &str, deps: &[&str], fields: &[(&str, Value)]) -> TaskState {
     let mut relationships = std::collections::BTreeMap::new();
     if !deps.is_empty() {
         relationships.insert(
-            DEPENDS_ON.to_string(),
+            "depends_on".to_string(),
             deps.iter().map(|d| (*d).to_string()).collect(),
         );
     }

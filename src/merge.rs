@@ -1192,7 +1192,7 @@ mod tests {
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
         let state = Engine::materialize_state(Vec::new(), merged, "closed");
         assert_eq!(
-            state["X"].depends_on(),
+            state["X"].relationships["depends_on"],
             vec!["Y".to_string()],
             "depends_on edge"
         );

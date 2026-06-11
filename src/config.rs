@@ -13,7 +13,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DynError;
-use crate::model::{TaskState, DEPENDS_ON};
+use crate::model::TaskState;
 
 /// Smallest `keep_events` we accept in production.
 ///
@@ -572,7 +572,11 @@ impl Default for RelationshipConfig {
             // (reverse `subtask_of`); `relates_to` is symmetric (self-inverse);
             // `duplicates` is one-way (no inverse surfaced).
             types: [
-                (DEPENDS_ON.to_string(), def(RelKind::Blocker, "blocks")),
+                // `depends_on` is the conventional default blocker NAME — the one
+                // place the literal lives. Everything else is config-driven (the
+                // first blocker type by name; see `default_blocker`), so no code
+                // hardcodes this string.
+                ("depends_on".to_string(), def(RelKind::Blocker, "blocks")),
                 (
                     "has_subtask".to_string(),
                     def(RelKind::Hierarchy, "subtask_of"),

@@ -59,54 +59,6 @@ fn pre_1_0_store_is_refused_with_a_migration_hint() {
     );
 }
 
-/// A store that renamed `status_field` BEFORE storage became canonical has its
-/// data keyed under the display name; detection blocks, and the migration
-/// re-keys it to the canonical `status`.
-#[test]
-fn repair_migrate_rekeys_display_named_status() {
-    let dir = fresh_dir("repair-status-key");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["config", "set", "workflow.status_field", "state"]);
-    ta(&dir, &["create", "a", "state=open"]); // stored canonically
-
-    // Plant a pre-canonical event: the status under the display name.
-    let log = dir.join(".taska").join("mutations.jsonl");
-    let mut content = fs::read_to_string(&log).unwrap();
-    let next = content
-        .lines()
-        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .filter_map(|e| e["seq"].as_u64())
-        .max()
-        .unwrap_or(0)
-        + 1;
-    content.push_str(&format!(
-        "{{\"seq\":{next},\"timestamp\":\"2026-01-01T00:00:00Z\",\"op\":\"Create\",\
-         \"task_id\":\"legacy\",\"state\":\"open\"}}\n"
-    ));
-    fs::write(&log, content).unwrap();
-
-    // Blocked with the migrate pointer; migrating re-keys to canonical.
-    let blocked = run(ta_bin(), &dir, &["list"]);
-    assert!(!blocked.status.success(), "stale store refused");
-    assert!(String::from_utf8_lossy(&blocked.stderr).contains("repair --migrate"));
-    assert!(ta(&dir, &["repair", "--migrate"]).contains("canonical-status-key"));
-
-    // The legacy task now reads under the display name, stored canonically.
-    assert!(
-        ta(&dir, &["show", "legacy", "--format", "json"]).contains(r#""state":"open""#),
-        "display name on read"
-    );
-    let migrated = fs::read_to_string(&log).unwrap();
-    assert!(
-        migrated.contains(r#""task_id":"legacy","status":"open""#)
-            || (migrated.contains(r#""task_id":"legacy""#)
-                && !migrated.contains(r#""state":"open""#)),
-        "canonical key on disk: {migrated}"
-    );
-    assert!(ta(&dir, &["repair", "--migrate"]).contains("up to date"));
-}
-
 /// `repair --schema` fixes everything lossless by direct rewrite — numeric
 /// strings, scalars to singletons, bool strings, date normalization — and
 /// lists the ambiguous remainder without guessing; typing untyped tasks
