@@ -92,6 +92,83 @@ pub struct PrimeOutcome {
     pub warnings: Vec<Warning>,
 }
 
+/// Runnable example tokens derived from the facts.
+///
+/// A status to claim with, a type + its required fields to create with, a blocker
+/// to link, a field to filter on — all config-derived, so every example a
+/// frontend weaves from them is runnable against THIS store. Shared by the CLI
+/// primer and the `ta init` integration block.
+pub struct PrimeExamples {
+    /// A representative non-default, non-done status to claim work with.
+    pub claim: String,
+    /// The first declared type's name (or `task` when none is declared).
+    pub type_name: String,
+    /// That type's required fields as `name="…"` tokens (minus the status field,
+    /// which `create` stamps), space-joined; `title="…"` when none are declared.
+    pub req_example: String,
+    /// The first gating relationship type (a `dep add` example).
+    pub blocker: String,
+    /// A ready-to-run `list` filter: an optional enum field if one exists, else a
+    /// `not-done` status filter.
+    pub filter: String,
+}
+
+/// Derive the runnable [`PrimeExamples`] from the facts.
+#[must_use]
+pub fn examples(f: &PrimeFacts) -> PrimeExamples {
+    let sf = &f.status_field;
+    let claim = f
+        .statuses
+        .iter()
+        .find(|s| *s != &f.default_status && *s != &f.done_status)
+        .unwrap_or(&f.default_status)
+        .clone();
+
+    let first_type = f.task_types.first();
+    let type_name = first_type.map_or("task", |t| t.name.as_str()).to_string();
+    let req_fields: Vec<String> = first_type
+        .map(|t| {
+            t.fields
+                .iter()
+                .filter(|x| x.required && x.name != *sf)
+                .map(|x| format!("{}=\"…\"", x.name))
+                .collect()
+        })
+        .unwrap_or_default();
+    let req_example = if req_fields.is_empty() {
+        "title=\"…\"".to_string()
+    } else {
+        req_fields.join(" ")
+    };
+
+    let blocker = f
+        .relationships
+        .iter()
+        .find(|r| r.kind == "blocker" || r.kind == "hierarchy")
+        .or_else(|| f.relationships.first())
+        .map_or("depends_on", |r| r.name.as_str())
+        .to_string();
+
+    let filter = first_type
+        .and_then(|t| {
+            t.fields
+                .iter()
+                .find(|x| !x.required && !x.values.is_empty())
+        })
+        .map_or_else(
+            || format!("'{sf}!={}'", f.done_status),
+            |x| format!("'{}={}'", x.name, x.values[0]),
+        );
+
+    PrimeExamples {
+        claim,
+        type_name,
+        req_example,
+        blocker,
+        filter,
+    }
+}
+
 /// Gather the config-tailored prime snapshot for `store`.
 pub fn prime(store: &impl EventStore) -> Result<PrimeOutcome, DynError> {
     let session = read(store)?;

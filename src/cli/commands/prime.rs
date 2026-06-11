@@ -6,7 +6,7 @@
 //! output-consistency contract trivially. It reads THIS store's vocabulary, so a
 //! renamed status field or a freshly declared type is reflected automatically.
 
-use crate::action::prime::{prime, FieldFacts, PrimeFacts, TypeFacts};
+use crate::action::prime::{examples, prime, FieldFacts, PrimeExamples, PrimeFacts, TypeFacts};
 use crate::cli::print_warnings;
 use crate::error::DynError;
 use crate::format::{emit, OutputArgs};
@@ -63,82 +63,9 @@ fn describe_type(t: &TypeFacts, status_field: &str) -> String {
     format!("  - `{}`{close}: {body}", t.name)
 }
 
-/// The store-specific example tokens woven through the guide (a status to claim
-/// with, a type + its required fields to create with, a blocker to link, a field
-/// to filter on) — all derived from the config so every example is runnable
-/// against THIS store.
-struct Examples {
-    claim: String,
-    type_name: String,
-    req_example: String,
-    blocker: String,
-    filter: String,
-}
-
-/// Derive the runnable example tokens from the facts.
-fn examples(f: &PrimeFacts) -> Examples {
-    let sf = &f.status_field;
-    // A representative "claim" status: the first that's neither the default nor
-    // done; else the default.
-    let claim = f
-        .statuses
-        .iter()
-        .find(|s| *s != &f.default_status && *s != &f.done_status)
-        .unwrap_or(&f.default_status)
-        .clone();
-
-    // The first declared type + its required fields (minus status, which `create`
-    // stamps).
-    let first_type = f.task_types.first();
-    let type_name = first_type.map_or("task", |t| t.name.as_str()).to_string();
-    let req_fields: Vec<String> = first_type
-        .map(|t| {
-            t.fields
-                .iter()
-                .filter(|x| x.required && x.name != *sf)
-                .map(|x| format!("{}=\"…\"", x.name))
-                .collect()
-        })
-        .unwrap_or_default();
-    let req_example = if req_fields.is_empty() {
-        "title=\"…\"".to_string()
-    } else {
-        req_fields.join(" ")
-    };
-
-    // The first gating relationship (blocker/hierarchy), for the `dep add` example.
-    let blocker = f
-        .relationships
-        .iter()
-        .find(|r| r.kind == "blocker" || r.kind == "hierarchy")
-        .or_else(|| f.relationships.first())
-        .map_or("depends_on", |r| r.name.as_str())
-        .to_string();
-
-    // A filter example: an optional enum field if present, else the status field.
-    let filter = first_type
-        .and_then(|t| {
-            t.fields
-                .iter()
-                .find(|x| !x.required && !x.values.is_empty())
-        })
-        .map_or_else(
-            || format!("'{sf}!={}'", f.done_status),
-            |x| format!("'{}={}'", x.name, x.values[0]),
-        );
-
-    Examples {
-        claim,
-        type_name,
-        req_example,
-        blocker,
-        filter,
-    }
-}
-
 /// The command cheat-sheet, comments aligned regardless of how long this store's
 /// status/type names make each command.
-fn command_block(f: &PrimeFacts, ex: &Examples) -> String {
+fn command_block(f: &PrimeFacts, ex: &PrimeExamples) -> String {
     let (sf, tf) = (&f.status_field, &f.type_field);
     let (claim, type_name, req_example, blocker, filter) = (
         &ex.claim,
