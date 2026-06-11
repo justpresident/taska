@@ -19,6 +19,12 @@ REPO="justpresident/taska"
 BIN="ta"      # the binary
 CRATE="taska" # the crates.io package (the cargo fallback)
 
+# The download temp dir, removed on exit. GLOBAL (not main-local) so the EXIT
+# trap — which runs after main's locals are gone — can still see it under `set -u`.
+tmp=""
+cleanup() { if [ -n "$tmp" ]; then rm -rf "$tmp"; fi; }
+trap cleanup EXIT
+
 # --- logging (to stderr, so stdout stays clean for scripting) --------------
 if [ -t 2 ]; then
   C_BLUE=$'\033[0;34m'; C_GREEN=$'\033[0;32m'; C_YELLOW=$'\033[1;33m'; C_RED=$'\033[0;31m'; C_OFF=$'\033[0m'
@@ -104,11 +110,10 @@ main() {
   resolve_version
   info "Installing ${BIN} ${VERSION} (${TARGET})"
 
-  local asset base tmp
+  local asset base
   asset="${BIN}-${VERSION}-${TARGET}.tar.gz"
   base="https://github.com/${REPO}/releases/download/${VERSION}"
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
 
   info "Downloading ${asset}"
   download "${base}/${asset}" "${tmp}/${asset}" || { warn "download failed (${base}/${asset})"; fallback_cargo; }
