@@ -309,6 +309,9 @@ pub fn run() -> Result<(), DynError> {
         } => {
             let store = FileStore::discover()?;
             enforce_config(store.config())?;
+            // v1 repair can't read a pre-1.0 store either — refuse rather than
+            // load-and-rewrite it (which would drop the legacy edges).
+            refuse_if_legacy(&store)?;
             cmd_repair(
                 &store,
                 migrate,
@@ -367,6 +370,7 @@ fn enforce_config(cfg: &Config) -> Result<(), DynError> {
 /// at `ta repair --migrate` rather than mis-reading or silently rewriting legacy
 /// data. Detection only — `repair` bypasses this and does the migration.
 fn enforce_format(store: &FileStore) -> Result<(), DynError> {
+    refuse_if_legacy(store)?;
     let snap = crate::migrate::Snapshot {
         log: store.load_mutations()?,
         baseline: store.load_baseline()?,
@@ -375,6 +379,22 @@ fn enforce_format(store: &FileStore) -> Result<(), DynError> {
         return Err(format!(
             "{reason}. The store is in an older on-disk format — run \
              `ta repair --migrate` to update it."
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Refuse a store written in a PRE-1.0 on-disk format (the read shims are gone,
+/// so reading it would silently drop its legacy edges), pointing at the last
+/// 0.x's `ta repair --migrate`. Shared by the format gate and `repair` — unlike
+/// the v1.0+ migrations, `repair` can't fix a pre-1.0 store either.
+fn refuse_if_legacy(store: &FileStore) -> Result<(), DynError> {
+    if let Some(reason) = store.detect_legacy_format()? {
+        return Err(format!(
+            "{reason}: this store is in a pre-1.0 on-disk format this version can't \
+             read. Run `ta repair --migrate` with the last 0.x release (e.g. 0.5.x) \
+             first, then upgrade."
         )
         .into());
     }

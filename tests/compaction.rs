@@ -214,12 +214,12 @@ fn compact_is_noop_below_threshold() {
     );
 }
 
-/// A baseline written in the OLD on-disk format — `depends_on` as a top-level
-/// field, before it was folded into the relationships map — still loads: the
-/// `#[serde(from)]` compat shim merges it into `relationships`, so the dep shows
-/// in the `deps` column and still gates readiness.
+/// A baseline written in the PRE-1.0 format — `depends_on` as a top-level field,
+/// before it was folded into the relationships map — is no longer read: the
+/// compat shim is gone, so a top-level `depends_on` would now be silently
+/// dropped. The store is refused instead, pointing at the last 0.x's migration.
 #[test]
-fn legacy_baseline_depends_on_field_is_folded_into_relationships() {
+fn pre_1_0_baseline_depends_on_field_is_refused() {
     let dir = fresh_dir("legacy-baseline");
     init_repo(&dir);
     ta(&dir, &["init"]);
@@ -231,15 +231,14 @@ fn legacy_baseline_depends_on_field_is_folded_into_relationships() {
     )
     .unwrap();
 
-    // The legacy top-level depends_on surfaces as the `deps` column.
-    let json = ta(&dir, &["show", "b", "--format", "json"]);
+    let blocked = run(ta_bin(), &dir, &["list"]);
     assert!(
-        json.contains("\"deps\":{\"depends_on\":[\"a\"]}"),
-        "legacy dep folded: {json}"
+        !blocked.status.success(),
+        "a pre-1.0 top-level depends_on baseline must be refused"
     );
-
-    // ...and it still gates readiness: `a` is ready, `b` is blocked by it.
-    let ready = ta(&dir, &["list", "--ready"]);
-    assert!(lists_task(&ready, "a"), "a ready: {ready}");
-    assert!(!lists_task(&ready, "b"), "b blocked by legacy dep: {ready}");
+    let stderr = String::from_utf8_lossy(&blocked.stderr);
+    assert!(
+        stderr.contains("pre-1.0") && stderr.contains("repair --migrate"),
+        "stderr explains the upgrade path: {stderr}"
+    );
 }

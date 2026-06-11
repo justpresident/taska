@@ -11,6 +11,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use fd_lock::RwLock;
+use serde_json::Value;
 
 use crate::config::Config;
 use crate::error::DynError;
@@ -135,6 +136,68 @@ impl FileStore {
 
     fn baseline_path(&self) -> PathBuf {
         self.base_dir.join("baseline.jsonl")
+    }
+
+    /// Detect a PRE-1.0 on-disk format and return a one-line reason, else `None`.
+    ///
+    /// v1 dropped the read shims, so a legacy `AddDep`/`RemoveDep` op, an untyped
+    /// or `dep`/`type`-keyed edge, or a top-level `depends_on` baseline field
+    /// would now be silently skipped or ignored rather than read — i.e. data
+    /// loss. The read path calls this first to refuse such a store with an
+    /// actionable "migrate on the last 0.x" message. It scans the raw bytes as
+    /// generic JSON (the typed deserializers no longer accept these shapes).
+    pub(crate) fn detect_legacy_format(&self) -> Result<Option<String>, DynError> {
+        for value in raw_json_lines(&self.mutations_path())? {
+            if let Some(reason) = legacy_log_marker(&value) {
+                return Ok(Some(reason));
+            }
+        }
+        for value in raw_json_lines(&self.baseline_path())? {
+            if value.get("depends_on").is_some() {
+                return Ok(Some(
+                    "the baseline stores `depends_on` as a top-level field".to_string(),
+                ));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Every non-blank line of a JSONL file parsed as a generic [`Value`], skipping
+/// any that don't parse — used only for legacy-format sniffing, which must read
+/// records the typed deserializers no longer accept. A missing file is no lines.
+fn raw_json_lines(path: &Path) -> Result<Vec<Value>, DynError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = File::open(path)?;
+    let mut out = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(&line) {
+            out.push(value);
+        }
+    }
+    Ok(out)
+}
+
+/// A pre-1.0 marker in one raw log record, if any: a legacy edge op name, or an
+/// edge event lacking the current `target`+`rel` keys (an untyped edge, or one
+/// still using the `dep`/`type` payload spelling).
+fn legacy_log_marker(value: &Value) -> Option<String> {
+    let op = value.get("op").and_then(Value::as_str)?;
+    match op {
+        "AddDep" | "RemoveDep" => Some(format!("a log event uses the pre-1.0 op `{op}`")),
+        "AddEdge" | "RemoveEdge" => {
+            let typed = value.get("target").is_some() && value.get("rel").is_some();
+            (!typed).then(|| {
+                "a log edge event lacks its `target`/`rel` keys (pre-1.0 untyped edge)".to_string()
+            })
+        }
+        _ => None,
     }
 }
 

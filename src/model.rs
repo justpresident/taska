@@ -25,17 +25,9 @@ pub const DEPENDS_ON: &str = "depends_on";
 /// resolutions) must agree, so the strings are named once here.
 pub const TARGET_KEY: &str = "target";
 
-/// Payload key for an edge's relationship type name (absent = the default
-/// [`DEPENDS_ON`], a pre-typed-relationships legacy). See [`TARGET_KEY`].
+/// Payload key for an edge's relationship type name. Every edge carries one
+/// explicitly. See [`TARGET_KEY`].
 pub const REL_KEY: &str = "rel";
-
-/// Pre-rename spelling of [`TARGET_KEY`]. Read-accepted (via [`edge_target`])
-/// until v1; `ta repair --migrate` rewrites it.
-pub const LEGACY_TARGET_KEY: &str = "dep";
-
-/// Pre-rename spelling of [`REL_KEY`]. Read-accepted (via [`edge_rel`]) until
-/// v1; `ta repair --migrate` rewrites it.
-pub const LEGACY_REL_KEY: &str = "type";
 
 /// CANONICAL storage key of the workflow status field.
 ///
@@ -140,24 +132,17 @@ const fn value_rank(v: &Value) -> u8 {
     }
 }
 
-/// An edge event's target id, accepting the legacy `dep` key until v1.
+/// An edge event's target id.
 #[must_use]
 pub fn edge_target(payload: &Map<String, Value>) -> Option<&str> {
-    payload
-        .get(TARGET_KEY)
-        .or_else(|| payload.get(LEGACY_TARGET_KEY))
-        .and_then(Value::as_str)
+    payload.get(TARGET_KEY).and_then(Value::as_str)
 }
 
-/// An edge event's relationship type name, accepting the legacy `type` key
-/// until v1. `None` only for pre-typed events; replay defaults those to
-/// [`DEPENDS_ON`].
+/// An edge event's relationship type name. Every edge carries one; `None` means a
+/// malformed event (replay skips it).
 #[must_use]
 pub fn edge_rel(payload: &Map<String, Value>) -> Option<&str> {
-    payload
-        .get(REL_KEY)
-        .or_else(|| payload.get(LEGACY_REL_KEY))
-        .and_then(Value::as_str)
+    payload.get(REL_KEY).and_then(Value::as_str)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -185,13 +170,9 @@ pub enum OpType {
     /// (absent elements are a no-op); any other shape is a no-op.
     Remove,
     Delete,
-    /// Add a typed relationship edge (`target` + `rel` payload keys). The
-    /// pre-rename op name `AddDep` still parses as an alias until v1;
-    /// serialization always emits the current name.
-    #[serde(alias = "AddDep")]
+    /// Add a typed relationship edge (`target` + `rel` payload keys).
     AddEdge,
-    /// Remove a typed relationship edge. Alias as for [`OpType::AddEdge`].
-    #[serde(alias = "RemoveDep")]
+    /// Remove a typed relationship edge.
     RemoveEdge,
 }
 
@@ -269,7 +250,6 @@ pub fn verify_seq_order(events: &[MutationEvent]) -> Result<(), String> {
 /// The materialized final state of a single task (lives only in memory, or as a
 /// compacted baseline record).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(from = "TaskStateRepr")]
 pub struct TaskState {
     pub id: String,
 
@@ -282,6 +262,7 @@ pub struct TaskState {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub relationships: BTreeMap<String, Vec<String>>,
 
+    #[serde(default)]
     pub custom_fields: Map<String, Value>,
 
     /// Computed, best-effort timestamps materialized from the event log — never
@@ -313,49 +294,6 @@ impl TaskState {
         self.relationships
             .get(DEPENDS_ON)
             .map_or(&[], Vec::as_slice)
-    }
-}
-
-/// On-disk shape for *deserializing* [`TaskState`], with backward compatibility:
-/// baselines written before `depends_on` was folded into `relationships` carry a
-/// top-level `depends_on` field, which this merges into the map. New baselines
-/// omit it (it lives in `relationships`), so reads round-trip either way.
-#[derive(Deserialize)]
-struct TaskStateRepr {
-    id: String,
-    #[serde(default)]
-    depends_on: Vec<String>,
-    #[serde(default)]
-    relationships: BTreeMap<String, Vec<String>>,
-    #[serde(default)]
-    custom_fields: Map<String, Value>,
-    #[serde(default)]
-    create_time: Option<DateTime<Utc>>,
-    #[serde(default)]
-    update_time: Option<DateTime<Utc>>,
-    #[serde(default)]
-    close_time: Option<DateTime<Utc>>,
-}
-
-impl From<TaskStateRepr> for TaskState {
-    fn from(r: TaskStateRepr) -> Self {
-        let mut relationships = r.relationships;
-        if !r.depends_on.is_empty() {
-            let entry = relationships.entry(DEPENDS_ON.to_string()).or_default();
-            for dep in r.depends_on {
-                if !entry.contains(&dep) {
-                    entry.push(dep);
-                }
-            }
-        }
-        Self {
-            id: r.id,
-            relationships,
-            custom_fields: r.custom_fields,
-            create_time: r.create_time,
-            update_time: r.update_time,
-            close_time: r.close_time,
-        }
     }
 }
 

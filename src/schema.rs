@@ -26,8 +26,8 @@ use serde_json::{Map, Value};
 use crate::config::Config;
 use crate::error::DynError;
 use crate::model::{
-    MutationEvent, OpType, TaskState, DEPENDS_ON, REL_KEY, RESERVED_FIELD_KEYS, STATUS_KEY,
-    TARGET_KEY, TASK_TYPE_KEY,
+    MutationEvent, OpType, TaskState, REL_KEY, RESERVED_FIELD_KEYS, STATUS_KEY, TARGET_KEY,
+    TASK_TYPE_KEY,
 };
 
 /// A parsed field list, split by operator — the frontend-neutral description
@@ -856,15 +856,15 @@ fn changes_field(task: &TaskState, key: &str, value: &Value) -> bool {
 }
 
 /// Whether `task` already has the edge described by an `AddEdge`/`RemoveEdge`
-/// payload (`dep` target, optional `type`; absent type = [`DEPENDS_ON`]).
+/// payload (its `target` + `rel`). A payload missing either is malformed, so it
+/// can't be a no-op.
 fn dep_edge_exists(task: &TaskState, payload: &Map<String, Value>) -> bool {
-    let Some(target) = payload.get(TARGET_KEY).and_then(Value::as_str) else {
+    let (Some(target), Some(rel_type)) = (
+        payload.get(TARGET_KEY).and_then(Value::as_str),
+        payload.get(REL_KEY).and_then(Value::as_str),
+    ) else {
         return false;
     };
-    let rel_type = payload
-        .get(REL_KEY)
-        .and_then(Value::as_str)
-        .unwrap_or(DEPENDS_ON);
     task.relationships
         .get(rel_type)
         .is_some_and(|targets| targets.iter().any(|d| d == target))

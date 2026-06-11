@@ -298,10 +298,11 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
             }
             OpType::Delete => delta.deleted = Some(event.timestamp),
             OpType::AddEdge | OpType::RemoveEdge => {
-                // edge_target/edge_rel accept the legacy `dep`/`type` keys until
-                // v1; an absent rel is the pre-typed default `depends_on`.
-                if let Some(dep) = edge_target(&event.payload) {
-                    let dep_type = edge_rel(&event.payload).unwrap_or(DEPENDS_ON);
+                // A well-formed edge carries both `target` and `rel`; one missing
+                // either is malformed (a pre-1.0 untyped event) and ignored.
+                if let (Some(dep), Some(dep_type)) =
+                    (edge_target(&event.payload), edge_rel(&event.payload))
+                {
                     delta.deps.insert(
                         (dep_type.to_string(), dep.to_string()),
                         DepWrite {
@@ -1163,7 +1164,13 @@ mod tests {
         let anc = vec![ev(1, 0, OpType::Create, "X", &[])];
         let ours = [
             anc[0].clone(),
-            ev(2, 0, OpType::AddEdge, "X", &[("dep", json!("Y"))]),
+            ev(
+                2,
+                0,
+                OpType::AddEdge,
+                "X",
+                &[("target", json!("Y")), ("rel", json!("depends_on"))],
+            ),
         ];
         let theirs = vec![
             anc[0].clone(),
@@ -1172,7 +1179,7 @@ mod tests {
                 0,
                 OpType::AddEdge,
                 "X",
-                &[("dep", json!("Y")), ("type", json!("relates_to"))],
+                &[("target", json!("Y")), ("rel", json!("relates_to"))],
             ),
         ];
         let fork = 1;

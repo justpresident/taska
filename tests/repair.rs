@@ -1,21 +1,20 @@
 mod common;
 use common::*;
 
-/// A legacy untyped dep event (no `type` key) is detected on read — a normal
-/// command fails pointing at `ta repair --migrate` — and the migration stamps
-/// the configured default blocker type, after which the store reads and the dep
-/// gates readiness. Re-running the migration is a no-op.
+/// A PRE-1.0 store (a legacy `AddDep` op / `dep`/`type` edge keys) can no longer
+/// be read OR migrated in v1 — the read shims and the depends_on migration passes
+/// are gone. Both a normal command and `repair` refuse, pointing at the last 0.x
+/// release's `ta repair --migrate` (the sanctioned 0.x→v1 upgrade path), rather
+/// than silently dropping the legacy edge.
 #[test]
-fn repair_migrate_types_legacy_dep_events() {
-    let dir = fresh_dir("repair-migrate");
+fn pre_1_0_store_is_refused_with_a_migration_hint() {
+    let dir = fresh_dir("repair-legacy-refused");
     init_repo(&dir);
     ta(&dir, &["init"]);
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
 
-    // Plant two pre-rename events at the next seqs: a fully legacy untyped
-    // AddDep (b depends on a), and a typed one still using the old op name and
-    // `dep`/`type` payload keys (b relates_to a).
+    // Plant a legacy untyped AddDep edge (b depends on a) at the next seq.
     let log = dir.join(".taska").join("mutations.jsonl");
     let mut content = fs::read_to_string(&log).unwrap();
     let next = content
@@ -29,49 +28,35 @@ fn repair_migrate_types_legacy_dep_events() {
         "{{\"seq\":{next},\"timestamp\":\"2026-01-01T00:00:00Z\",\"op\":\"AddDep\",\
          \"task_id\":\"b\",\"dep\":\"a\"}}\n"
     ));
-    content.push_str(&format!(
-        "{{\"seq\":{},\"timestamp\":\"2026-01-01T00:00:00Z\",\"op\":\"AddDep\",\
-         \"task_id\":\"b\",\"dep\":\"a\",\"type\":\"relates_to\"}}\n",
-        next + 1
-    ));
-    fs::write(&log, content).unwrap();
+    fs::write(&log, &content).unwrap();
 
-    // A normal command refuses and points at repair.
+    // A normal command refuses, explaining the pre-1.0 upgrade path.
     let blocked = run(ta_bin(), &dir, &["list"]);
-    assert!(!blocked.status.success(), "stale store should be refused");
+    assert!(!blocked.status.success(), "pre-1.0 store must be refused");
+    let stderr = String::from_utf8_lossy(&blocked.stderr);
     assert!(
-        String::from_utf8_lossy(&blocked.stderr).contains("repair --migrate"),
-        "stderr should point at repair: {}",
-        String::from_utf8_lossy(&blocked.stderr)
+        stderr.contains("pre-1.0") && stderr.contains("repair --migrate"),
+        "stderr should explain the pre-1.0 upgrade path: {stderr}"
     );
 
-    // Migrate, then it reads: the untyped dep got the default blocker type, the
-    // typed edge kept relates_to, and the blocker gates readiness.
-    assert!(ta(&dir, &["repair", "--migrate"]).contains("migrated"));
-    assert!(ta(&dir, &["show", "b", "--format", "json"])
-        .contains("\"deps\":{\"depends_on\":[\"a\"],\"relates_to\":[\"a\"]}"));
-    let ready = ta(&dir, &["list", "--ready"]);
+    // `repair --migrate` ALSO refuses: v1 has no pass for a pre-1.0 store, so it
+    // must not load-and-rewrite (which would drop the legacy edge) — it points
+    // back at the last 0.x. The store is left untouched.
+    let repaired = run(ta_bin(), &dir, &["repair", "--migrate"]);
     assert!(
-        lists_task(&ready, "a") && !lists_task(&ready, "b"),
-        "b blocked: {ready}"
-    );
-
-    // The rewritten log speaks ONLY the current vocabulary: AddEdge ops with
-    // target/rel keys; no AddDep op names or dep/type payload keys survive.
-    let migrated = fs::read_to_string(&log).unwrap();
-    assert!(
-        migrated.contains(r#""op":"AddEdge""#)
-            && migrated.contains(r#""target":"a""#)
-            && migrated.contains(r#""rel":"relates_to""#),
-        "new vocabulary on disk: {migrated}"
+        !repaired.status.success(),
+        "repair must refuse a pre-1.0 store rather than silently corrupt it"
     );
     assert!(
-        !migrated.contains("AddDep") && !migrated.contains(r#""dep":"#),
-        "no legacy vocabulary left: {migrated}"
+        String::from_utf8_lossy(&repaired.stderr).contains("repair --migrate"),
+        "repair stderr points at the last 0.x: {}",
+        String::from_utf8_lossy(&repaired.stderr)
     );
-
-    // Idempotent.
-    assert!(ta(&dir, &["repair", "--migrate"]).contains("up to date"));
+    assert_eq!(
+        fs::read_to_string(&log).unwrap(),
+        content,
+        "the refused store's log is left byte-for-byte unchanged"
+    );
 }
 
 /// A store that renamed `status_field` BEFORE storage became canonical has its

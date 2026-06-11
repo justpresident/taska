@@ -72,8 +72,8 @@ pub enum DepAction {
 
 /// Add or remove typed dependency edges. Each `type=target` edge's type is
 /// validated against the declared relationship types; an `AddEdge`/`RemoveEdge`
-/// event is appended per edge (the `depends_on` type omits an explicit `type` to
-/// stay legacy-shaped on disk — it's stored in the dedicated `depends_on` field).
+/// event carrying an explicit `target`+`rel` is appended per edge (every type,
+/// `depends_on` included, is stored uniformly in the `relationships` map).
 pub fn cmd_dep_group(
     store: &impl EventStore,
     action: DepAction,

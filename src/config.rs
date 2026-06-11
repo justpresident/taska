@@ -539,8 +539,9 @@ impl RelationshipConfig {
             .collect()
     }
 
-    /// The default blocker type new untyped edges and the legacy-event migration
-    /// resolve to: the first (by name) declared `blocker`-kind type, if any.
+    /// The default blocker type: the first (by name) declared `blocker`-kind
+    /// type, if any. `Config::validate` requires one to exist, so `depends_on`
+    /// (and the readiness gate) always has a blocker type to resolve against.
     pub fn default_blocker(&self) -> Option<&str> {
         self.types
             .iter()
