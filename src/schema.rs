@@ -15,8 +15,8 @@
 //! values display-only). [`coerce_event_fields`] and [`dispatch_accumulate`]
 //! shape values toward their declared kinds *before* the gate so it can stay
 //! the single enforcer. [`FieldOps`] is the frontend-neutral description of
-//! one write (set / accumulate / remove maps); how a frontend produces it —
-//! the CLI's `key=value` grammar, a TUI form — is its own business.
+//! one write (a `set` map plus ordered `+=`/`-=` operand lists); how a frontend
+//! produces it — the CLI's `key=value` grammar, a TUI form — is its own business.
 
 use std::collections::{BTreeSet, HashMap};
 use std::hash::BuildHasher;
@@ -36,15 +36,20 @@ use crate::model::{
 /// The CLI builds it from `key=value` / `key+=value` / `key-=value` tokens
 /// (`cli::parse_field_ops`); any other frontend can construct it directly.
 pub struct FieldOps {
-    /// Fields to **set** (`=`), values JSON-guessed.
+    /// Fields to **set** (`=`), values JSON-guessed. A map, so a repeated `key=`
+    /// is last-wins (you're choosing the field's value).
     pub set: Map<String, Value>,
-    /// Fields to **accumulate** into (`+=`), values JSON-guessed. Dispatched by
-    /// declared kind at write time: text append for strings/undeclared, `Add`
-    /// for numeric and set fields.
-    pub append: Map<String, Value>,
-    /// Fields to **remove** from (`-=`): numeric subtract or set-element
-    /// removal — requires a declared numeric/set field.
-    pub subtract: Map<String, Value>,
+    /// `+=` operands, in token ORDER as `(field, value)` — a list, not a map, so
+    /// repeated `field+=` on one field accumulate instead of overwriting
+    /// (`tags+=a tags+=b` adds both). Dispatched by declared kind at write time:
+    /// text append for strings/undeclared, `Add` for numeric and set fields.
+    pub append: Vec<(String, Value)>,
+    /// `-=` operands, in token order as `(field, value)` — like [`append`], a
+    /// list so repeated `field-=` accumulate. Numeric subtract or set-element
+    /// removal; requires a declared numeric/set field.
+    ///
+    /// [`append`]: FieldOps::append
+    pub subtract: Vec<(String, Value)>,
     /// The verbatim inline token text per SET key (always `Value::String`).
     /// Schema-aware coercion uses it to recover exact input the JSON guess
     /// mangles — `version=3.10` guesses the number 3.1, but a declared string
@@ -98,6 +103,39 @@ pub fn canonicalize_fields(
         }
         if let Some(value) = fields.remove(display.as_str()) {
             fields.insert(canonical.to_string(), value);
+        }
+    }
+    Ok(())
+}
+
+/// [`canonicalize_fields`] for the ordered `(field, value)` operand lists.
+///
+/// Renames each pair's display key to its canonical storage key in place
+/// (preserving order and repeats), with the same "don't write the canonical
+/// spelling directly" rejection — so a renamed `state+=x` hits the same
+/// single-valued-status rejection `status+=x` does. For
+/// [`FieldOps::append`]/[`subtract`].
+///
+/// [`subtract`]: FieldOps::subtract
+pub fn canonicalize_field_pairs(
+    pairs: &mut [(String, Value)],
+    workflow: &crate::config::WorkflowConfig,
+) -> Result<(), DynError> {
+    for (display, canonical) in canonical_field_pairs(workflow) {
+        if display == canonical {
+            continue;
+        }
+        if pairs.iter().any(|(k, _)| k == canonical) {
+            return Err(format!(
+                "`{canonical}` is the canonical storage key of the configured `{display}` \
+                 field; set `{display}=` instead"
+            )
+            .into());
+        }
+        for (key, _) in pairs.iter_mut() {
+            if key == display {
+                *key = canonical.to_string();
+            }
         }
     }
     Ok(())
@@ -729,7 +767,11 @@ type AccumulatePayloads = (Map<String, Value>, Map<String, Value>, Map<String, V
 ///
 /// The applicable schema: the set payload's (re)typed discriminator wins over
 /// the task's current type, mirroring [`coerce_event_fields`].
-fn dispatch_accumulate<S: BuildHasher>(
+///
+/// `pub(crate)` so `create` can fold the SAME accumulation into a new task's
+/// initial value (its field starts absent, so the combined operands are the
+/// value), keeping `+=` consistent between create and update.
+pub(crate) fn dispatch_accumulate<S: BuildHasher>(
     id: &str,
     ops: &FieldOps,
     state: &HashMap<String, TaskState, S>,
@@ -755,15 +797,23 @@ fn dispatch_accumulate<S: BuildHasher>(
         })
     };
 
+    // Repeated `field+=`/`field-=` for one field accumulate (the operands arrive
+    // in token order): numbers sum, set elements gather into one operand, text
+    // joins with `\n` — each combined the SAME way replay would, so the result is
+    // one event per field carrying the whole accumulation.
     let (mut text, mut add, mut remove) = (Map::new(), Map::new(), Map::new());
     for (key, operand) in &ops.append {
         match declared_kind(key) {
             Some((_, kind @ (FieldKind::Int | FieldKind::Uint | FieldKind::Float))) => {
                 let operand = coerce_value(operand, &kind, None).unwrap_or_else(|| operand.clone());
-                add.insert(key.clone(), operand);
+                accumulate_number(&mut add, key, &operand);
             }
             Some((_, FieldKind::Set(element))) => {
-                add.insert(key.clone(), coerce_sequence(operand, &element, None, true));
+                extend_array(
+                    &mut add,
+                    key,
+                    coerce_sequence(operand, &element, None, true),
+                );
             }
             Some((kind_str, FieldKind::Bool | FieldKind::Enum | FieldKind::Datetime)) => {
                 return Err(format!(
@@ -781,7 +831,7 @@ fn dispatch_accumulate<S: BuildHasher>(
             }
             // Strings, `any`, undeclared fields, unknown/missing type: text.
             _ => {
-                text.insert(key.clone(), operand.clone());
+                append_into_text(&mut text, key, operand);
             }
         }
     }
@@ -789,10 +839,14 @@ fn dispatch_accumulate<S: BuildHasher>(
         match declared_kind(key) {
             Some((_, kind @ (FieldKind::Int | FieldKind::Uint | FieldKind::Float))) => {
                 let operand = coerce_value(operand, &kind, None).unwrap_or_else(|| operand.clone());
-                remove.insert(key.clone(), operand);
+                accumulate_number(&mut remove, key, &operand);
             }
             Some((_, FieldKind::Set(element))) => {
-                remove.insert(key.clone(), coerce_sequence(operand, &element, None, true));
+                extend_array(
+                    &mut remove,
+                    key,
+                    coerce_sequence(operand, &element, None, true),
+                );
             }
             _ => {
                 return Err(format!(
@@ -803,6 +857,48 @@ fn dispatch_accumulate<S: BuildHasher>(
         }
     }
     Ok((text, add, remove))
+}
+
+/// Fold a numeric `+=`/`-=` operand into a per-field accumulator: repeated
+/// operands on one field SUM, so the single `Add`/`Remove` event applies the
+/// total once (`points+=2 points+=3` accumulates to 5). Summed via the engine's
+/// own [`crate::engine::accumulate_numbers`], so build-time and replay math
+/// agree.
+fn accumulate_number(map: &mut Map<String, Value>, key: &str, operand: &Value) {
+    let combined = match (map.get(key), operand) {
+        (Some(prev), Value::Number(n)) => crate::engine::accumulate_numbers(Some(prev), n, true)
+            .unwrap_or_else(|| operand.clone()),
+        _ => operand.clone(),
+    };
+    map.insert(key.to_string(), combined);
+}
+
+/// Concatenate a coerced set-element array into a per-field accumulator: repeated
+/// `field+=`/`field-=` on one set field gather all elements into one operand
+/// (replay's set insert/remove dedups), so `tags+=a tags+=b` carries both.
+fn extend_array(map: &mut Map<String, Value>, key: &str, operand: Value) {
+    match (map.get_mut(key), operand) {
+        (Some(Value::Array(existing)), Value::Array(more)) => existing.extend(more),
+        (_, operand) => {
+            map.insert(key.to_string(), operand);
+        }
+    }
+}
+
+/// Join a text `+=` operand into a per-field accumulator: a single operand is
+/// stored as-is, repeated ones join with `\n` — the same separator replay's
+/// `Append` uses — so `notes+=a notes+=b` becomes one `Append` of "a\nb".
+fn append_into_text(map: &mut Map<String, Value>, key: &str, operand: &Value) {
+    use crate::engine::append_text;
+    match map.get(key) {
+        Some(prev) => {
+            let joined = format!("{}\n{}", append_text(prev), append_text(operand));
+            map.insert(key.to_string(), Value::String(joined));
+        }
+        None => {
+            map.insert(key.to_string(), operand.clone());
+        }
+    }
 }
 
 /// The full set of field names the write gate refuses: the static

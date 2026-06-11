@@ -15,8 +15,9 @@ pub struct Engine;
 
 /// A field value's text form for `Append`: a raw string for a JSON string, else
 /// its compact JSON — so appending to a non-string field still yields readable
-/// text rather than a quoted blob.
-fn append_text(v: &Value) -> String {
+/// text rather than a quoted blob. `pub(crate)` so the write gate can fold
+/// repeated `+=` operands into one event with the SAME join replay uses.
+pub(crate) fn append_text(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         other => other.to_string(),
@@ -122,8 +123,10 @@ pub(crate) fn apply_accumulate(
 /// both sides are integral (so `int`/`uint` fields keep their kind and
 /// precision), falling back to `f64`. `None` (overflowing integers whose float
 /// form is not representable, infinite results) means "leave the field
-/// unchanged" — a deterministic no-op, never a stored `null`.
-fn accumulate_numbers(
+/// unchanged" — a deterministic no-op, never a stored `null`. `pub(crate)` so the
+/// write gate can fold repeated numeric `+=`/`-=` operands the same way replay
+/// accumulates them.
+pub(crate) fn accumulate_numbers(
     current: Option<&Value>,
     operand: &serde_json::Number,
     add: bool,

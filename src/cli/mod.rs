@@ -499,8 +499,8 @@ pub(crate) fn print_warnings(warnings: &[crate::action::Warning]) {
 pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
     let mut ops = FieldOps {
         set: Map::new(),
-        append: Map::new(),
-        subtract: Map::new(),
+        append: Vec::new(),
+        subtract: Vec::new(),
         raw: Map::new(),
     };
     for token in fields {
@@ -528,8 +528,10 @@ pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
         }
         let value = field_value(key, val)?;
         match operator {
-            '+' => ops.append.insert(key.to_string(), value),
-            '-' => ops.subtract.insert(key.to_string(), value),
+            // Lists (not maps), in token order, so repeated `field+=`/`field-=`
+            // on one field accumulate rather than overwrite.
+            '+' => ops.append.push((key.to_string(), value)),
+            '-' => ops.subtract.push((key.to_string(), value)),
             _ => {
                 // The verbatim token is kept for SET values only — it backs the
                 // declared-string coercion, which never applies to operands.
@@ -537,9 +539,9 @@ pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
                     ops.raw
                         .insert(key.to_string(), Value::String(val.to_string()));
                 }
-                ops.set.insert(key.to_string(), value)
+                ops.set.insert(key.to_string(), value);
             }
-        };
+        }
     }
     Ok(ops)
 }
@@ -670,18 +672,62 @@ mod tests {
         .unwrap();
         assert_eq!(set["status"], serde_json::json!("open"));
         assert_eq!(set["priority"], serde_json::json!(3));
-        assert_eq!(append["log"], serde_json::json!("first"));
-        assert_eq!(subtract["points"], serde_json::json!(2));
+        assert_eq!(
+            append,
+            vec![("log".to_string(), serde_json::json!("first"))]
+        );
+        assert_eq!(subtract, vec![("points".to_string(), serde_json::json!(2))]);
         assert!(
             !set.contains_key("log")
-                && !append.contains_key("status")
+                && !append.iter().any(|(k, _)| k == "status")
                 && !set.contains_key("points"),
-            "each token lands in exactly one map"
+            "each token lands in exactly one bucket"
         );
         // The guess loses "3.10" (-> 3.1); the raw token preserves it for
         // declared-string coercion.
         assert_eq!(set["version"], serde_json::json!(3.1));
         assert_eq!(raw["version"], serde_json::json!("3.10"));
+    }
+
+    #[test]
+    fn parse_field_ops_keeps_repeated_same_field_tokens_in_order() {
+        // The bug `repeated-compound-assign-drops-values` was here: a map slot
+        // per field collapsed `tags+=a tags+=b` to just `b`. Now `+=`/`-=` are
+        // ordered lists, so both survive for the gate to accumulate.
+        let FieldOps {
+            set,
+            append,
+            subtract,
+            ..
+        } = parse_field_ops(&[
+            "tags+=a".into(),
+            "tags+=b".into(),
+            "scores-=1".into(),
+            "scores-=2".into(),
+            // Repeated `=` stays last-wins (a map): you're choosing one value.
+            "title=first".into(),
+            "title=second".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            append,
+            vec![
+                ("tags".to_string(), serde_json::json!("a")),
+                ("tags".to_string(), serde_json::json!("b")),
+            ]
+        );
+        assert_eq!(
+            subtract,
+            vec![
+                ("scores".to_string(), serde_json::json!(1)),
+                ("scores".to_string(), serde_json::json!(2)),
+            ]
+        );
+        assert_eq!(
+            set["title"],
+            serde_json::json!("second"),
+            "`=` is last-wins"
+        );
     }
 
     #[test]

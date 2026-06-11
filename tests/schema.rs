@@ -213,6 +213,65 @@ fn accumulate_operators_dispatch_by_declared_kind() {
 }
 
 #[test]
+fn repeated_compound_assign_in_one_command_accumulates() {
+    // Regression for `repeated-compound-assign-drops-values`: two `field+=`/
+    // `field-=` tokens for ONE field in ONE command used to keep only the last
+    // (the operands were a map slot). Now they accumulate, dispatched by kind.
+    let dir = fresh_dir("repeated-accumulate");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    declare_schema(&dir);
+    ta(
+        &dir,
+        &["create", "t", "type=bug", "severity=low", "points=10"],
+    );
+
+    // Set: both elements inserted, not just `b`.
+    ta(&dir, &["update", "t", "tags+=a", "tags+=b"]);
+    assert!(
+        ta(&dir, &["show", "t", "--format", "json"]).contains(r#""tags":["a","b"]"#),
+        "both set members inserted in one command"
+    );
+
+    // Numeric: operands sum (10 + 2 + 3 = 15).
+    ta(&dir, &["update", "t", "points+=2", "points+=3"]);
+    assert!(ta(&dir, &["show", "t", "--format", "json"]).contains(r#""points":15"#));
+
+    // Set remove: both removed in one command.
+    ta(&dir, &["update", "t", "tags-=a", "tags-=b"]);
+    assert!(ta(&dir, &["show", "t", "--format", "json"]).contains(r#""tags":[]"#));
+
+    // Text (undeclared field on an OPEN type): operands join with `\n`, in order.
+    ta(&dir, &["create", "f", "type=feature", "owner=z"]);
+    ta(&dir, &["update", "f", "log+=one", "log+=two"]);
+    assert!(
+        ta(&dir, &["show", "f", "--format", "json"]).contains(r#""log":"one\ntwo""#),
+        "text operands join in token order"
+    );
+
+    // CREATE accumulates repeated `+=` the same way: a new field starts absent,
+    // so the combined operands are its initial value.
+    ta(
+        &dir,
+        &[
+            "create",
+            "c",
+            "type=bug",
+            "severity=low",
+            "tags+=x",
+            "tags+=y",
+            "points+=2",
+            "points+=3",
+        ],
+    );
+    let created = ta(&dir, &["show", "c", "--format", "json"]);
+    assert!(
+        created.contains(r#""tags":["x","y"]"#) && created.contains(r#""points":5"#),
+        "create accumulates repeated += (not last-wins): {created}"
+    );
+}
+
+#[test]
 fn nonconforming_tasks_are_read_tolerated_with_one_warning() {
     let dir = fresh_dir("schema-tolerance");
     init_repo(&dir);

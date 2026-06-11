@@ -102,8 +102,8 @@ fn preview(
 fn set_only(set: Map<String, Value>) -> FieldOps {
     FieldOps {
         set,
-        append: Map::new(),
-        subtract: Map::new(),
+        append: Vec::new(),
+        subtract: Vec::new(),
         raw: Map::new(),
     }
 }
