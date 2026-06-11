@@ -20,14 +20,12 @@ run git commit -q -m "track deploy"
 say "Now make an UNCOMMITTED change."
 run ta update deploy status=closed
 run ta show deploy
-pause
 
 say "Undo it. Because that last event was never committed, undo simply TRUNCATES it."
 say "(--force skips the y/N confirmation, so this runs unattended.)"
 run ta undo --force
 say "status is back to open — the uncommitted Update is gone:"
 run ta show deploy
-pause
 
 # -------------------------------------------------------------------------
 # Undo of a COMMITTED action -> compensating event (with before->after preview).
@@ -42,7 +40,6 @@ run ta undo --force
 run ta show deploy
 say "The log grew (a new compensating event) rather than shrinking:"
 run tail -n 2 .taska/mutations.jsonl
-pause
 
 # -------------------------------------------------------------------------
 # --count N: undo several events at once.
@@ -54,7 +51,6 @@ run ta show deploy
 say "...then undo BOTH with --count 2."
 run ta undo --count 2 --force
 run ta show deploy
-pause
 
 # -------------------------------------------------------------------------
 # The confirmation prompt (run WITHOUT --force).
@@ -66,7 +62,6 @@ run ta update deploy status=open
 echo n | run ta undo || true
 say "Declined — the status=open edit is still in place:"
 run ta show deploy
-pause
 
 # -------------------------------------------------------------------------
 # --remove: the DANGEROUS truncate-committed path.

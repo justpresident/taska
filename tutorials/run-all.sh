@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # run-all.sh — run every tutorial script in order.
 #
-# Interactivity passes straight through: by default each script pauses between
-# sections (when run from a terminal). Set TUTORIAL_NONINTERACTIVE=1 to run the
-# whole sequence unattended (e.g. in CI), in which case the pauses are skipped.
+# Interactivity passes straight through: by default each script shows each
+# command and waits for Enter to execute it (when run from a terminal).
+# Set TUTORIAL_NONINTERACTIVE=1 to run the whole sequence unattended (e.g. in
+# CI), in which case the per-command pauses are skipped.
 #
 # Requires the `ta` binary on PATH (see README.md).
 set -u

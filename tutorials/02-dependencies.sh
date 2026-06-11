@@ -8,30 +8,24 @@ say "Create three tasks. deploy-api and smoke-test both depend on migrate-db fin
 run ta create migrate-db title="Run DB migration" status=open
 run ta create deploy-api title="Deploy the API" status=open
 run ta create smoke-test title="Smoke-test prod" status=open
-pause
 
 say "'ta dep add <task> depends_on=<target>' adds a dependency edge."
 run ta dep add deploy-api depends_on=migrate-db
 run ta dep add smoke-test depends_on=deploy-api
-pause
 
 say "Now 'ta list' shows the DEPS column wired up, and 'ta dep tree' draws the graph."
 run ta list
 run ta dep tree
-pause
 
 say "'ta show' surfaces a task's relationships both ways: deploy-api depends on migrate-db, and (inverse) blocks smoke-test."
 run ta show deploy-api
-pause
 
 say "'ta list --ready' shows only NOT-done tasks whose dependencies are all done."
 say "Right now only migrate-db is actionable — the others are blocked."
 run ta list --ready
-pause
 
 say "Close the migration (status=closed is the configured 'done' value)."
 run ta update migrate-db status=closed
-pause
 
 say "deploy-api now unblocks — its only dependency is done. smoke-test still waits on deploy-api."
 run ta list --ready

@@ -40,14 +40,14 @@ Run all of them in order:
 $ bash tutorials/run-all.sh
 ```
 
-When run from a terminal, each script **pauses between sections** (press Enter to
-continue) so you can read the output before moving on.
-
+When run from a terminal, each script prints narration, then shows the next
+command in bold and **waits for Enter to execute it** — press Enter to run each
+command and see its real output before moving on.
 ## Unattended / CI runs
 
-Set `TUTORIAL_NONINTERACTIVE=1` to skip every pause and run straight through —
-useful in tests or CI. (Pauses are also skipped automatically when stdin isn't a
-terminal, e.g. when piping.)
+Set `TUTORIAL_NONINTERACTIVE=1` to skip the per-command pause and run straight
+through — useful in tests or CI. (Pauses are also skipped automatically when
+stdin isn't a terminal, e.g. when piping.)
 
 ```console
 $ TUTORIAL_NONINTERACTIVE=1 bash tutorials/run-all.sh
@@ -72,8 +72,9 @@ $ TUTORIAL_NONINTERACTIVE=1 bash tutorials/run-all.sh
 Every script sources `lib.sh`, which provides:
 
 - `say <text>` — dimmed narration, prefixed with `## `.
-- `run <cmd...>` — echoes the command in bold (prefixed `$ `), runs it for real, then a
-  blank line, so you see the command and its actual output together.
-- `pause` — waits for Enter, but returns immediately when non-interactive.
+- `run <cmd...>` — echoes the command in bold (prefixed `$ `), waits for Enter,
+  then runs it for real and prints a blank line, so you press Enter to execute
+  each command and see its actual output.
+- `pause` — waits for Enter to execute, but returns immediately when non-interactive.
 - `fresh_repo` — makes a throwaway `mktemp` repo outside this tree, `git init`s
   it, sets a git identity, and runs `ta init`.

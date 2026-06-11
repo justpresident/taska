@@ -5,9 +5,10 @@
 #   source "$(dirname "$0")/lib.sh"
 #
 # It requires the `ta` binary on PATH, and provides four helpers the scripts
-# narrate with: `say` (narration), `run` (echo + run a command), `pause` (wait
-# for Enter, skipped when non-interactive), and `fresh_repo` (a throwaway git
-# repo with an initialized taska store, OUTSIDE this project tree).
+# narrate with: `say` (narration), `run` (echo, pause for Enter, then run a
+# command), `pause` (wait for Enter, skipped when non-interactive), and
+# `fresh_repo` (a throwaway git repo with an initialized taska store, OUTSIDE
+# this project tree).
 #
 # Set TUTORIAL_NONINTERACTIVE=1 (or pipe stdin from a non-TTY) to run unattended:
 # every `pause` returns immediately so the whole script runs end to end in CI.
@@ -44,25 +45,27 @@ say() {
   printf '%s## %s%s\n' "$_C_DIM$_C_CYAN" "$*" "$_C_RESET"
 }
 
-# run <cmd...> — echo the command prefixed with `$ `, run it for real so the
-# learner sees the actual output, then print a trailing blank line. The command's
-# own exit status is preserved (returned), so a caller can react to a failure.
+# run <cmd...> — echo the command prefixed with `$ `, wait for Enter, then run
+# it for real so the learner sees the actual output, then print a trailing blank
+# line. The command's own exit status is preserved (returned), so a caller can
+# react to a failure. In non-interactive mode the pause is skipped.
 run() {
   printf '%s$ %s%s\n' "$_C_BOLD" "$*" "$_C_RESET"
+  pause
   "$@"
   local status=$?
   printf '\n'
   return $status
 }
 
-# pause — wait for the learner to press Enter before the next section. Skipped
-# (returns immediately) when stdin is not a TTY or TUTORIAL_NONINTERACTIVE=1, so
-# the scripts run unattended in tests/CI.
+# pause — wait for the learner to press Enter to execute the shown command.
+# Skipped (returns immediately) when stdin is not a TTY or
+# TUTORIAL_NONINTERACTIVE=1, so the scripts run unattended in tests/CI.
 pause() {
   if [ "${TUTORIAL_NONINTERACTIVE:-0}" = "1" ] || [ ! -t 0 ]; then
     return 0
   fi
-  printf '%s(press Enter to continue)%s ' "$_C_DIM" "$_C_RESET"
+  printf '%s(press Enter to execute)%s ' "$_C_DIM" "$_C_RESET"
   read -r _ || true
 }
 

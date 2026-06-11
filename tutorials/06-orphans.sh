@@ -15,16 +15,13 @@ say "That trailing Update targets a task that no longer exists -> an orphaned ev
 run ta create temp title="Temporary" status=open
 run ta delete temp
 run ta update temp status=closed
-pause
 
 say "Any READ command warns about orphans on STDERR (it never blocks the read)."
 say "Watch for the 'taska: warning: ... orphaned event(s)' line:"
 run ta list
-pause
 
 say "'ta resolve --force' names each orphaned event and drops it from the log."
 run ta resolve --force
-pause
 
 say "The warning is gone — the log no longer carries the orphan."
 run ta list

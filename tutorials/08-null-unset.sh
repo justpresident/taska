@@ -10,24 +10,19 @@ fresh_repo
 say "Create a task that has an 'owner' field."
 run ta create ticket title="Investigate outage" status=open owner=alice
 run ta show ticket
-pause
 
 say "'ta list owner=alice' finds it while the field is set."
 run ta list owner=alice
-pause
 
 say "Unset the field with the null convention: 'ta update <id> owner=null'."
 say "(null is JSON null, not the string \"null\" — it removes the key entirely.)"
 run ta update ticket owner=null
-pause
 
 say "'ta show' confirms the owner column is gone — the field no longer exists on the task."
 run ta show ticket
-pause
 
 say "It's gone from 'ta list --full' too (no OWNER column, since no task has the field)."
 run ta list --full
-pause
 
 say "And 'ta list owner=alice' now finds nothing — the field is truly unset, not blank."
 run ta list owner=alice

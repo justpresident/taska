@@ -26,20 +26,16 @@ say "Tune retention for the demo: keep_events=100 (the production floor) and kee
 say "(keep_days=0 disables the time window, which would otherwise retain today's events.)"
 run sed -i 's/^keep_events = .*/keep_events = 100/; s/^keep_days = .*/keep_days = 0/' .taska/config.toml
 run grep -E 'keep_events|keep_days' .taska/config.toml
-pause
 
 say "Create 120 tasks -> 120 events in the append-only log, baseline still empty."
 for i in $(seq 1 120); do ta create "task-$i" status=open >/dev/null; done
 run log_sizes
-pause
 
 say "'ta compact' folds everything but the most recent 100 events into the baseline."
 run ta compact
-pause
 
 say "Now the log holds the 100 retained events and the baseline holds the 20 folded ones."
 run log_sizes
-pause
 
 say "Task state is unchanged — compaction is invisible to what you see. All 120 are still here."
 run task_count
