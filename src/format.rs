@@ -639,51 +639,64 @@ pub(crate) fn truncate(s: &str, max_width: usize) -> String {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::test_support::{display, task};
+    use crate::test_support::names::*;
+    use crate::test_support::{display, task, task_rel};
     use std::collections::BTreeMap;
 
-    /// The default readiness-gating type set the human renderers style by.
+    /// The readiness-gating type set the human renderers style by.
     fn blockers() -> BTreeSet<String> {
-        BTreeSet::from(["depends_on".to_string()])
+        BTreeSet::from([BLOCKER.to_string()])
     }
 
-    /// The default-config row style: status column `status`, done value `closed`.
+    /// The row style: status column `STATE` (= `STATUS_FIELD`), done value `DONE_STATUS`.
     fn style() -> RowStyle<'static> {
         RowStyle {
-            status_field: "status",
-            done_status: "closed",
+            status_field: STATUS_FIELD,
+            done_status: DONE_STATUS,
         }
     }
 
-    /// A task with both a gating (`depends_on`) and an info (`relates_to`) edge.
+    /// A task with both a gating (`BLOCKER`) and an info (`INFO`) edge.
     fn mixed_edges_task() -> TaskState {
-        let mut t = task("api", &["db", "web"], &[]);
+        let mut t = task_rel("api", BLOCKER, &["db", "web"], &[]);
         t.relationships
-            .insert("relates_to".to_string(), vec!["x".to_string()]);
+            .insert(INFO.to_string(), vec!["x".to_string()]);
         t
     }
 
     #[test]
     fn full_columns_keeps_present_configured_then_alphabetical() {
-        // Default config columns are id,title,status,deps; this task has no title,
+        // Configured columns are id,title,STATUS_FIELD,deps; the task has no title,
         // so it is dropped, and the extra `priority` sorts after the configured
         // tail. JSON over the same columns carries the present fields.
+        let cfg = DisplayConfig {
+            columns: vec![
+                "id".into(),
+                "title".into(),
+                STATUS_FIELD.into(),
+                "deps".into(),
+            ],
+            ..DisplayConfig::default()
+        };
         let t = task(
             "api",
             &[],
             &[
-                ("status", serde_json::json!("open")),
+                (STATUS_FIELD, serde_json::json!("open")),
                 ("priority", serde_json::json!(3)),
             ],
         );
-        let cols = full_columns(&[&t], &DisplayConfig::default());
+        let cols = full_columns(&[&t], &cfg);
         assert_eq!(
             cols,
-            ["id", "status", "deps", "priority"],
+            ["id", STATUS_FIELD, "deps", "priority"],
             "canonical present-only set: {cols:?}"
         );
         let json = render_json(&[&t], &cols);
-        assert!(json.contains(r#""status":"open""#), "json: {json}");
+        assert!(
+            json.contains(&format!(r#""{STATUS_FIELD}":"open""#)),
+            "json: {json}"
+        );
         assert!(json.contains(r#""priority":3"#), "json: {json}");
     }
 
@@ -692,26 +705,27 @@ mod tests {
         // Configured columns come first in their exact order; remaining fields
         // follow alphabetically. `deps` keeps its configured slot.
         let cfg = DisplayConfig {
-            columns: vec!["id".into(), "status".into(), "deps".into()],
+            columns: vec!["id".into(), STATUS_FIELD.into(), "deps".into()],
             max_width: 0,
             column_max_width: BTreeMap::new(),
             sort: String::new(),
             list_layout: Layout::Table,
             show_layout: Layout::List,
         };
-        let t = task(
+        let t = task_rel(
             "api",
+            BLOCKER,
             &["db"],
             &[
                 ("zeta", serde_json::json!(1)),
-                ("status", serde_json::json!("open")),
+                (STATUS_FIELD, serde_json::json!("open")),
                 ("alpha", serde_json::json!(2)),
             ],
         );
         let cols = full_columns(&[&t], &cfg);
         assert_eq!(
             cols,
-            ["id", "status", "deps", "alpha", "zeta"],
+            ["id", STATUS_FIELD, "deps", "alpha", "zeta"],
             "configured order then alphabetical extras: {cols:?}"
         );
 
@@ -749,8 +763,9 @@ mod tests {
     fn human_cell_renders_each_column_form() {
         // The column->value projection itself ([`crate::model::cell_value`]) is
         // tested in `model`; here we cover only the human rendering on top of it.
-        let mut t = task(
+        let mut t = task_rel(
             "api",
+            BLOCKER,
             &["db", "web"],
             &[
                 ("tags", serde_json::json!(["x", "y"])),
@@ -758,14 +773,14 @@ mod tests {
             ],
         );
         t.relationships
-            .insert("relates_to".to_string(), vec!["infra".to_string()]);
+            .insert(INFO.to_string(), vec!["infra".to_string()]);
 
         // Human cells: bare string, deps as labeled type groups, arrays joined,
         // numbers as their text, empty for a missing column.
         assert_eq!(human_cell(&t, "id"), "api");
         assert_eq!(
             human_cell(&t, "deps"),
-            "depends_on: db, web; relates_to: infra"
+            format!("{BLOCKER}: db, web; {INFO}: infra")
         );
         assert_eq!(human_cell(&t, "tags"), "x, y", "custom arrays join");
         assert_eq!(human_cell(&t, "priority"), "3");
@@ -777,7 +792,8 @@ mod tests {
         let t = mixed_edges_task();
 
         // Plain, uncapped: groups joined by `; `, width = visible chars.
-        let plain = "depends_on: db, web; relates_to: x";
+        // BLOCKER = "needs", INFO = "related"
+        let plain = format!("{BLOCKER}: db, web; {INFO}: x");
         let (cell, w) = deps_cell(&t, &blockers(), 0, false, false);
         assert_eq!(cell, plain);
         assert_eq!(w, plain.chars().count());
@@ -786,26 +802,32 @@ mod tests {
         let (cell, w) = deps_cell(&t, &blockers(), 0, true, false);
         assert_eq!(
             cell,
-            "\x1b[1mdepends_on: db, web\x1b[0m; \x1b[2mrelates_to: x\x1b[0m"
+            format!("\x1b[1m{BLOCKER}: db, web\x1b[0m; \x1b[2m{INFO}: x\x1b[0m")
         );
         assert_eq!(w, plain.chars().count(), "width counts only visible chars");
 
         // Truncation cuts on the PLAIN text (`truncate` semantics: cap-1 + an
         // ellipsis), never mid-escape; the cut group keeps its styling.
+        // BLOCKER = "needs" (5 chars), "needs: db, web" = 14 chars
+        // cap=10: "needs: db\u{2026}" (9 chars + ellipsis = 10)
         let (cell, w) = deps_cell(&t, &blockers(), 10, false, false);
-        assert_eq!(cell, "depends_o\u{2026}");
+        assert_eq!(cell, format!("{BLOCKER}: db\u{2026}"));
         assert_eq!(w, 10);
-        let (cell, w) = deps_cell(&t, &blockers(), 25, true, false);
+        // plain.chars().count() = "needs: db, web; related: x" = 26 chars
+        // "needs: db, web" = 14, "; " = 2, "related: x" = 10 → total 26
+        // cap=20: budget=19; 14 (blocker) + 2 (sep) leaves 3 for info → "rel" + ellipsis
+        let (cell, w) = deps_cell(&t, &blockers(), 20, true, false);
         assert_eq!(
             cell,
-            "\x1b[1mdepends_on: db, web\x1b[0m; \x1b[2mrel\x1b[0m\u{2026}"
+            format!("\x1b[1m{BLOCKER}: db, web\x1b[0m; \x1b[2mrel\x1b[0m\u{2026}")
         );
-        assert_eq!(w, 25);
+        assert_eq!(w, 20);
 
         // A done task dims the whole deps cell (grey), overriding the kind colors.
         let (cell, _) = deps_cell(&t, &blockers(), 0, true, true);
         assert_eq!(
-            cell, "\x1b[2mdepends_on: db, web\x1b[0m; \x1b[2mrelates_to: x\x1b[0m",
+            cell,
+            format!("\x1b[2m{BLOCKER}: db, web\x1b[0m; \x1b[2m{INFO}: x\x1b[0m"),
             "done: both groups dim"
         );
 
@@ -822,28 +844,42 @@ mod tests {
         let cols = vec!["id".to_string(), "deps".to_string()];
         let out = render_record(&t, &cols, false, &blockers(), style());
         let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines[1], "deps: depends_on: db, web", "first group: {out}");
+        assert_eq!(
+            lines[1],
+            &format!("deps: {BLOCKER}: db, web"),
+            "first group: {out}"
+        );
         assert_eq!(
             lines[2].trim(),
-            "relates_to: x",
+            &format!("{INFO}: x"),
             "next group continues indented: {out}"
         );
         // Colored: bold gating group on the label line, dim info continuation.
         let colored = render_record(&t, &cols, true, &blockers(), style());
         assert!(
-            colored.contains("\x1b[1mdepends_on: db, web\x1b[0m"),
+            colored.contains(&format!("\x1b[1m{BLOCKER}: db, web\x1b[0m")),
             "bold group: {colored:?}"
         );
         assert!(
-            colored.contains("\x1b[2mrelates_to: x\x1b[0m"),
+            colored.contains(&format!("\x1b[2m{INFO}: x\x1b[0m")),
             "dim group: {colored:?}"
         );
     }
 
     #[test]
     fn human_has_header_and_unquoted_values() {
-        let t = task("api", &["db"], &[("status", serde_json::json!("open"))]);
-        let d = display(OutputFormat::Human, false, Some(&["id", "status", "deps"]));
+        let t = task_rel(
+            "api",
+            BLOCKER,
+            &["db"],
+            &[(STATUS_FIELD, serde_json::json!("open"))],
+        );
+        let status_upper = STATUS_FIELD.to_uppercase();
+        let d = display(
+            OutputFormat::Human,
+            false,
+            Some(&["id", STATUS_FIELD, "deps"]),
+        );
         let out = render(
             &[&t],
             &d,
@@ -853,7 +889,7 @@ mod tests {
             "(none)",
         );
         assert!(
-            out.contains("ID") && out.contains("STATUS"),
+            out.contains("ID") && out.contains(&status_upper),
             "header: {out}"
         );
         assert!(out.lines().any(|l| l.starts_with("api")), "row: {out}");
@@ -862,28 +898,37 @@ mod tests {
             out.contains("open") && !out.contains("\"open\""),
             "unquoted: {out}"
         );
-        assert!(out.contains("depends_on: db"), "deps: {out}");
+        assert!(out.contains(&format!("{BLOCKER}: db")), "deps: {out}");
     }
 
     #[test]
     fn color_wraps_human_output_only_when_enabled() {
-        let mut t = task("api", &["db"], &[("status", serde_json::json!("open"))]);
+        let mut t = task_rel(
+            "api",
+            BLOCKER,
+            &["db"],
+            &[(STATUS_FIELD, serde_json::json!("open"))],
+        );
         t.relationships
-            .insert("relates_to".to_string(), vec!["x".to_string()]);
-        let cols = vec!["id".to_string(), "status".to_string(), "deps".to_string()];
+            .insert(INFO.to_string(), vec!["x".to_string()]);
+        let cols = vec![
+            "id".to_string(),
+            STATUS_FIELD.to_string(),
+            "deps".to_string(),
+        ];
         let caps = [0, 0, 0];
 
-        // color=true: id cyan (36), status green (32), headers + gating deps
+        // color=true: id cyan (36), STATUS_FIELD green (32), headers + gating deps
         // groups bold (1), info groups dim (2), reset.
         let colored = render_human(&[&t], &cols, &caps, true, &blockers(), style());
         assert!(colored.contains("\x1b[36m"), "id cyan: {colored:?}");
         assert!(colored.contains("\x1b[32m"), "status green: {colored:?}");
         assert!(
-            colored.contains("\x1b[1mdepends_on: db\x1b[0m"),
+            colored.contains(&format!("\x1b[1m{BLOCKER}: db\x1b[0m")),
             "gating deps group bold: {colored:?}"
         );
         assert!(
-            colored.contains("\x1b[2mrelates_to: x\x1b[0m"),
+            colored.contains(&format!("\x1b[2m{INFO}: x\x1b[0m")),
             "info deps group dim: {colored:?}"
         );
         assert!(colored.contains("\x1b[0m"), "reset: {colored:?}");
@@ -901,7 +946,7 @@ mod tests {
         // JSON is never colored, even via the shared render path.
         let json = render(
             &[&t],
-            &display(OutputFormat::Json, false, Some(&["id", "status"])),
+            &display(OutputFormat::Json, false, Some(&["id", STATUS_FIELD])),
             &DisplayConfig::default(),
             &blockers(),
             style(),
@@ -915,17 +960,17 @@ mod tests {
         // The shared row style (also used by `dep tree`): an OPEN task keeps its
         // per-column colors; a DONE task greys whole, overriding them. This is the
         // consistency every task-rendering command inherits.
-        let cols = vec!["id".to_string(), "status".to_string()];
+        let cols = vec!["id".to_string(), STATUS_FIELD.to_string()];
         let caps = [0, 0];
 
-        let open = task("a", &[], &[("status", serde_json::json!("open"))]);
+        let open = task("a", &[], &[(STATUS_FIELD, serde_json::json!("open"))]);
         let o = render_human(&[&open], &cols, &caps, true, &blockers(), style());
         assert!(
             o.contains("\x1b[36m") && o.contains("\x1b[32m"),
             "open: id cyan + status green: {o:?}"
         );
 
-        let done = task("b", &[], &[("status", serde_json::json!("closed"))]);
+        let done = task("b", &[], &[(STATUS_FIELD, serde_json::json!(DONE_STATUS))]);
         let d = render_human(&[&done], &cols, &caps, true, &blockers(), style());
         assert!(d.contains("\x1b[2m"), "done: cells dim/grey: {d:?}");
         assert!(
@@ -943,11 +988,11 @@ mod tests {
             "t",
             &[],
             &[
-                ("status", serde_json::json!("closed")),
+                (STATUS_FIELD, serde_json::json!(DONE_STATUS)),
                 ("notes", serde_json::json!("line one\nline two")),
             ],
         );
-        let cols = vec!["status".to_string(), "notes".to_string()];
+        let cols = vec![STATUS_FIELD.to_string(), "notes".to_string()];
         let out = render_record(&t, &cols, true, &blockers(), style());
         assert!(
             out.contains("\x1b[2mline one\x1b[0m") && out.contains("\x1b[2mline two\x1b[0m"),
@@ -965,14 +1010,14 @@ mod tests {
             "api",
             &[],
             &[
-                ("status", serde_json::json!("open")),
+                (STATUS_FIELD, serde_json::json!("open")),
                 ("priority", serde_json::json!(3)),
             ],
         );
         let args = display(
             OutputFormat::Json,
             false,
-            Some(&["id", "priority", "status"]),
+            Some(&["id", "priority", STATUS_FIELD]),
         );
         let out = render(
             &[&item],
@@ -985,7 +1030,7 @@ mod tests {
         assert!(out.trim_start().starts_with('['), "array: {out}");
         let id_at = out.find("\"id\"").unwrap();
         let pri_at = out.find("\"priority\"").unwrap();
-        let status_at = out.find("\"status\"").unwrap();
+        let status_at = out.find(&format!("\"{STATUS_FIELD}\"")).unwrap();
         assert!(
             id_at < pri_at && pri_at < status_at,
             "keys follow column order: {out}"
@@ -1033,7 +1078,7 @@ mod tests {
 
     #[test]
     fn jsonl_is_one_object_per_line_omitting_absent_fields() {
-        let a = task("a", &["d"], &[("x", serde_json::json!(1))]);
+        let a = task_rel("a", BLOCKER, &["d"], &[("x", serde_json::json!(1))]);
         let b = task("b", &[], &[("y", serde_json::json!(2))]);
         let d = display(OutputFormat::Jsonl, true, None);
         let out = render(
@@ -1064,7 +1109,7 @@ mod tests {
         // deps is a built-in: always present as the typed map, {} when empty
         // (data, not absence).
         assert!(
-            lines[0].contains(r#""deps":{"depends_on":["d"]}"#)
+            lines[0].contains(&format!(r#""deps":{{"{BLOCKER}":["d"]}}"#))
                 && lines[1].contains(r#""deps":{}"#)
         );
 
@@ -1200,11 +1245,12 @@ mod tests {
     #[test]
     fn record_view_is_vertical_untruncated_and_keeps_multiline() {
         let long = "a value that is definitely much longer than any default max width";
-        let t = task(
+        let t = task_rel(
             "api",
+            BLOCKER,
             &["db"],
             &[
-                ("status", serde_json::json!("open")),
+                (STATUS_FIELD, serde_json::json!("open")),
                 ("notes", serde_json::json!("line one\nline two")),
                 ("blurb", serde_json::json!(long)),
             ],
@@ -1212,7 +1258,7 @@ mod tests {
         let cols = full_columns(&[&t], &DisplayConfig::default());
         let out = render_record(&t, &cols, false, &blockers(), style());
 
-        // One field per line: `id` value is `api`, status its own line.
+        // One field per line: `id` value is `api`, STATUS_FIELD its own line.
         assert!(
             out.lines()
                 .any(|l| l.starts_with("id:") && l.split_whitespace().last() == Some("api")),
@@ -1220,7 +1266,7 @@ mod tests {
         );
         assert!(
             out.lines()
-                .any(|l| l.starts_with("status:") && l.ends_with("open")),
+                .any(|l| l.starts_with(&format!("{STATUS_FIELD}:")) && l.ends_with("open")),
             "status line: {out}"
         );
         // Long values are never truncated (the whole point of the record view).

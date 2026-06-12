@@ -366,20 +366,21 @@ mod tests {
 
     #[test]
     fn cell_value_projects_columns_and_task_cmp_orders_by_them() {
-        use crate::test_support::task;
+        use crate::test_support::names::*;
+        use crate::test_support::{task, task_rel};
         use serde_json::json;
         use std::cmp::Ordering;
 
-        let mut t = task("api", &["db", "web"], &[("priority", json!(3))]);
+        let mut t = task_rel("api", BLOCKER, &["db", "web"], &[("priority", json!(3))]);
         t.relationships
-            .insert("relates_to".to_string(), vec!["infra".to_string()]);
+            .insert(INFO.to_string(), vec!["infra".to_string()]);
 
         // cell_value: id string, deps as the typed relationships map, custom
         // passthrough, and None for a field the task lacks.
         assert_eq!(cell_value(&t, ID_KEY), Some(json!("api")));
         assert_eq!(
             cell_value(&t, DEPS_KEY),
-            Some(json!({"depends_on": ["db", "web"], "relates_to": ["infra"]}))
+            Some(json!({BLOCKER: ["db", "web"], INFO: ["infra"]}))
         );
         assert_eq!(cell_value(&t, "priority"), Some(json!(3)));
         assert_eq!(cell_value(&t, "missing"), None);

@@ -798,6 +798,8 @@ fn index_baseline(tasks: Vec<TaskState>) -> HashMap<String, TaskState> {
 mod tests {
     use super::*;
     use crate::engine::Engine;
+    use crate::model::STATUS_KEY;
+    use crate::test_support::names::*;
     use serde_json::json;
 
     fn ev(seq: u64, mins: i64, op: OpType, task: &str, payload: &[(&str, Value)]) -> MutationEvent {
@@ -837,7 +839,7 @@ mod tests {
             Strategy::for_policy(policy),
         );
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
-        let state = Engine::materialize_state(Vec::new(), merged, "closed");
+        let state = Engine::materialize_state(Vec::new(), merged, DONE_STATUS);
         state
             .get(task)
             .map(|t| t.custom_fields.clone())
@@ -861,7 +863,7 @@ mod tests {
         let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
         let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
-        let mut ids: Vec<String> = Engine::materialize_state(Vec::new(), merged, "closed")
+        let mut ids: Vec<String> = Engine::materialize_state(Vec::new(), merged, DONE_STATUS)
             .into_keys()
             .collect();
         ids.sort();
@@ -996,8 +998,8 @@ mod tests {
         // Update, now applying to no task, surfaces as an orphan on replay.
         let anc = vec![
             ev(1, 0, OpType::Create, "x", &[]),
-            ev(2, 0, OpType::Create, "a", &[("status", json!("open"))]),
-            ev(3, 0, OpType::Update, "a", &[("status", json!("done"))]),
+            ev(2, 0, OpType::Create, "a", &[(STATUS_KEY, json!("open"))]),
+            ev(3, 0, OpType::Update, "a", &[(STATUS_KEY, json!("done"))]),
         ];
         let reverted = vec![anc[0].clone(), anc[2].clone()]; // Create a (seq2) gone
         let kept = [anc[0].clone(), anc[1].clone(), anc[2].clone()];
@@ -1019,7 +1021,7 @@ mod tests {
         let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
 
-        let (state, orphans) = Engine::materialize_report(Vec::new(), merged, "closed");
+        let (state, orphans) = Engine::materialize_report(Vec::new(), merged, DONE_STATUS);
         assert!(
             !state.contains_key("a"),
             "task a does not materialize - its Create was reverted"
@@ -1153,7 +1155,7 @@ mod tests {
 
     #[test]
     fn typed_dep_edges_do_not_collide_across_types() {
-        // Concurrent: ours adds `X depends_on Y`; theirs adds `X relates_to Y`.
+        // Concurrent: ours adds `X BLOCKER Y`; theirs adds `X INFO Y`.
         // Distinct typed edges to the same target - both survive, no conflict.
         let anc = vec![ev(1, 0, OpType::Create, "X", &[])];
         let ours = [
@@ -1163,7 +1165,7 @@ mod tests {
                 0,
                 OpType::AddEdge,
                 "X",
-                &[("target", json!("Y")), ("rel", json!("depends_on"))],
+                &[("target", json!("Y")), ("rel", json!(BLOCKER))],
             ),
         ];
         let theirs = vec![
@@ -1173,7 +1175,7 @@ mod tests {
                 0,
                 OpType::AddEdge,
                 "X",
-                &[("target", json!("Y")), ("rel", json!("relates_to"))],
+                &[("target", json!("Y")), ("rel", json!(INFO))],
             ),
         ];
         let fork = 1;
@@ -1190,16 +1192,16 @@ mod tests {
             .filter(|e| e.seq <= fork && !removed.contains(&e.seq))
             .collect();
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
-        let state = Engine::materialize_state(Vec::new(), merged, "closed");
+        let state = Engine::materialize_state(Vec::new(), merged, DONE_STATUS);
         assert_eq!(
-            state["X"].relationships["depends_on"],
+            state["X"].relationships[BLOCKER],
             vec!["Y".to_string()],
-            "depends_on edge"
+            "BLOCKER edge"
         );
         assert_eq!(
-            state["X"].relationships["relates_to"],
+            state["X"].relationships[INFO],
             vec!["Y".to_string()],
-            "relates_to edge"
+            "INFO edge"
         );
     }
 
@@ -1215,7 +1217,7 @@ mod tests {
 
     #[test]
     fn non_overlapping_fields_all_survive_and_conflicts_resolve_per_field() {
-        // The four-field example: status & owner conflict; scope & priority don't.
+        // The four-field example: STATUS_KEY & owner conflict; scope & priority don't.
         let anc = vec![ev(1, 0, OpType::Create, "X", &[])];
         let ours = vec![
             anc[0].clone(),
@@ -1225,7 +1227,7 @@ mod tests {
                 OpType::Update,
                 "X",
                 &[
-                    ("status", json!("done")),
+                    (STATUS_KEY, json!("done")),
                     ("owner", json!("alice")),
                     ("scope", json!("project")),
                 ],
@@ -1239,7 +1241,7 @@ mod tests {
                 OpType::Update,
                 "X",
                 &[
-                    ("status", json!("open")),
+                    (STATUS_KEY, json!("open")),
                     ("owner", json!("bob")),
                     ("priority", json!(3)),
                 ],
@@ -1248,7 +1250,7 @@ mod tests {
 
         // `theirs` wins the two conflicting fields; the disjoint ones both stay.
         let fields = merge_to_fields(&anc, &ours, &theirs, OnConflict::Theirs, "X");
-        assert_eq!(fields["status"], json!("open"), "theirs wins status");
+        assert_eq!(fields[STATUS_KEY], json!("open"), "theirs wins STATUS_KEY");
         assert_eq!(fields["owner"], json!("bob"), "theirs wins owner");
         assert_eq!(
             fields["scope"],
@@ -1261,31 +1263,35 @@ mod tests {
     #[test]
     fn latest_resolves_each_field_by_its_own_timestamp() {
         let anc = vec![ev(1, 0, OpType::Create, "X", &[])];
-        // ours: status newer (t=10), owner older (t=1).
+        // ours: STATUS_KEY newer (t=10), owner older (t=1).
         let ours = vec![
             anc[0].clone(),
-            ev(2, 10, OpType::Update, "X", &[("status", json!("ours"))]),
+            ev(2, 10, OpType::Update, "X", &[(STATUS_KEY, json!("ours"))]),
             ev(3, 1, OpType::Update, "X", &[("owner", json!("ours"))]),
         ];
-        // theirs: status older (t=5), owner newer (t=20).
+        // theirs: STATUS_KEY older (t=5), owner newer (t=20).
         let theirs = vec![
             anc[0].clone(),
-            ev(2, 5, OpType::Update, "X", &[("status", json!("theirs"))]),
+            ev(2, 5, OpType::Update, "X", &[(STATUS_KEY, json!("theirs"))]),
             ev(3, 20, OpType::Update, "X", &[("owner", json!("theirs"))]),
         ];
 
         let fields = merge_to_fields(&anc, &ours, &theirs, OnConflict::Latest, "X");
-        assert_eq!(fields["status"], json!("ours"), "ours' status is newer");
+        assert_eq!(
+            fields[STATUS_KEY],
+            json!("ours"),
+            "ours' STATUS_KEY is newer"
+        );
         assert_eq!(fields["owner"], json!("theirs"), "theirs' owner is newer");
     }
 
     #[test]
     fn delete_versus_change_follows_strategy() {
-        let anc = vec![ev(1, 0, OpType::Create, "X", &[("status", json!("a"))])];
+        let anc = vec![ev(1, 0, OpType::Create, "X", &[(STATUS_KEY, json!("a"))])];
         let ours = vec![anc[0].clone(), ev(2, 0, OpType::Delete, "X", &[])];
         let theirs = vec![
             anc[0].clone(),
-            ev(2, 0, OpType::Update, "X", &[("status", json!("changed"))]),
+            ev(2, 0, OpType::Update, "X", &[(STATUS_KEY, json!("changed"))]),
         ];
 
         // ours deleted -> with `ours`, the task is gone.
@@ -1300,7 +1306,7 @@ mod tests {
             &plan,
             fork,
         );
-        let state = Engine::materialize_state(Vec::new(), merged, "closed");
+        let state = Engine::materialize_state(Vec::new(), merged, DONE_STATUS);
         assert!(
             !state.contains_key("X"),
             "ours deleted, so the task is gone"
@@ -1308,7 +1314,11 @@ mod tests {
 
         // With `theirs`, the change wins and the task survives.
         let fields = merge_to_fields(&anc, &ours, &theirs, OnConflict::Theirs, "X");
-        assert_eq!(fields["status"], json!("changed"), "theirs' change is kept");
+        assert_eq!(
+            fields[STATUS_KEY],
+            json!("changed"),
+            "theirs' change is kept"
+        );
     }
 
     #[test]
@@ -1316,11 +1326,11 @@ mod tests {
         let anc = [ev(1, 0, OpType::Create, "X", &[])];
         let ours = [
             anc[0].clone(),
-            ev(2, 0, OpType::Update, "X", &[("status", json!("a"))]),
+            ev(2, 0, OpType::Update, "X", &[(STATUS_KEY, json!("a"))]),
         ];
         let theirs = [
             anc[0].clone(),
-            ev(2, 0, OpType::Update, "X", &[("status", json!("b"))]),
+            ev(2, 0, OpType::Update, "X", &[(STATUS_KEY, json!("b"))]),
         ];
         let fork = 1;
         let shared: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq <= fork).collect();
@@ -1336,17 +1346,17 @@ mod tests {
             .expect("a resolution event");
         let meta = res.meta.as_ref().unwrap();
         assert_eq!(meta["strategy"], json!("theirs"));
-        assert_eq!(meta["resolved"][0]["field"], json!("status"));
+        assert_eq!(meta["resolved"][0]["field"], json!(STATUS_KEY));
         assert_eq!(meta["resolved"][0]["ours"], json!("a"));
         assert_eq!(meta["resolved"][0]["kept"], json!("theirs"));
 
         // But replay ignores it: the task has no `_meta` field, just the winner.
-        let state = Engine::materialize_state(Vec::new(), merged, "closed");
+        let state = Engine::materialize_state(Vec::new(), merged, DONE_STATUS);
         assert!(
             !state["X"].custom_fields.contains_key("_meta"),
             "provenance stays out of state"
         );
-        assert_eq!(state["X"].custom_fields["status"], json!("b"));
+        assert_eq!(state["X"].custom_fields[STATUS_KEY], json!("b"));
     }
 
     #[test]

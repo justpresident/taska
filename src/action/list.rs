@@ -372,19 +372,21 @@ fn compile_regex(pattern: &str) -> Result<regex::Regex, DynError> {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::test_support::task;
+    use crate::test_support::names::*;
+    use crate::test_support::{renamed_config, task, task_rel};
 
     #[test]
     fn filter_criteria_compile_and_match() {
-        let t = task(
+        let t = task_rel(
             "api",
+            BLOCKER,
             &["db"],
             &[
-                ("status", serde_json::json!("open")),
+                (STATUS_FIELD, serde_json::json!("open")),
                 ("priority", serde_json::json!(3)),
             ],
         );
-        let types = crate::config::RelationshipConfig::default().types;
+        let types = renamed_config().relationships.types;
         let ctx = FilterCtx {
             types: &types,
             rev: None,
@@ -392,39 +394,42 @@ mod tests {
         let matches = |s: &str| compile_criterion(s).unwrap().matches(&t, &ctx);
 
         // Exact (JSON-coerced: number 3, not "3"), regex, negation.
-        assert!(matches("status=open"));
-        assert!(!matches("status=closed"));
+        assert!(matches(&format!("{STATUS_FIELD}=open")));
+        assert!(!matches(&format!("{STATUS_FIELD}=closed")));
         assert!(matches("priority=3"), "number coercion");
-        assert!(matches(r"status=~^op"), "regex on string");
+        assert!(matches(&format!("{STATUS_FIELD}=~^op")), "regex on string");
         assert!(matches(r"priority=~^3$"), "regex on number's string form");
-        assert!(matches("status!=closed"));
-        assert!(!matches("status!~^op"));
+        assert!(matches(&format!("{STATUS_FIELD}!=closed")));
+        assert!(!matches(&format!("{STATUS_FIELD}!~^op")));
 
         // The regex operator is `=~` (perl/bash spelling), its negation `!~`.
         assert!(matches!(
-            split_criterion("status=~^op").unwrap().1,
+            split_criterion(&format!("{STATUS_FIELD}=~^op")).unwrap().1,
             FilterOp::Re
         ));
         assert!(matches!(
-            split_criterion("status!~^op").unwrap().1,
+            split_criterion(&format!("{STATUS_FIELD}!~^op")).unwrap().1,
             FilterOp::NotRe
         ));
         // A bare `~` is no longer an operator (it was the old spelling).
-        assert!(compile_criterion("status~^op").is_err(), "bare ~ rejected");
+        assert!(
+            compile_criterion(&format!("{STATUS_FIELD}~^op")).is_err(),
+            "bare ~ rejected"
+        );
         // `=`/`!=` still parse as themselves when no `~` follows.
         assert!(matches!(
-            split_criterion("status=open").unwrap().1,
+            split_criterion(&format!("{STATUS_FIELD}=open")).unwrap().1,
             FilterOp::Eq
         ));
         assert!(matches!(
-            split_criterion("status!=open").unwrap().1,
+            split_criterion(&format!("{STATUS_FIELD}!=open")).unwrap().1,
             FilterOp::Ne
         ));
 
         // Built-in id and deps fields.
         assert!(matches("id=api"));
-        assert!(matches("deps=db"));
-        assert!(!matches("deps=missing"));
+        assert!(matches(&format!("{BLOCKER}=db")));
+        assert!(!matches(&format!("{BLOCKER}=missing")));
 
         // A negated criterion also holds when the field is absent entirely.
         assert!(matches("owner!=bob"), "absent field passes !=");
@@ -454,7 +459,7 @@ mod tests {
                 ("scores", serde_json::json!([3, 8])),
             ],
         );
-        let types = crate::config::RelationshipConfig::default().types;
+        let types = renamed_config().relationships.types;
         let ctx = FilterCtx {
             types: &types,
             rev: None,
@@ -525,7 +530,7 @@ mod tests {
                 ("scores", serde_json::json!([3, 8])),
             ],
         );
-        let types = crate::config::RelationshipConfig::default().types;
+        let types = renamed_config().relationships.types;
         let ctx = FilterCtx {
             types: &types,
             rev: None,
@@ -552,18 +557,18 @@ mod tests {
 
     #[test]
     fn relationship_type_and_inverse_names_resolve_as_filter_fields() {
-        // epic has_subtask child; child depends_on lib; child relates_to other.
+        // epic HIER child; child BLOCKER lib; child INFO other.
         let mut epic = task("epic", &[], &[]);
         epic.relationships
-            .insert("has_subtask".to_string(), vec!["child".to_string()]);
-        let mut child = task("child", &["lib"], &[]);
+            .insert(HIER.to_string(), vec!["child".to_string()]);
+        let mut child = task_rel("child", BLOCKER, &["lib"], &[]);
         child
             .relationships
-            .insert("relates_to".to_string(), vec!["other".to_string()]);
+            .insert(INFO.to_string(), vec!["other".to_string()]);
         let lib = task("lib", &[], &[]);
         let other = task("other", &[], &[]);
 
-        let types = crate::config::RelationshipConfig::default().types;
+        let types = renamed_config().relationships.types;
         let state: HashMap<String, TaskState> = [&epic, &child, &lib, &other]
             .into_iter()
             .map(|t| (t.id.clone(), t.clone()))
@@ -576,22 +581,43 @@ mod tests {
         let matches = |t: &TaskState, s: &str| compile_criterion(s).unwrap().matches(t, &ctx);
 
         // Forward: the type name yields that type's targets, operators compose.
-        assert!(matches(&child, "depends_on=lib"));
-        assert!(!matches(&epic, "depends_on=lib"), "epic has no such edge");
-        assert!(matches(&epic, "has_subtask=child"));
-        assert!(matches(&child, r"depends_on=~^li"), "regex over targets");
+        assert!(matches(&child, &format!("{BLOCKER}=lib")));
+        assert!(
+            !matches(&epic, &format!("{BLOCKER}=lib")),
+            "epic has no such edge"
+        );
+        assert!(matches(&epic, &format!("{HIER}=child")));
+        assert!(
+            matches(&child, &format!("{BLOCKER}=~^li")),
+            "regex over targets"
+        );
 
         // Inverse names resolve the reverse direction (as `show` surfaces them).
-        assert!(matches(&child, "subtask_of=epic"), "child's parent");
-        assert!(matches(&lib, "blocks=child"), "lib blocks child");
-        assert!(!matches(&other, "blocks=child"));
+        assert!(
+            matches(&child, &format!("{HIER_INV}=epic")),
+            "child's parent"
+        );
+        assert!(
+            matches(&lib, &format!("{BLOCKER_INV}=child")),
+            "lib feeds child"
+        );
+        assert!(!matches(&other, &format!("{BLOCKER_INV}=child")));
 
-        // Symmetric relates_to matches from BOTH sides of the stored edge.
-        assert!(matches(&child, "relates_to=other"), "forward direction");
-        assert!(matches(&other, "relates_to=child"), "mirrored direction");
+        // Symmetric INFO matches from BOTH sides of the stored edge.
+        assert!(
+            matches(&child, &format!("{INFO}=other")),
+            "forward direction"
+        );
+        assert!(
+            matches(&other, &format!("{INFO}=child")),
+            "mirrored direction"
+        );
 
         // Negation keeps its absent-passes logic for edge fields too.
-        assert!(matches(&lib, "subtask_of!=epic"), "lib is no subtask");
-        assert!(!matches(&child, "subtask_of!=epic"));
+        assert!(
+            matches(&lib, &format!("{HIER_INV}!=epic")),
+            "lib is no subtask"
+        );
+        assert!(!matches(&child, &format!("{HIER_INV}!=epic")));
     }
 }

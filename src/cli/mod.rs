@@ -601,6 +601,7 @@ pub(crate) fn confirm(prompt: &str, force: bool) -> Result<bool, DynError> {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
+    use crate::test_support::names::*;
 
     #[test]
     fn update_without_fields_is_rejected_by_parser() {
@@ -670,14 +671,14 @@ mod tests {
             subtract,
             raw,
         } = parse_field_ops(&[
-            "status=open".into(),
+            format!("{STATUS_FIELD}=open"),
             "log+=first".into(),
             "points-=2".into(),
             "priority=3".into(),
             "version=3.10".into(),
         ])
         .unwrap();
-        assert_eq!(set["status"], serde_json::json!("open"));
+        assert_eq!(set[STATUS_FIELD], serde_json::json!("open"));
         assert_eq!(set["priority"], serde_json::json!(3));
         assert_eq!(
             append,
@@ -686,7 +687,7 @@ mod tests {
         assert_eq!(subtract, vec![("points".to_string(), serde_json::json!(2))]);
         assert!(
             !set.contains_key("log")
-                && !append.iter().any(|(k, _)| k == "status")
+                && !append.iter().any(|(k, _)| k == STATUS_FIELD)
                 && !set.contains_key("points"),
             "each token lands in exactly one bucket"
         );

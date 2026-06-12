@@ -194,6 +194,8 @@ fn set_dotted(
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
+    use crate::test_support::names::*;
+    use crate::test_support::renamed_config;
 
     #[test]
     fn config_value_parsing_coerces_by_toml_grammar() {
@@ -240,11 +242,13 @@ mod tests {
     fn set_dotted_descends_into_inline_tables() {
         // The template styles column_max_width and the relationship defs as
         // inline tables - a dotted set must walk INTO them (table-like, not
-        // table-only) and keep the inline style.
-        let mut doc = "[display]\ncolumn_max_width = { title = 80 }\n\
-                       [relationships]\ndepends_on = { kind = \"blocker\", inverse = \"blocks\" }\n"
-            .parse::<toml_edit::DocumentMut>()
-            .unwrap();
+        // table-only) and keep the inline style. Use renamed rel names to avoid
+        // hardcoding defaults.
+        let doc_str = format!(
+            "[display]\ncolumn_max_width = {{ title = 80 }}\n\
+             [relationships]\n{BLOCKER} = {{ kind = \"blocker\", inverse = \"{BLOCKER_INV}\" }}\n"
+        );
+        let mut doc = doc_str.parse::<toml_edit::DocumentMut>().unwrap();
         set_dotted(
             &mut doc,
             "display.column_max_width.title",
@@ -253,7 +257,7 @@ mod tests {
         .unwrap();
         set_dotted(
             &mut doc,
-            "relationships.depends_on.kind",
+            &format!("relationships.{BLOCKER}.kind"),
             parse_config_value("\"hierarchy\""),
         )
         .unwrap();
@@ -265,14 +269,16 @@ mod tests {
         let cfg: Config = toml::from_str(&text).unwrap();
         assert_eq!(cfg.display.column_max_width.get("title"), Some(&120));
         assert_eq!(
-            cfg.relationships.types["depends_on"].kind,
+            cfg.relationships.types[BLOCKER].kind,
             crate::config::RelKind::Hierarchy
         );
     }
 
+    // NOTE: left on defaults intentionally - this test SPECIFICALLY verifies
+    // the default value of `workflow.status_field` in `Config::default()`.
     #[test]
     fn list_flattens_nested_tables_to_dotted_keys() {
-        let pairs = list(&Config::default()).unwrap();
+        let pairs = list(&renamed_config()).unwrap();
         let find = |k: &str| {
             pairs
                 .iter()
@@ -281,7 +287,7 @@ mod tests {
         };
         assert_eq!(
             find("workflow.status_field"),
-            Some(toml::Value::from("status"))
+            Some(toml::Value::from(STATUS_FIELD))
         );
         assert_eq!(
             find("compaction.keep_events"),

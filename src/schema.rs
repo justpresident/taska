@@ -982,17 +982,18 @@ mod tests {
     #[test]
     fn canonicalize_maps_display_status_and_rejects_the_canonical_spelling() {
         use crate::config::WorkflowConfig;
+        use crate::test_support::names::STATUS_FIELD;
         let renamed = WorkflowConfig {
-            status_field: "state".to_string(),
+            status_field: STATUS_FIELD.to_string(),
             ..WorkflowConfig::default()
         };
 
         // The configured display name maps onto the canonical storage key.
         let mut fields = Map::new();
-        fields.insert("state".to_string(), serde_json::json!("open"));
+        fields.insert(STATUS_FIELD.to_string(), serde_json::json!("open"));
         canonicalize_fields(&mut fields, &renamed).unwrap();
         assert_eq!(fields.get(STATUS_KEY), Some(&serde_json::json!("open")));
-        assert!(!fields.contains_key("state"), "display key consumed");
+        assert!(!fields.contains_key(STATUS_FIELD), "display key consumed");
 
         // Writing the canonical spelling directly is rejected while a different
         // display name is configured - one writable name per concept.
@@ -1000,7 +1001,7 @@ mod tests {
         direct.insert(STATUS_KEY.to_string(), serde_json::json!("x"));
         let err = canonicalize_fields(&mut direct, &renamed).unwrap_err();
         assert!(
-            err.to_string().contains("state"),
+            err.to_string().contains(STATUS_FIELD),
             "points at display: {err}"
         );
 
@@ -1369,26 +1370,27 @@ required = true
 
     #[test]
     fn schema_gate_resolves_renamed_status_display_name() {
+        use crate::test_support::names::STATUS_FIELD;
         use crate::test_support::{state, task};
-        // The schema declares the status under its DISPLAY name `state`; the
-        // stored key is canonical `status` - the gate must match them up.
-        let config: Config = toml::from_str(
+        // The schema declares the status under its DISPLAY name STATUS_FIELD;
+        // the stored key is canonical STATUS_KEY - the gate must match them up.
+        let config: Config = toml::from_str(&format!(
             r#"
 [workflow]
-status_field = "state"
-[task_types.job.fields.state]
+status_field = "{STATUS_FIELD}"
+[task_types.job.fields.{STATUS_FIELD}]
 type = "enum"
 values = ["todo", "done"]
 required = true
-"#,
-        )
+"#
+        ))
         .unwrap();
         let existing = state(&[task(
             "j",
             &[],
             &[
                 ("task_type", serde_json::json!("job")),
-                ("status", serde_json::json!("todo")), // canonical storage
+                (STATUS_KEY, serde_json::json!("todo")), // canonical storage key
             ],
         )]);
         let touch = MutationEvent::new(
@@ -1400,13 +1402,17 @@ required = true
             vet_events(&[touch], &existing, &config).is_ok(),
             "declared display name matches canonical storage"
         );
-        // And a bad stored status is reported under the DECLARED name.
+        // And a bad stored status is reported under the DECLARED (display) name.
         let bad = MutationEvent::new(
             OpType::Update,
             "j",
-            std::iter::once(("status".to_string(), serde_json::json!("nope"))).collect(),
+            std::iter::once((STATUS_KEY.to_string(), serde_json::json!("nope"))).collect(),
         );
         let err = vet_events(&[bad], &existing, &config).unwrap_err();
-        assert!(err.to_string().contains("`state`: expected enum"), "{err}");
+        assert!(
+            err.to_string()
+                .contains(&format!("`{STATUS_FIELD}`: expected enum")),
+            "{err}"
+        );
     }
 }

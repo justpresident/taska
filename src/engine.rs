@@ -347,6 +347,7 @@ impl Engine {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
+    use crate::test_support::names::*;
     use serde_json::{json, Value};
 
     fn ev(op: OpType, id: &str, payload: serde_json::Map<String, Value>) -> MutationEvent {
@@ -373,23 +374,28 @@ mod tests {
             e
         };
         let mutations = vec![
-            mk(1, OpType::Create, fields(&[("status", json!("open"))]), 0),
+            mk(1, OpType::Create, fields(&[(STATUS_KEY, json!("open"))]), 0),
             mk(
                 2,
                 OpType::Update,
-                fields(&[("status", json!("closed"))]),
+                fields(&[(STATUS_KEY, json!(DONE_STATUS))]),
                 10,
             ), // close
             mk(3, OpType::Update, fields(&[("priority", json!(2))]), 20), // stays closed
-            mk(4, OpType::Update, fields(&[("status", json!("open"))]), 30), // reopen -> clear
+            mk(
+                4,
+                OpType::Update,
+                fields(&[(STATUS_KEY, json!("open"))]),
+                30,
+            ), // reopen -> clear
             mk(
                 5,
                 OpType::Update,
-                fields(&[("status", json!("closed"))]),
+                fields(&[(STATUS_KEY, json!(DONE_STATUS))]),
                 40,
             ), // re-close
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, "closed");
+        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
         let a = &state["a"];
         assert_eq!(a.create_time, Some(at(0)), "first Create's time");
         assert_eq!(a.update_time, Some(at(40)), "latest event's time");
@@ -402,9 +408,9 @@ mod tests {
         let mutations = vec![ev(
             OpType::Create,
             "a",
-            fields(&[("status", json!("open"))]),
+            fields(&[(STATUS_KEY, json!("open"))]),
         )];
-        let state = Engine::materialize_state(Vec::new(), mutations, "closed");
+        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
         assert!(state["a"].create_time.is_some());
         assert!(state["a"].update_time.is_some());
         assert!(
@@ -416,29 +422,26 @@ mod tests {
     #[test]
     fn replays_create_update_dep_and_delete() {
         let mutations = vec![
-            ev(OpType::Create, "a", fields(&[("status", json!("open"))])),
+            ev(OpType::Create, "a", fields(&[(STATUS_KEY, json!("open"))])),
             ev(OpType::Create, "b", serde_json::Map::new()),
-            ev(OpType::Update, "a", fields(&[("status", json!("done"))])),
+            ev(OpType::Update, "a", fields(&[(STATUS_KEY, json!("done"))])),
             ev(
                 OpType::AddEdge,
                 "b",
-                fields(&[("target", json!("a")), ("rel", json!("depends_on"))]),
+                fields(&[("target", json!("a")), ("rel", json!(BLOCKER))]),
             ),
             ev(OpType::Create, "c", serde_json::Map::new()),
             ev(OpType::Delete, "c", serde_json::Map::new()),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, "closed");
+        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
 
         assert_eq!(state.len(), 2, "c was deleted");
         assert_eq!(
-            state["a"].custom_fields["status"],
+            state["a"].custom_fields[STATUS_KEY],
             json!("done"),
             "update overwrote create"
         );
-        assert_eq!(
-            state["b"].relationships["depends_on"],
-            vec!["a".to_string()]
-        );
+        assert_eq!(state["b"].relationships[BLOCKER], vec!["a".to_string()]);
     }
 
     #[test]
@@ -458,7 +461,7 @@ mod tests {
             // A shape mismatch (string operand onto a number) is a no-op.
             ev(OpType::Add, "a", fields(&[("points", json!("nope"))])),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, "closed");
+        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
         assert_eq!(state["a"].custom_fields["points"], json!(4));
         assert_eq!(state["a"].custom_fields["score"], json!(1.5));
         assert_eq!(state["a"].custom_fields["tags"], json!(["a"]));
@@ -479,7 +482,7 @@ mod tests {
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
-        let state = Engine::materialize_state(Vec::new(), mutations, "closed");
+        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
         assert!(
             state["b"].relationships.is_empty(),
             "edge with no rel is skipped, not defaulted"
@@ -495,7 +498,7 @@ mod tests {
             // An append to a non-existent task is an orphan, never an error.
             ev(OpType::Append, "ghost", fields(&[("log", json!("x"))])),
         ];
-        let (state, orphans) = Engine::materialize_report(Vec::new(), mutations, "closed");
+        let (state, orphans) = Engine::materialize_report(Vec::new(), mutations, DONE_STATUS);
         assert_eq!(
             state["a"].custom_fields["log"],
             json!("first\nsecond"),
@@ -508,41 +511,41 @@ mod tests {
     fn typed_deps_route_to_field_or_map() {
         let mutations = vec![
             ev(OpType::Create, "a", serde_json::Map::new()),
-            // Two depends_on edges land in the depends_on relationship.
+            // Two BLOCKER edges land in the BLOCKER relationship.
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("b")), ("rel", json!("depends_on"))]),
+                fields(&[("target", json!("b")), ("rel", json!(BLOCKER))]),
             ),
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("c")), ("rel", json!("depends_on"))]),
+                fields(&[("target", json!("c")), ("rel", json!(BLOCKER))]),
             ),
             // A different type lands under its own key in the relationships map.
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("d")), ("rel", json!("relates_to"))]),
+                fields(&[("target", json!("d")), ("rel", json!(INFO))]),
             ),
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("e")), ("rel", json!("relates_to"))]),
+                fields(&[("target", json!("e")), ("rel", json!(INFO))]),
             ),
             ev(
                 OpType::RemoveEdge,
                 "a",
-                fields(&[("target", json!("d")), ("rel", json!("relates_to"))]),
+                fields(&[("target", json!("d")), ("rel", json!(INFO))]),
             ),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, "closed");
+        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
         let a = &state["a"];
         assert_eq!(
-            a.relationships["depends_on"],
+            a.relationships[BLOCKER],
             vec!["b".to_string(), "c".to_string()]
         );
-        assert_eq!(a.relationships["relates_to"], vec!["e".to_string()]);
+        assert_eq!(a.relationships[INFO], vec!["e".to_string()]);
     }
 
     #[test]
@@ -552,15 +555,15 @@ mod tests {
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("d")), ("rel", json!("relates_to"))]),
+                fields(&[("target", json!("d")), ("rel", json!(INFO))]),
             ),
             ev(
                 OpType::RemoveEdge,
                 "a",
-                fields(&[("target", json!("d")), ("rel", json!("relates_to"))]),
+                fields(&[("target", json!("d")), ("rel", json!(INFO))]),
             ),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, "closed");
+        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
         assert!(
             state["a"].relationships.is_empty(),
             "an emptied typed entry is removed, leaving a clean map"
@@ -571,25 +574,25 @@ mod tests {
     fn mutations_overlay_the_baseline() {
         let baseline = vec![TaskState {
             id: "a".into(),
-            relationships: BTreeMap::from([("depends_on".to_string(), vec!["x".into()])]),
-            custom_fields: fields(&[("status", json!("open"))]),
+            relationships: BTreeMap::from([(BLOCKER.to_string(), vec!["x".into()])]),
+            custom_fields: fields(&[(STATUS_KEY, json!("open"))]),
             create_time: None,
             update_time: None,
             close_time: None,
         }];
         let mutations = vec![
-            ev(OpType::Update, "a", fields(&[("status", json!("done"))])),
+            ev(OpType::Update, "a", fields(&[(STATUS_KEY, json!("done"))])),
             ev(
                 OpType::RemoveEdge,
                 "a",
-                fields(&[("target", json!("x")), ("rel", json!("depends_on"))]),
+                fields(&[("target", json!("x")), ("rel", json!(BLOCKER))]),
             ),
         ];
-        let state = Engine::materialize_state(baseline, mutations, "closed");
+        let state = Engine::materialize_state(baseline, mutations, DONE_STATUS);
 
-        assert_eq!(state["a"].custom_fields["status"], json!("done"));
+        assert_eq!(state["a"].custom_fields[STATUS_KEY], json!("done"));
         assert!(
-            !state["a"].relationships.contains_key("depends_on"),
+            !state["a"].relationships.contains_key(BLOCKER),
             "dep removed from baseline task"
         );
     }
@@ -598,8 +601,8 @@ mod tests {
     fn reports_orphaned_events_and_spares_normal_ones() {
         let mutations = vec![
             // Normal create/update on `a`: never an orphan.
-            ev(OpType::Create, "a", fields(&[("status", json!("open"))])),
-            ev(OpType::Update, "a", fields(&[("status", json!("done"))])),
+            ev(OpType::Create, "a", fields(&[(STATUS_KEY, json!("open"))])),
+            ev(OpType::Update, "a", fields(&[(STATUS_KEY, json!("done"))])),
             // Update to a task that was never created: orphan.
             ev(OpType::Update, "ghost", fields(&[("x", json!(1))])),
             // `b` is created then deleted...
@@ -609,7 +612,7 @@ mod tests {
             ev(
                 OpType::AddEdge,
                 "b",
-                fields(&[("target", json!("a")), ("rel", json!("depends_on"))]),
+                fields(&[("target", json!("a")), ("rel", json!(BLOCKER))]),
             ),
             ev(OpType::Delete, "b", serde_json::Map::new()),
         ];
@@ -622,10 +625,10 @@ mod tests {
             })
             .collect();
 
-        let (state, orphans) = Engine::materialize_report(Vec::new(), mutations, "closed");
+        let (state, orphans) = Engine::materialize_report(Vec::new(), mutations, DONE_STATUS);
 
         assert_eq!(state.len(), 1, "only `a` survives");
-        assert_eq!(state["a"].custom_fields["status"], json!("done"));
+        assert_eq!(state["a"].custom_fields[STATUS_KEY], json!("done"));
         // Orphans: the ghost Update (seq 3), the AddEdge (seq 6) and Delete (seq 7)
         // after `b` was deleted, in replay order. The normal create/update and
         // the first delete of an existing task are not reported.
@@ -639,17 +642,17 @@ mod tests {
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("b")), ("rel", json!("depends_on"))]),
+                fields(&[("target", json!("b")), ("rel", json!(BLOCKER))]),
             ),
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("b")), ("rel", json!("depends_on"))]),
+                fields(&[("target", json!("b")), ("rel", json!(BLOCKER))]),
             ),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, "closed");
+        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
         assert_eq!(
-            state["a"].relationships["depends_on"],
+            state["a"].relationships[BLOCKER],
             vec!["b".to_string()],
             "no duplicate dep"
         );

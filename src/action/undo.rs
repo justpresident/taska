@@ -244,7 +244,8 @@ fn dep_event(op: OpType, task_id: &str, rel_type: &str, dep: &str) -> MutationEv
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::test_support::{state, task};
+    use crate::test_support::names::*;
+    use crate::test_support::{state, task, task_rel};
 
     #[test]
     fn compensate_unsets_a_removed_field_with_null() {
@@ -270,11 +271,11 @@ mod tests {
         // c: changed field value -> Update with just the changed key.
         let from = state(&[
             task("a", &[], &[("x", serde_json::json!(1))]),
-            task("c", &[], &[("status", serde_json::json!("open"))]),
+            task("c", &[], &[(STATUS_FIELD, serde_json::json!("open"))]),
         ]);
         let to = state(&[
-            task("b", &["dep1"], &[("y", serde_json::json!(2))]),
-            task("c", &[], &[("status", serde_json::json!("closed"))]),
+            task_rel("b", BLOCKER, &["dep1"], &[("y", serde_json::json!(2))]),
+            task("c", &[], &[(STATUS_FIELD, serde_json::json!("closed"))]),
         ]);
         let affected = ["a".to_string(), "b".to_string(), "c".to_string()];
         let events = compensate(&from, &to, &affected);
@@ -293,25 +294,26 @@ mod tests {
         assert_eq!(b[1].payload.get("target"), Some(&serde_json::json!("dep1")));
         assert_eq!(
             b[1].payload.get("rel"),
-            Some(&serde_json::json!("depends_on")),
+            Some(&serde_json::json!(BLOCKER)),
             "compensating dep events carry their type: {b:?}"
         );
 
-        // c -> Update setting only the changed status
+        // c -> Update setting only the changed STATUS_FIELD
         let c: Vec<_> = events.iter().filter(|e| e.task_id == "c").collect();
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].op, OpType::Update);
         assert_eq!(
-            c[0].payload.get("status"),
+            c[0].payload.get(STATUS_FIELD),
             Some(&serde_json::json!("closed"))
         );
     }
 
     #[test]
     fn compensate_reconciles_dependencies() {
-        // from depends on x; to depends on y -> RemoveEdge x, AddEdge y, no Update.
-        let from = state(&[task("a", &["x"], &[])]);
-        let to = state(&[task("a", &["y"], &[])]);
+        // from has BLOCKER edge to x; to has BLOCKER edge to y ->
+        // RemoveEdge x, AddEdge y, no Update.
+        let from = state(&[task_rel("a", BLOCKER, &["x"], &[])]);
+        let to = state(&[task_rel("a", BLOCKER, &["y"], &[])]);
         let events = compensate(&from, &to, &["a".to_string()]);
         assert!(
             !events.iter().any(|e| e.op == OpType::Update),
@@ -331,18 +333,15 @@ mod tests {
 
     #[test]
     fn compensate_reconciles_typed_edges_per_type_and_target() {
-        // The SAME target moves from relates_to to has_subtask, and a relates_to
-        // edge to y disappears: each `(type, target)` pair is its own edge, so
-        // the compensation is AddEdge has_subtask=x, RemoveEdge relates_to=x,
-        // RemoveEdge relates_to=y - all typed.
+        // The SAME target moves from INFO to HIER, and an INFO edge to y disappears:
+        // each `(type, target)` pair is its own edge, so the compensation is
+        // AddEdge HIER=x, RemoveEdge INFO=x, RemoveEdge INFO=y - all typed.
         let mut f = task("a", &[], &[]);
-        f.relationships.insert(
-            "relates_to".to_string(),
-            vec!["x".to_string(), "y".to_string()],
-        );
+        f.relationships
+            .insert(INFO.to_string(), vec!["x".to_string(), "y".to_string()]);
         let mut t = task("a", &[], &[]);
         t.relationships
-            .insert("has_subtask".to_string(), vec!["x".to_string()]);
+            .insert(HIER.to_string(), vec!["x".to_string()]);
         let events = compensate(&state(&[f]), &state(&[t]), &["a".to_string()]);
 
         let pair = |e: &MutationEvent| {
@@ -356,7 +355,7 @@ mod tests {
         assert!(
             got.contains(&(
                 OpType::AddEdge,
-                Some(serde_json::json!("has_subtask")),
+                Some(serde_json::json!(HIER)),
                 Some(serde_json::json!("x"))
             )),
             "adds the new typed edge: {got:?}"
@@ -364,7 +363,7 @@ mod tests {
         assert!(
             got.contains(&(
                 OpType::RemoveEdge,
-                Some(serde_json::json!("relates_to")),
+                Some(serde_json::json!(INFO)),
                 Some(serde_json::json!("x"))
             )),
             "removes the old type's edge to the same target: {got:?}"
@@ -372,7 +371,7 @@ mod tests {
         assert!(
             got.contains(&(
                 OpType::RemoveEdge,
-                Some(serde_json::json!("relates_to")),
+                Some(serde_json::json!(INFO)),
                 Some(serde_json::json!("y"))
             )),
             "removes the dropped edge: {got:?}"

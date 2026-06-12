@@ -85,18 +85,27 @@ fn describe(task: Option<&TaskState>) -> String {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::test_support::task;
+    use crate::test_support::names::*;
+    use crate::test_support::{task, task_rel};
 
     #[test]
     fn describe_renders_absent_fields_and_typed_deps() {
         assert_eq!(describe(None), "(absent)");
-        let mut t = task("a", &["d1"], &[("status", serde_json::json!("open"))]);
+        let mut t = task_rel(
+            "a",
+            BLOCKER,
+            &["d1"],
+            &[(STATUS_FIELD, serde_json::json!("open"))],
+        );
         t.relationships
-            .insert("relates_to".to_string(), vec!["d2".to_string()]);
+            .insert(INFO.to_string(), vec!["d2".to_string()]);
         let out = describe(Some(&t));
-        assert!(out.contains(r#""status":"open""#), "fields: {out}");
         assert!(
-            out.contains(r#"deps={"depends_on":["d1"],"relates_to":["d2"]}"#),
+            out.contains(&format!(r#""{STATUS_FIELD}":"open""#)),
+            "fields: {out}"
+        );
+        assert!(
+            out.contains(&format!(r#"deps={{"{BLOCKER}":["d1"],"{INFO}":["d2"]}}"#)),
             "typed deps map shown: {out}"
         );
 

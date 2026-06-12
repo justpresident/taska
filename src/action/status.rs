@@ -99,20 +99,41 @@ pub fn status_summary<S: BuildHasher>(
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::test_support::{state, task};
+    use crate::test_support::names::*;
+    use crate::test_support::{renamed_config, state, task_rel};
 
     #[test]
     fn status_summary_counts_and_partitions_ready_blocked() {
-        let workflow = WorkflowConfig::default(); // status / closed
+        let workflow = renamed_config().workflow; // state / closed
         let tasks = vec![
-            task("a", &[], &[("status", serde_json::json!("todo"))]), // ready (no deps)
-            task("b", &["a"], &[("status", serde_json::json!("todo"))]), // blocked by a
-            task("c", &[], &[("status", serde_json::json!("closed"))]), // done
-            task("d", &["c"], &[("status", serde_json::json!("todo"))]), // ready (dep done)
-            task("e", &[], &[]),                                      // no status -> ready
+            task_rel(
+                "a",
+                BLOCKER,
+                &[],
+                &[(STATUS_FIELD, serde_json::json!("todo"))],
+            ), // ready (no deps)
+            task_rel(
+                "b",
+                BLOCKER,
+                &["a"],
+                &[(STATUS_FIELD, serde_json::json!("todo"))],
+            ), // blocked by a
+            task_rel(
+                "c",
+                BLOCKER,
+                &[],
+                &[(STATUS_FIELD, serde_json::json!("closed"))],
+            ), // done
+            task_rel(
+                "d",
+                BLOCKER,
+                &["c"],
+                &[(STATUS_FIELD, serde_json::json!("todo"))],
+            ), // ready (dep done)
+            task_rel("e", BLOCKER, &[], &[]), // no status -> ready
         ];
         let st = state(&tasks);
-        let blockers = BTreeSet::from(["depends_on".to_string()]);
+        let blockers = BTreeSet::from([BLOCKER.to_string()]);
         let s = status_summary(&st, &workflow, &blockers).unwrap();
 
         assert_eq!(s.total, 5);
