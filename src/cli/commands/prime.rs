@@ -253,7 +253,8 @@ fn render_guide(f: &PrimeFacts) -> String {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::test_support::store_with_schema;
+    use crate::test_support::names::*;
+    use crate::test_support::{store_renamed, store_with_schema};
 
     fn guide() -> String {
         render_guide(&prime(&store_with_schema()).unwrap().facts)
@@ -262,30 +263,39 @@ mod tests {
     #[test]
     fn guide_reflects_the_store_vocabulary() {
         let g = guide();
-        // The default store's actual vocabulary must appear in the rendered guide.
-        assert!(g.contains("field `status`"), "status field named: {g}");
+        // The store's actual RENAMED vocabulary must appear in the rendered guide.
         assert!(
-            g.contains("todo | in_progress | closed"),
+            g.contains(&format!("field `{STATUS_FIELD}`")),
+            "status field named: {g}"
+        );
+        assert!(
+            g.contains(&format!("{DEFAULT_STATUS} | {MID_STATUS} | {DONE_STATUS}")),
             "status enum values: {g}"
         );
         assert!(
-            g.contains("ta update <id> status=closed"),
+            g.contains(&format!("ta update <id> {STATUS_FIELD}={DONE_STATUS}")),
             "close example uses done status: {g}"
         );
         assert!(
-            g.contains("`depends_on` (blocker, inverse `blocks`)"),
+            g.contains(&format!("`{BLOCKER}` (blocker, inverse `{BLOCKER_INV}`)")),
             "relationship described: {g}"
         );
         // The create example lists the required fields (any order) but not status,
         // which `create` stamps from the default.
         assert!(
-            g.contains("ta create <id> type=task "),
+            g.contains(&format!("ta create <id> {TYPE_FIELD}={TASK_TYPE} ")),
             "create example: {g}"
         );
-        assert!(g.contains("title=\"...\""), "create lists title: {g}");
-        assert!(g.contains("notes=\"...\""), "create lists notes: {g}");
         assert!(
-            !g.contains("status=\"...\""),
+            g.contains(&format!("{TITLE}=\"...\"")),
+            "create lists title: {g}"
+        );
+        assert!(
+            g.contains(&format!("{NOTES}=\"...\"")),
+            "create lists notes: {g}"
+        );
+        assert!(
+            !g.contains(&format!("{STATUS_FIELD}=\"...\"")),
             "create omits the stamped status field: {g}"
         );
     }
@@ -299,7 +309,7 @@ mod tests {
             "schema framed as dynamic: {g}"
         );
         assert!(
-            g.contains("config-driven") && g.contains("id, title, status"),
+            g.contains("config-driven") && g.contains(&format!("id, {TITLE}, {STATUS_FIELD}")),
             "names the configured columns: {g}"
         );
         // The task-filing discipline is spelled out: rich notes, open questions,
@@ -330,8 +340,7 @@ mod tests {
 
     #[test]
     fn guide_is_free_form_when_no_schema_is_declared() {
-        use crate::test_support::InMemoryStore;
-        let g = render_guide(&prime(&InMemoryStore::default()).unwrap().facts);
+        let g = render_guide(&prime(&store_renamed()).unwrap().facts);
         assert!(
             g.contains("free-form") && g.contains("any field name is accepted"),
             "explains the free-form fallback: {g}"
@@ -348,9 +357,9 @@ mod tests {
     #[test]
     fn json_serializes_the_facts() {
         let value = serde_json::to_value(prime(&store_with_schema()).unwrap().facts).unwrap();
-        assert_eq!(value["status_field"], "status");
-        assert_eq!(value["done_status"], "closed");
-        assert_eq!(value["statuses"][0], "todo");
+        assert_eq!(value["status_field"], STATUS_FIELD);
+        assert_eq!(value["done_status"], DONE_STATUS);
+        assert_eq!(value["statuses"][0], DEFAULT_STATUS);
         assert_eq!(value["summary"]["total"], 0);
         assert!(value["relationships"].is_array());
     }

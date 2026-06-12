@@ -94,114 +94,22 @@ pub fn init_repo(dir: &Path) {
     git(dir, &["config", "user.name", "Taska Test"]);
 }
 
-/// The non-default config tokens the renamed stores use. A converted test drives
-/// every configurable thing through THESE constants (never a hardcoded `"state"`/
-/// `"needs"`/...), so the renamed tokens live in one place; if production code
-/// hardcodes a default (`status`/`depends_on`/`type`/`create_time`/...), a command
-/// breaks and the test fails. (A few tests stay on the defaults to cover default
-/// initialization itself.)
-///
-/// The NAME constants (field/relationship/inverse/timestamp names) hold for BOTH
-/// [`init_renamed`] and [`init_renamed_open`]. The VALUE constants
-/// (`DEFAULT_STATUS`/`MID_STATUS`/`DONE_STATUS`/`TASK_TYPE`/`TITLE`/`NOTES`)
-/// describe the schema'd [`init_renamed`] config; the schema-less
-/// [`init_renamed_open`] leaves status VALUES free (todo/closed), so tests on it
-/// use the name constants with literal status values.
-pub mod names {
-    // --- NAMES (apply to both renamed configs) ---
-    pub const STATUS_FIELD: &str = "state"; // default: status
-    pub const TYPE_FIELD: &str = "kind"; // default: type
-    pub const BLOCKER: &str = "needs"; // default: depends_on
-    pub const BLOCKER_INV: &str = "feeds"; // default: blocks
-    pub const HIER: &str = "contains"; // default: has_subtask
-    pub const HIER_INV: &str = "part_of"; // default: subtask_of
-    pub const INFO: &str = "related"; // default: relates_to (symmetric)
-    pub const DUP: &str = "dup"; // default: duplicates (one-way)
-    pub const CREATE_TIME: &str = "made_at"; // default: create_time
-    pub const UPDATE_TIME: &str = "touched_at"; // default: update_time
-    pub const CLOSE_TIME: &str = "shipped_at"; // default: close_time
-                                               // --- VALUES (the schema'd `init_renamed` config) ---
-    pub const DEFAULT_STATUS: &str = "backlog"; // default: todo
-    pub const MID_STATUS: &str = "building"; // a non-default, non-done status
-    pub const DONE_STATUS: &str = "shipped"; // default: closed
-    pub const TASK_TYPE: &str = "story"; // a declared type name
-    pub const TITLE: &str = "headline"; // a required string field
-    pub const NOTES: &str = "body"; // a required string field
-}
+// The renamed tokens (`names`) and the renamed config TOML
+// (`RENAMED_OPEN_CONFIG` / `RENAMED_SCHEMA_CONFIG`) are the SINGLE source of
+// truth, shared with the in-crate unit-test support via `include!` (see
+// `renamed_fixtures.rs`). The builders below wrap them for the e2e binary.
+include!("renamed_fixtures.rs");
 
-/// A `config.toml` that renames every configurable thing to a distinctive
-/// non-default token (see [`names`]). Scalar keys precede sub-tables per section
-/// (TOML ordering), and the schema is valid (one blocker relationship, no inverse
-/// collisions).
-const RENAMED_CONFIG: &str = r#"
-[workflow]
-status_field = "state"
-default_status = "backlog"
-done_status = "shipped"
-type_field = "kind"
-untyped_tasks = "deny"
-
-[timestamps]
-create_time = "made_at"
-update_time = "touched_at"
-close_time = "shipped_at"
-
-[display]
-columns = ["id", "headline", "state", "deps"]
-max_width = 40
-sort = "id"
-
-[relationships]
-needs    = { kind = "blocker", inverse = "feeds" }
-contains = { kind = "hierarchy", inverse = "part_of" }
-related  = { kind = "info", inverse = "related" }
-dup      = { kind = "info" }
-
-[task_types.story]
-closed = true
-fields = { headline = { type = "string", required = true }, body = { type = "string", required = true }, state = { type = "enum", values = ["backlog", "building", "shipped"], required = true }, rank = { type = "enum", values = ["lo", "hi"] } }
-"#;
-
-/// Provision a store whose config renames EVERY configurable thing to a
-/// distinctive non-default token (see [`names`]): git-init the repo, write the
-/// renamed `.taska/config.toml`, then `ta init`. Non-init tests use this so a
-/// stray hardcoded default in the code fails them.
+/// Provision a store whose config renames EVERY configurable thing AND declares a
+/// schema (see [`RENAMED_SCHEMA_CONFIG`]): git-init the repo, write the renamed
+/// `.taska/config.toml`, then `ta init`. Non-init tests use this so a stray
+/// hardcoded default in the code fails them.
 pub fn init_renamed(dir: &Path) {
     init_repo(dir);
     fs::create_dir_all(dir.join(".taska")).unwrap();
-    fs::write(dir.join(".taska/config.toml"), RENAMED_CONFIG).unwrap();
+    fs::write(dir.join(".taska/config.toml"), RENAMED_SCHEMA_CONFIG).unwrap();
     ta(dir, &["init"]);
 }
-
-/// A schema-LESS renamed config: it renames the configurable NAMES (status field
-/// `state`, type field `kind`, timestamp columns, and all relationship types +
-/// inverses) but declares no task types and allows untyped tasks, so a theme test
-/// converts with only field/relationship token swaps (no required fields to add).
-/// Status VALUES stay near the defaults here; the fully-renamed-VALUE coverage
-/// lives in `configurable_names.rs` / [`init_renamed`].
-const RENAMED_OPEN_CONFIG: &str = r#"
-[workflow]
-status_field = "state"
-default_status = "todo"
-done_status = "closed"
-type_field = "kind"
-untyped_tasks = "allow"
-
-[timestamps]
-create_time = "made_at"
-update_time = "touched_at"
-close_time = "shipped_at"
-
-[display]
-columns = ["id", "state", "deps"]
-max_width = 40
-
-[relationships]
-needs    = { kind = "blocker", inverse = "feeds" }
-contains = { kind = "hierarchy", inverse = "part_of" }
-related  = { kind = "info", inverse = "related" }
-dup      = { kind = "info" }
-"#;
 
 /// Provision a store with the schema-less renamed config (see
 /// [`RENAMED_OPEN_CONFIG`]): the configurable NAMES are non-default, so a theme

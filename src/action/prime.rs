@@ -255,48 +255,53 @@ fn build_facts(config: &Config, summary: &StatusSummary) -> PrimeFacts {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::test_support::{store_with_schema, InMemoryStore};
+    use crate::test_support::names::*;
+    use crate::test_support::{store_renamed, store_with_schema};
 
     #[test]
     fn facts_mirror_a_declared_schema() {
         // With a schema declared, the facts must reflect the type, its status
-        // enum, required fields, and the relationship's kind/inverse verbatim.
-        let store = store_with_schema();
-        let facts = prime(&store).unwrap().facts;
+        // enum, required fields, and the relationship's kind/inverse verbatim -
+        // all under the store's RENAMED names (so any hardcoded default fails).
+        let facts = prime(&store_with_schema()).unwrap().facts;
 
-        assert_eq!(facts.status_field, "status");
-        assert_eq!(facts.done_status, "closed");
-        assert_eq!(facts.default_status, "todo");
-        assert_eq!(facts.type_field, "type");
-        assert_eq!(facts.statuses, vec!["todo", "in_progress", "closed"]);
+        assert_eq!(facts.status_field, STATUS_FIELD);
+        assert_eq!(facts.done_status, DONE_STATUS);
+        assert_eq!(facts.default_status, DEFAULT_STATUS);
+        assert_eq!(facts.type_field, TYPE_FIELD);
+        assert_eq!(
+            facts.statuses,
+            vec![DEFAULT_STATUS, MID_STATUS, DONE_STATUS]
+        );
 
-        let task = facts
+        let task_type = facts
             .task_types
             .iter()
-            .find(|t| t.name == "task")
-            .expect("the `task` type");
-        assert!(task.closed, "the task type closes");
-        let title = task
+            .find(|t| t.name == TASK_TYPE)
+            .expect("the declared type");
+        assert!(task_type.closed, "the type closes");
+        let title = task_type
             .fields
             .iter()
-            .find(|f| f.name == "title")
+            .find(|f| f.name == TITLE)
             .expect("title field");
         assert!(title.required, "title is required");
 
-        let depends_on = facts
+        let blocker = facts
             .relationships
             .iter()
-            .find(|r| r.name == "depends_on")
-            .expect("depends_on relationship");
-        assert_eq!(depends_on.kind, "blocker");
-        assert_eq!(depends_on.inverse, "blocks");
+            .find(|r| r.name == BLOCKER)
+            .expect("blocker relationship");
+        assert_eq!(blocker.kind, "blocker");
+        assert_eq!(blocker.inverse, BLOCKER_INV);
     }
 
     #[test]
     fn facts_are_free_form_without_a_schema() {
-        // `Config::default()` declares no task types, so the status is free-form
-        // and there are no type facts - the facts must say so, not invent an enum.
-        let facts = prime(&InMemoryStore::default()).unwrap().facts;
+        // The renamed schema-less store declares no task types, so the status is
+        // free-form (under the renamed field name) and there are no type facts.
+        let facts = prime(&store_renamed()).unwrap().facts;
+        assert_eq!(facts.status_field, STATUS_FIELD);
         assert!(facts.statuses.is_empty(), "no declared status enum");
         assert!(facts.task_types.is_empty(), "no declared types");
     }
@@ -306,19 +311,17 @@ mod tests {
         use crate::model::{MutationEvent, OpType};
         use serde_json::{Map, Value};
 
-        let store = InMemoryStore::default();
-        let typed = |status: &str| {
+        // The schema-less renamed store keeps status values free (done = `closed`).
+        let store = store_renamed();
+        let with_status = |status: &str| {
             let mut m = Map::new();
-            m.insert("type".into(), Value::from("task"));
-            m.insert("title".into(), Value::from("a title"));
-            m.insert("notes".into(), Value::from("some notes"));
-            m.insert("status".into(), Value::from(status));
+            m.insert(STATUS_FIELD.to_string(), Value::from(status));
             m
         };
         store
             .append_events(&[
-                MutationEvent::new(OpType::Create, "a", typed("todo")),
-                MutationEvent::new(OpType::Create, "b", typed("closed")),
+                MutationEvent::new(OpType::Create, "a", with_status("open")),
+                MutationEvent::new(OpType::Create, "b", with_status("closed")),
             ])
             .unwrap();
 

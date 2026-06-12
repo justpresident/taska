@@ -3,6 +3,8 @@
 //! Compiled only under `cfg(test)`. The `EventStore` trait pays its dividend
 //! here: command handlers run against [`InMemoryStore`] with no disk, locks, or
 //! git, and the small builders keep the per-module tests terse.
+// Shared across many test modules; not every helper is used by every one.
+#![allow(dead_code)]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -14,6 +16,11 @@ use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs, OutputFormat};
 use crate::model::{MutationEvent, TaskState};
 use crate::storage::EventStore;
+
+// The renamed tokens (`names`) and config TOML (`RENAMED_OPEN_CONFIG` /
+// `RENAMED_SCHEMA_CONFIG`) are shared verbatim with the e2e harness - one source
+// of truth, `include!`d in both compilation contexts. See the file's header.
+include!("../tests/common/renamed_fixtures.rs");
 
 /// In-memory [`EventStore`] fake: no disk, no locks, no git.
 #[derive(Default)]
@@ -66,33 +73,61 @@ pub fn store_without_timestamps() -> InMemoryStore {
     store
 }
 
-/// An in-memory store whose config DECLARES a schema - the `task` type (required
-/// `title`/`notes`, a `status` enum, an optional `priority` enum) and a
-/// `depends_on` blocker - for tests that need a rich, non-default vocabulary
-/// (`Config::default()` declares no task types, so its status is free-form).
+/// An in-memory store whose config DECLARES a schema AND renames every
+/// configurable name (see [`names`]): the `story` type (required `headline`/
+/// `body`, a `state` enum, an optional `rank` enum) and a `needs` blocker. Used
+/// where a test needs a rich, fully non-default vocabulary (`Config::default()`
+/// declares no task types, so its status is free-form).
 pub fn store_with_schema() -> InMemoryStore {
-    let toml = r#"
-[workflow]
-status_field = "status"
-done_status = "closed"
-default_status = "todo"
-type_field = "type"
-
-[relationships]
-depends_on = { kind = "blocker", inverse = "blocks" }
-
-[task_types.task]
-closed = true
-fields = { title = { type = "string", required = true }, notes = { type = "string", required = true }, status = { type = "enum", values = ["todo", "in_progress", "closed"], required = true }, priority = { type = "enum", values = ["low", "medium", "high"] } }
-"#;
-    let config = toml::from_str(toml).expect("test schema config parses");
     InMemoryStore {
-        config,
+        config: toml::from_str(RENAMED_SCHEMA_CONFIG).expect("schema config parses"),
         ..Default::default()
     }
 }
 
-/// Build a [`TaskState`] from an id, dependency ids, and `(key, value)` fields.
+/// A schema-less [`Config`] with every configurable NAME renamed (the shared
+/// [`RENAMED_OPEN_CONFIG`]): status field `state`, type field `kind`, the four
+/// relationships, and the timestamp columns. Use it via [`store_renamed`] for
+/// config-reading unit tests (status VALUES stay free: literal todo/closed).
+pub fn renamed_config() -> Config {
+    toml::from_str(RENAMED_OPEN_CONFIG).expect("renamed config parses")
+}
+
+/// An [`InMemoryStore`] whose config renames every configurable name (see
+/// [`renamed_config`]).
+pub fn store_renamed() -> InMemoryStore {
+    InMemoryStore {
+        config: renamed_config(),
+        ..Default::default()
+    }
+}
+
+/// Build a [`TaskState`] whose `deps` are stored under the relationship `rel`
+/// (e.g. [`names::BLOCKER`]), plus `(key, value)` fields. [`task`] is the
+/// default-named (`depends_on`) shorthand.
+pub fn task_rel(id: &str, rel: &str, deps: &[&str], fields: &[(&str, Value)]) -> TaskState {
+    let mut relationships = std::collections::BTreeMap::new();
+    if !deps.is_empty() {
+        relationships.insert(
+            rel.to_string(),
+            deps.iter().map(|d| (*d).to_string()).collect(),
+        );
+    }
+    TaskState {
+        id: id.to_string(),
+        relationships,
+        custom_fields: fields
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), v.clone()))
+            .collect(),
+        create_time: None,
+        update_time: None,
+        close_time: None,
+    }
+}
+
+/// Build a [`TaskState`] from an id, dependency ids (under `depends_on`), and
+/// `(key, value)` fields. See [`task_rel`] for a renamed relationship.
 pub fn task(id: &str, deps: &[&str], fields: &[(&str, Value)]) -> TaskState {
     let mut relationships = std::collections::BTreeMap::new();
     if !deps.is_empty() {
