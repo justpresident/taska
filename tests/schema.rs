@@ -32,7 +32,7 @@ fn write_gate_enforces_whole_task_schemas() {
         "actionable: {stderr}"
     );
 
-    // EVERY violation in ONE error — fixable in a single follow-up.
+    // EVERY violation in ONE error - fixable in a single follow-up.
     let out = run(
         ta_bin(),
         &dir,
@@ -281,7 +281,7 @@ fn nonconforming_tasks_are_read_tolerated_with_one_warning() {
     ta(&dir, &["create", "old2", "priority=2"]);
     declare_schema(&dir);
 
-    // Reads SUCCEED — tolerance is the law — with exactly ONE warning naming
+    // Reads SUCCEED - tolerance is the law - with exactly ONE warning naming
     // the count, an example, and the detail surface.
     let out = run(ta_bin(), &dir, &["list"]);
     assert!(out.status.success(), "reads never fail on nonconformance");
@@ -344,7 +344,7 @@ fn nonconforming_tasks_are_read_tolerated_with_one_warning() {
 }
 
 /// The `workflow.untyped_tasks` migration ladder: allow (sanctioned, silent),
-/// warn (tolerated, reported), deny (a type is mandatory — the default).
+/// warn (tolerated, reported), deny (a type is mandatory - the default).
 #[test]
 fn untyped_tasks_policy_walks_allow_warn_deny() {
     let dir = fresh_dir("schema-untyped-ladder");
@@ -358,7 +358,7 @@ fn untyped_tasks_policy_walks_allow_warn_deny() {
         "deny makes the type mandatory"
     );
 
-    // allow: untyped tasks are fully sanctioned — created, written to, never
+    // allow: untyped tasks are fully sanctioned - created, written to, never
     // reported anywhere.
     ta(&dir, &["config", "set", "workflow.untyped_tasks", "allow"]);
     ta(&dir, &["create", "free1", "priority=1"]);
@@ -452,7 +452,7 @@ fn constraints_and_defaults_full_circle() {
         "min enforced on update"
     );
 
-    // Grandfathered tasks: storage lacks `title`, so the warning fires — but
+    // Grandfathered tasks: storage lacks `title`, so the warning fires - but
     // reads SUBSTITUTE the default (display-only).
     assert!(
         ta(&dir, &["show", "legacy", "--format", "json"]).contains(r#""title":"Task""#),

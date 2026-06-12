@@ -9,7 +9,7 @@
 //! Resolution is **per-field**: only a field (or dependency edge, or whole-task
 //! delete) that *both* branches changed to incompatible values is a conflict;
 //! everything else merges untouched. Each conflict is settled by the
-//! `[merge] on_conflict` policy — `surface` (stop for a human), or one of three
+//! `[merge] on_conflict` policy - `surface` (stop for a human), or one of three
 //! predictable strategies: `latest` (newest timestamp wins), `ours`, `theirs`.
 //!
 //! The baseline gets its own keep-ours driver: two branches that both compacted
@@ -29,7 +29,7 @@ use crate::config::OnConflict;
 use crate::error::DynError;
 use crate::model::{edge_rel, edge_target, MutationEvent, OpType, TaskState, REL_KEY, TARGET_KEY};
 
-/// `ta git-merge %O %A %B` — reconcile diverged mutation logs into `current`.
+/// `ta git-merge %O %A %B` - reconcile diverged mutation logs into `current`.
 ///
 /// (Git's `%A` = "ours"; `incoming` is `%B` = "theirs".) `marker_path`, when
 /// known, is where a surfaced conflict is recorded for `ta resolve`.
@@ -48,9 +48,9 @@ pub fn execute_git_merge(
     // side is that branch's concurrent work since the fork.
     let fork = anc.iter().map(|e| e.seq).max().unwrap_or(0);
 
-    // Removals are symmetric. An ancestor event a branch no longer carries —
+    // Removals are symmetric. An ancestor event a branch no longer carries -
     // above that branch's compaction watermark, so it wasn't merely folded into
-    // the baseline — was reverted or hand-removed on that branch. The merge
+    // the baseline - was reverted or hand-removed on that branch. The merge
     // honors BOTH sides' removals (a union), so a revert converges to the same
     // result regardless of merge direction. Ours' shared tail already lacks ours'
     // removals; here we also drop the events theirs removed.
@@ -63,22 +63,22 @@ pub fn execute_git_merge(
     let theirs_concurrent: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
 
     // A shared seq with *different* content on different sides is not a clean
-    // revert — it's reuse of a freed seq (undo of a shared event) or a hand-edit,
+    // revert - it's reuse of a freed seq (undo of a shared event) or a hand-edit,
     // and the merge can't trust it. Warn loudly; git surfaces driver stderr.
     let mismatches = content_mismatches(fork, &anc, &ours, &theirs);
     if mismatches > 0 {
         eprintln!(
             "taska: warning: {mismatches} event(s) reuse a shared seq with different content \
-             (undo/seq-reuse or a hand-edit) — the merge may be unreliable; inspect the log."
+             (undo/seq-reuse or a hand-edit) - the merge may be unreliable; inspect the log."
         );
     }
 
     // A shared event present on one side but reverted on the other (compared only
     // above BOTH branches' watermarks, so a baseline fold is never mistaken for a
-    // revert) means the shared prefix was rewritten — usually a `git revert`. The
+    // revert) means the shared prefix was rewritten - usually a `git revert`. The
     // removal-union above already reconciles it convergently by honoring the
     // removal, but that silently drops events the other branch still had, so we
-    // surface it. (A revert BELOW the higher watermark stays invisible — see
+    // surface it. (A revert BELOW the higher watermark stays invisible - see
     // `removed_seqs` and the `revert_below_the_watermark_is_a_known_limitation` test.)
     let rewritten = rewritten_shared_seqs(fork, &ours, &theirs);
     if !rewritten.is_empty() {
@@ -125,13 +125,13 @@ pub fn execute_git_merge(
 }
 
 /// Ancestor seqs a branch deliberately dropped: above the branch's compaction
-/// watermark (so not merely folded into its baseline) yet absent from its log —
+/// watermark (so not merely folded into its baseline) yet absent from its log -
 /// i.e. reverted or hand-removed. Unioning both sides' removals makes a revert
 /// converge regardless of merge direction.
 ///
 /// LIMITATION: this only sees absences *above* the branch's watermark. A revert
-/// *below* it — of the branch's earliest events, or one that compaction later
-/// folded past — is indistinguishable from a baseline fold using the log alone, so
+/// *below* it - of the branch's earliest events, or one that compaction later
+/// folded past - is indistinguishable from a baseline fold using the log alone, so
 /// the removal is missed and the event can resurrect or the merge diverge by
 /// direction. `rewritten_shared_seqs` *warns* about the above-watermark rewrites it
 /// can see; the below-watermark case stays a blind spot (the
@@ -150,7 +150,7 @@ fn removed_seqs(anc: &[MutationEvent], branch: &[MutationEvent]) -> HashSet<u64>
 }
 
 /// Shared-region seqs (`<= fork`) present on exactly one side, compared only
-/// *above both branches' compaction watermarks* — the region both still hold in
+/// *above both branches' compaction watermarks* - the region both still hold in
 /// their logs. A mismatch there means the shared prefix was rewritten on one
 /// branch (a `git revert` of an event the other kept). Restricting to above both
 /// watermarks is what keeps this sound: anything either side folded into its
@@ -180,7 +180,7 @@ fn rewritten_shared_seqs(fork: u64, ours: &[MutationEvent], theirs: &[MutationEv
 }
 
 /// Count shared-region (`seq <= fork`) seqs that carry *different* content on
-/// different sides — the dangerous "same seq, different event" case (undo
+/// different sides - the dangerous "same seq, different event" case (undo
 /// seq-reuse or a hand-edit), as opposed to a clean revert.
 fn content_mismatches(
     fork: u64,
@@ -207,7 +207,7 @@ fn content_mismatches(
     bad.len()
 }
 
-/// `ta git-merge-baseline %O %A %B` — keep our baseline.
+/// `ta git-merge-baseline %O %A %B` - keep our baseline.
 ///
 /// `current` (`%A`) already holds our version, so we leave it untouched and only
 /// sanity-check for a sign that someone compacted past their fork (which
@@ -247,7 +247,7 @@ pub fn execute_git_merge_baseline(
 #[derive(Default)]
 struct Delta {
     fields: HashMap<String, FieldWrite>,
-    /// Keyed by `(relationship type, target id)` — a `depends_on` edge and a
+    /// Keyed by `(relationship type, target id)` - a `depends_on` edge and a
     /// `relates_to` edge to the same task are distinct relationships.
     deps: HashMap<(String, String), DepWrite>,
     deleted: Option<DateTime<Utc>>,
@@ -286,9 +286,9 @@ fn summarize(events: &[&MutationEvent]) -> HashMap<String, Delta> {
                 delta.last_change = Some(max_ts(delta.last_change, event.timestamp));
             }
             OpType::Append | OpType::Add | OpType::Remove => {
-                // Accumulating ops commute — two concurrent appends (text),
+                // Accumulating ops commute - two concurrent appends (text),
                 // adds (numbers/set inserts), or removes to the same field
-                // accumulate at replay rather than contending — so they are NOT
+                // accumulate at replay rather than contending - so they are NOT
                 // recorded as field writes (which would flag a false conflict
                 // and let a resolution event overwrite the accumulated value).
                 // They still count as a change for the delete-vs-change check.
@@ -327,7 +327,7 @@ fn max_ts(current: Option<DateTime<Utc>>, ts: DateTime<Utc>) -> DateTime<Utc> {
 /// How `auto` settles a contradiction.
 ///
 /// SERIALIZATION CONTRACT: the lowercase names are written into each resolution
-/// event's `_meta.strategy` in the persisted log — do not rename without a
+/// event's `_meta.strategy` in the persisted log - do not rename without a
 /// migration. (`surface` maps to `ours` here; see [`Strategy::for_policy`].)
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -361,7 +361,7 @@ impl Strategy {
 ///
 /// SERIALIZATION CONTRACT: the lowercase names below are written into every
 /// resolution event's `_meta` and into the conflict marker. They are part of the
-/// on-disk log format — do not rename a variant without migrating existing logs.
+/// on-disk log format - do not rename a variant without migrating existing logs.
 #[derive(Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Side {
@@ -372,7 +372,7 @@ enum Side {
 /// A branch's effect in a whole-task delete-vs-change conflict, recorded as the
 /// candidate "value" for each side.
 ///
-/// SERIALIZATION CONTRACT: written into `_meta`/the marker — keep the names.
+/// SERIALIZATION CONTRACT: written into `_meta`/the marker - keep the names.
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum TaskOutcome {
@@ -382,7 +382,7 @@ enum TaskOutcome {
 
 /// A branch's effect on a dependency edge in an add/remove conflict.
 ///
-/// SERIALIZATION CONTRACT: written into `_meta`/the marker — keep the names.
+/// SERIALIZATION CONTRACT: written into `_meta`/the marker - keep the names.
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum EdgeOutcome {
@@ -404,7 +404,7 @@ impl EdgeOutcome {
 /// per resolved item, the two candidate values and the side kept.
 ///
 /// SERIALIZATION CONTRACT: these field names and the enum strings inside are part
-/// of the on-disk `_meta` format — keep them stable.
+/// of the on-disk `_meta` format - keep them stable.
 #[derive(Serialize)]
 struct ResolutionMeta {
     strategy: Strategy,
@@ -492,7 +492,7 @@ fn resolve(
 /// Resolve a delete-vs-change contradiction (one branch deleted a task while the
 /// other kept editing it); returns whether one was found.
 ///
-/// This is decided at the WHOLE-TASK level, not per field — a deleted task has no
+/// This is decided at the WHOLE-TASK level, not per field - a deleted task has no
 /// fields to merge into, so the only question is whether it survives. The active
 /// strategy decides exactly as for a field conflict: for `latest`, the delete's
 /// timestamp races the other branch's most recent change.
@@ -580,7 +580,7 @@ fn resolve_fields(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: 
     for field in fields {
         let (ow, tw) = (&od.fields[field], &td.fields[field]);
         if ow.value == tw.value {
-            continue; // both wrote the same value — no contradiction
+            continue; // both wrote the same value - no contradiction
         }
         let winner = strategy.pick(ow.ts, tw.ts);
         let (value, ts) = match winner {
@@ -608,7 +608,7 @@ fn resolve_fields(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: 
     }
 
     // `latest_ts` is `Some` iff at least one field was contested, which is also
-    // exactly when `winners` is non-empty — so matching on it both gates the push
+    // exactly when `winners` is non-empty - so matching on it both gates the push
     // and yields the timestamp without an unwrap.
     if let Some(ts) = latest_ts {
         // One Update carrying every per-field winner for this task, annotated with
@@ -635,7 +635,7 @@ fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &m
         let (rel_type, target) = edge;
         let (ow, tw) = (&od.deps[edge], &td.deps[edge]);
         if ow.added == tw.added {
-            continue; // both added or both removed — no contradiction
+            continue; // both added or both removed - no contradiction
         }
         let winner = strategy.pick(ow.ts, tw.ts);
         let (added, ts) = match winner {
@@ -650,7 +650,7 @@ fn resolve_deps(task: &str, od: &Delta, td: &Delta, strategy: Strategy, plan: &m
         let mut payload = Map::new();
         payload.insert(TARGET_KEY.to_string(), Value::String(target.clone()));
         payload.insert(REL_KEY.to_string(), Value::String(rel_type.clone()));
-        // Provenance labels every edge by its type uniformly — `type:target` —
+        // Provenance labels every edge by its type uniformly - `type:target` -
         // so the `_meta` record names which typed edge was resolved.
         let label = format!("{rel_type}:{target}");
         let item = ResolvedItem {
@@ -702,7 +702,7 @@ fn event(
 // ---------------------------------------------------------------------------
 
 /// Build the merged log: shared history, then both branches' concurrent events
-/// (minus any Delete the resolution dropped), then the resolution events — all
+/// (minus any Delete the resolution dropped), then the resolution events - all
 /// above the fork renumbered onto a fresh contiguous tail.
 fn assemble(
     shared_tail: &[&MutationEvent],
@@ -844,8 +844,8 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// Merge two diverged logs the way the driver does — including the symmetric
-    /// removal union — and return the sorted ids of surviving tasks.
+    /// Merge two diverged logs the way the driver does - including the symmetric
+    /// removal union - and return the sorted ids of surviving tasks.
     fn merged_task_ids(
         anc: &[MutationEvent],
         ours: &[MutationEvent],
@@ -897,7 +897,7 @@ mod tests {
 
     #[test]
     fn multiple_reverts_converge_with_several_gaps() {
-        // Ancestor a..e (seq 1..5). One branch reverts b and d (seq 2 and 4 — two
+        // Ancestor a..e (seq 1..5). One branch reverts b and d (seq 2 and 4 - two
         // separate gaps); the other keeps all five and adds f (seq 6). Both gaps
         // must reconcile and converge either direction.
         let anc = vec![
@@ -937,7 +937,7 @@ mod tests {
 
     #[test]
     fn revert_of_the_fork_event_converges() {
-        // Reverting the HIGHEST ancestor seq — the fork event itself — still
+        // Reverting the HIGHEST ancestor seq - the fork event itself - still
         // converges, and the dropped top event stays gone.
         let anc = vec![
             ev(1, 0, OpType::Create, "a", &[]),
@@ -992,7 +992,7 @@ mod tests {
     fn reverting_a_create_above_the_watermark_orphans_its_kept_updates() {
         // x(seq1), then Create a(seq2) and Update a(seq3). One branch reverts only
         // a's Create (seq2) while keeping x and a's Update. Because seq2 sits ABOVE
-        // the branch's min (x=seq1 remains), its removal IS detected — and the kept
+        // the branch's min (x=seq1 remains), its removal IS detected - and the kept
         // Update, now applying to no task, surfaces as an orphan on replay.
         let anc = vec![
             ev(1, 0, OpType::Create, "x", &[]),
@@ -1022,17 +1022,17 @@ mod tests {
         let (state, orphans) = Engine::materialize_report(Vec::new(), merged, "closed");
         assert!(
             !state.contains_key("a"),
-            "task a does not materialize — its Create was reverted"
+            "task a does not materialize - its Create was reverted"
         );
         assert_eq!(orphans.len(), 1, "a's kept Update is reported as an orphan");
     }
 
     #[test]
     fn revert_below_the_watermark_is_a_known_limitation() {
-        // KNOWN LIMITATION — the BELOW-watermark blind spot of the revert checks.
+        // KNOWN LIMITATION - the BELOW-watermark blind spot of the revert checks.
         // `removed_seqs` and `rewritten_shared_seqs` only see reverts ABOVE the
         // branch's min-seq watermark. A revert of the EARLIEST event raises that
-        // branch's min — the same shape compaction-past-a-revert produces — so it
+        // branch's min - the same shape compaction-past-a-revert produces - so it
         // falls below the watermark and is invisible: the event resurrects and the
         // merge DIVERGES by direction. This pins that residual behavior.
         let anc = vec![
@@ -1040,7 +1040,7 @@ mod tests {
             ev(2, 0, OpType::Create, "b", &[]),
             ev(3, 0, OpType::Create, "c", &[]),
         ];
-        // Drop the earliest event (a, seq1), keeping b, c — min becomes 2, so the
+        // Drop the earliest event (a, seq1), keeping b, c - min becomes 2, so the
         // watermark (1) hides seq1's removal.
         let reverted = vec![anc[1].clone(), anc[2].clone()];
         let kept = vec![anc[0].clone(), anc[1].clone(), anc[2].clone()];
@@ -1062,7 +1062,7 @@ mod tests {
         );
         assert_ne!(
             into_kept, into_reverted,
-            "so the merge diverges by direction — the below-watermark blind spot"
+            "so the merge diverges by direction - the below-watermark blind spot"
         );
         // And the above-watermark detector cannot see it either (it is below the
         // higher watermark), which is exactly why it stays a limitation.
@@ -1095,7 +1095,7 @@ mod tests {
         assert_eq!(
             rewritten_shared_seqs(fork, &reverted, &kept),
             vec![3],
-            "symmetric — flagged regardless of side"
+            "symmetric - flagged regardless of side"
         );
     }
 
@@ -1103,7 +1103,7 @@ mod tests {
     fn rewritten_shared_seqs_ignores_legitimate_compaction() {
         // The key soundness case: two branches that compacted to DIFFERENT depths.
         // ours folded 1,2 (log 3..5); theirs folded 1,2,3 (log 4..6). Nothing was
-        // reverted, so the detector must stay silent — the differing folded prefix
+        // reverted, so the detector must stay silent - the differing folded prefix
         // is below the higher watermark and excluded from the comparison.
         let ours = vec![
             ev(3, 0, OpType::Create, "c", &[]),
@@ -1123,8 +1123,8 @@ mod tests {
 
     #[test]
     fn concurrent_appends_accumulate_without_conflict() {
-        // Both branches append to `notes` since the fork. Under `surface` — which
-        // FAILS on a genuine conflict — the merge still resolves and BOTH appends
+        // Both branches append to `notes` since the fork. Under `surface` - which
+        // FAILS on a genuine conflict - the merge still resolves and BOTH appends
         // survive, because appends commute and are never summarized as field
         // writes that could contend.
         let anc = vec![ev(1, 0, OpType::Create, "X", &[("notes", json!("base"))])];
@@ -1154,7 +1154,7 @@ mod tests {
     #[test]
     fn typed_dep_edges_do_not_collide_across_types() {
         // Concurrent: ours adds `X depends_on Y`; theirs adds `X relates_to Y`.
-        // Distinct typed edges to the same target — both survive, no conflict.
+        // Distinct typed edges to the same target - both survive, no conflict.
         let anc = vec![ev(1, 0, OpType::Create, "X", &[])];
         let ours = [
             anc[0].clone(),

@@ -1,8 +1,8 @@
 //! `undo` action: reverse the last N events.
 //!
-//! `plan` computes what would change and the exact log that would result —
+//! `plan` computes what would change and the exact log that would result -
 //! truncating the tail (local events, or `--remove`) or, when committed history
-//! is involved, keeping it and appending compensating events — without writing.
+//! is involved, keeping it and appending compensating events - without writing.
 //! `apply` writes that log. Takes a concrete [`FileStore`]: it inspects git
 //! (`committed_mutation_count`) and rewrites the log via `replace_mutations`.
 
@@ -36,7 +36,7 @@ pub struct UndoPlan {
     pub changes: Vec<UndoChange>,
     /// Whether applying rewrites committed git history (`--remove` past a commit).
     pub rewrites_committed_history: bool,
-    /// The log to write on [`apply`] — the truncated tail, or the committed
+    /// The log to write on [`apply`] - the truncated tail, or the committed
     /// prefix plus compensating events.
     new_log: Vec<MutationEvent>,
 }
@@ -334,7 +334,7 @@ mod tests {
         // The SAME target moves from relates_to to has_subtask, and a relates_to
         // edge to y disappears: each `(type, target)` pair is its own edge, so
         // the compensation is AddEdge has_subtask=x, RemoveEdge relates_to=x,
-        // RemoveEdge relates_to=y — all typed.
+        // RemoveEdge relates_to=y - all typed.
         let mut f = task("a", &[], &[]);
         f.relationships.insert(
             "relates_to".to_string(),

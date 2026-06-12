@@ -66,9 +66,9 @@ pub fn store_without_timestamps() -> InMemoryStore {
     store
 }
 
-/// An in-memory store whose config DECLARES a schema — the `task` type (required
+/// An in-memory store whose config DECLARES a schema - the `task` type (required
 /// `title`/`notes`, a `status` enum, an optional `priority` enum) and a
-/// `depends_on` blocker — for tests that need a rich, non-default vocabulary
+/// `depends_on` blocker - for tests that need a rich, non-default vocabulary
 /// (`Config::default()` declares no task types, so its status is free-form).
 pub fn store_with_schema() -> InMemoryStore {
     let toml = r#"

@@ -33,7 +33,7 @@ fn init_creates_config_and_registers_merge_driver() {
 #[test]
 fn init_outside_git_is_quiet_and_actionable() {
     // Deliberately NO `git init`: the store must still initialize, with ONE
-    // actionable warning — not the raw `fatal: not in a git directory` noise
+    // actionable warning - not the raw `fatal: not in a git directory` noise
     // each `git config` child would leak if its stderr were inherited.
     let dir = fresh_dir("init-no-git");
     let out = run(ta_bin(), &dir, &["init"]);
@@ -65,7 +65,7 @@ fn init_outside_git_is_quiet_and_actionable() {
 #[test]
 fn store_commands_warn_until_merge_drivers_are_registered() {
     // The trap: `ta init` BEFORE `git init` (the fresh-clone state looks the
-    // same) leaves .gitattributes pointing at merge drivers no config defines —
+    // same) leaves .gitattributes pointing at merge drivers no config defines -
     // a git merge would text-merge the log. Every store command must warn.
     let dir = fresh_dir("scm-health");
     run(ta_bin(), &dir, &["init"]);
@@ -99,7 +99,7 @@ fn store_commands_warn_until_merge_drivers_are_registered() {
 
 #[test]
 fn plain_dir_stays_quiet_and_mercurial_warns_unsupported() {
-    // No SCM at all: deliberate plain-dir use — store commands don't nag
+    // No SCM at all: deliberate plain-dir use - store commands don't nag
     // (`ta init` already warned once at setup time).
     let dir = fresh_dir("scm-none");
     run(ta_bin(), &dir, &["init"]);
@@ -110,7 +110,7 @@ fn plain_dir_stays_quiet_and_mercurial_warns_unsupported() {
         "no SCM -> no nagging"
     );
 
-    // Mercurial detection is a directory stat — no hg binary needed.
+    // Mercurial detection is a directory stat - no hg binary needed.
     fs::create_dir(dir.join(".hg")).unwrap();
     let out = run(ta_bin(), &dir, &["list"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -200,7 +200,7 @@ fn init_from_subdirectory_reuses_existing_store() {
 #[test]
 fn init_from_subdirectory_creates_a_new_store_at_the_scm_root() {
     // No store anywhere yet: `ta init` from a repo SUBDIRECTORY must place the
-    // new .taska at the SCM root — committed there it travels with the repo —
+    // new .taska at the SCM root - committed there it travels with the repo -
     // not at the invocation dir.
     let dir = fresh_dir("init-at-root");
     init_repo(&dir);
@@ -222,7 +222,7 @@ fn init_from_subdirectory_creates_a_new_store_at_the_scm_root() {
     );
 
     // The store is immediately usable from the subdir (walk-up discovery), and
-    // healthy (drivers registered at init time — no warning).
+    // healthy (drivers registered at init time - no warning).
     ta(&sub, &["create", "t1", "title=x"]);
     assert!(lists_task(&ta(&dir, &["list"]), "t1"), "usable from root");
     let out = run(ta_bin(), &sub, &["list"]);
@@ -242,7 +242,7 @@ fn crud_search_and_ready_workflow() {
     ta(&dir, &["create", "api", "status=open", "priority=3"]);
     ta(&dir, &["dep", "add", "api", "depends_on=db"]);
 
-    // The human table lists ids; `--full --format json` exposes every field —
+    // The human table lists ids; `--full --format json` exposes every field -
     // priority coerced to a JSON number, and deps as the typed map.
     assert!(
         lists_task(&ta(&dir, &["list"]), "api"),
@@ -422,7 +422,7 @@ fn field_value_from_file_and_stdin() {
     let note_path = dir.join("note.md");
     fs::write(&note_path, note).unwrap();
 
-    // `@file` reads the value verbatim — no shell expansion, no quoting needed.
+    // `@file` reads the value verbatim - no shell expansion, no quoting needed.
     ta(
         &dir,
         &["create", "t1", &format!("notes=@{}", note_path.display())],

@@ -1,7 +1,7 @@
 //! `status` action: aggregate task counts.
 //!
 //! Buckets every task by its (user-defined) status, then computes the
-//! `ready`/`blocked`/`closed` figures from the dependency graph — returning a
+//! `ready`/`blocked`/`closed` figures from the dependency graph - returning a
 //! typed [`StatusSummary`] the frontend renders however it likes.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -19,7 +19,7 @@ use crate::storage::EventStore;
 /// Aggregate counts for `status`.
 ///
 /// Status values are user-defined, so the per-status buckets are *discovered*
-/// from the data rather than hardcoded — `done_status` is simply the bucket that
+/// from the data rather than hardcoded - `done_status` is simply the bucket that
 /// also feeds the `closed` count. `blocked` and `ready` are COMPUTED from the
 /// dependency graph, never read from a status value: `ready` reuses the same set
 /// as `list --ready`, and among not-done tasks the two partition the set (a

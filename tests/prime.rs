@@ -1,4 +1,4 @@
-//! e2e: `ta prime` — the config-tailored agent primer.
+//! e2e: `ta prime` - the config-tailored agent primer.
 //!
 //! Drives the real binary to prove the primer is RUNNABLE against the actual
 //! store (right vocabulary, right commands) and CONFIG-DRIVEN (renaming the
@@ -32,7 +32,7 @@ fn prime_reflects_the_store_vocabulary() {
 }
 
 /// Config-DRIVEN: renaming the workflow's display fields re-tailors every example
-/// with no recompile — the whole point of a generated primer over a static doc.
+/// with no recompile - the whole point of a generated primer over a static doc.
 #[test]
 fn prime_tailors_to_renamed_workflow_fields() {
     let dir = fresh_dir("prime-tailor");

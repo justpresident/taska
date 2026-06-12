@@ -21,7 +21,7 @@ use crate::model::{MutationEvent, TaskState};
 ///
 /// It materializes, validates each draft, and drops no-ops. Returning an error
 /// rejects the whole batch (nothing is written); an empty `Vec` means "nothing
-/// to do". Run by [`EventStore::append_checked`] so the read→verify→write is one
+/// to do". Run by [`EventStore::append_checked`] so the read->verify->write is one
 /// step. See [`crate::cli::vet_events`].
 pub type EventBuilder<'a> =
     dyn Fn(&[TaskState], &[MutationEvent]) -> Result<Vec<MutationEvent>, DynError> + 'a;
@@ -43,7 +43,7 @@ pub trait EventStore {
     /// (minting seqs). [`FileStore`] runs the whole sequence under the write
     /// lock, so the check can't race a concurrent writer (a TOCTOU that could,
     /// e.g., create the same task twice). This default is a non-atomic
-    /// read→build→append, fine for single-threaded in-memory stores. Returns the
+    /// read->build->append, fine for single-threaded in-memory stores. Returns the
     /// events written (empty = nothing to do).
     fn append_checked(&self, build: &EventBuilder) -> Result<Vec<MutationEvent>, DynError> {
         let baseline = self.load_baseline()?;
@@ -69,7 +69,7 @@ pub struct FileStore {
 impl FileStore {
     /// Open the store at exactly `base_dir` (no walk-up), loading its
     /// `config.toml` (defaults if the file is absent). For callers that already
-    /// know the store dir — e.g. the merge driver deriving it from git's `%P`
+    /// know the store dir - e.g. the merge driver deriving it from git's `%P`
     /// argument, where a nested store is invisible to [`Self::discover`].
     pub fn at(base_dir: PathBuf) -> Result<Self, DynError> {
         let config = Config::load(&base_dir.join("config.toml"))?;
@@ -142,7 +142,7 @@ impl FileStore {
     ///
     /// v1 dropped the read shims, so a legacy `AddDep`/`RemoveDep` op, an untyped
     /// or `dep`/`type`-keyed edge, or a top-level `depends_on` baseline field
-    /// would now be silently skipped or ignored rather than read — i.e. data
+    /// would now be silently skipped or ignored rather than read - i.e. data
     /// loss. The read path calls this first to refuse such a store with an
     /// actionable "migrate on the last 0.x" message. It scans the raw bytes as
     /// generic JSON (the typed deserializers no longer accept these shapes).
@@ -164,7 +164,7 @@ impl FileStore {
 }
 
 /// Every non-blank line of a JSONL file parsed as a generic [`Value`], skipping
-/// any that don't parse — used only for legacy-format sniffing, which must read
+/// any that don't parse - used only for legacy-format sniffing, which must read
 /// records the typed deserializers no longer accept. A missing file is no lines.
 fn raw_json_lines(path: &Path) -> Result<Vec<Value>, DynError> {
     if !path.exists() {
@@ -264,7 +264,7 @@ impl EventStore for FileStore {
     /// Atomic verify-then-append: the write lock is held across reading the log,
     /// running `build`, and appending its result, so the validation can't race a
     /// concurrent writer. The log is read **strictly** (an unparseable line is an
-    /// error, never skipped) for the same reason [`max_seq`] is — minting over a
+    /// error, never skipped) for the same reason [`max_seq`] is - minting over a
     /// log we can't fully read risks a duplicate seq. The baseline is read under
     /// the same lock; it is stable because [`FileStore::compact`] also holds this
     /// lock across its baseline swap.
@@ -293,7 +293,7 @@ impl EventStore for FileStore {
         Ok(events)
     }
 
-    /// Unlike normal writes this *does* rewrite the log — that is the whole
+    /// Unlike normal writes this *does* rewrite the log - that is the whole
     /// point of compaction. The mutation log is held under the exclusive lock
     /// across the baseline swap so a concurrent `append_events` can't slip an
     /// event in between writing the baseline and rewriting the log.
@@ -327,7 +327,7 @@ impl EventStore for FileStore {
     /// Rewrite the log in place with exactly `events`, leaving the baseline alone.
     /// Mirrors `compact`'s log-rewrite under the same exclusive fd-lock so a
     /// concurrent `append_events` can't slip an event in mid-rewrite. Unlike
-    /// `compact` it never touches the baseline — dropping no-op orphans is
+    /// `compact` it never touches the baseline - dropping no-op orphans is
     /// state-neutral, so there is nothing to fold.
     fn replace_mutations(&self, events: &[MutationEvent]) -> Result<(), DynError> {
         let file = OpenOptions::new()
@@ -374,7 +374,7 @@ fn read_events(path: &Path) -> Result<Vec<MutationEvent>, DynError> {
     Ok(out)
 }
 
-/// Read every event from the open log, **strictly** — an unparseable line is an
+/// Read every event from the open log, **strictly** - an unparseable line is an
 /// error (cf. [`read_events`], which tolerates one). Used by the verify-then-write
 /// path, which must see the whole log before minting a seq or vetting a draft.
 fn read_log_strict(file: &mut File) -> Result<Vec<MutationEvent>, DynError> {
@@ -388,7 +388,7 @@ fn read_log_strict(file: &mut File) -> Result<Vec<MutationEvent>, DynError> {
         let event: MutationEvent = serde_json::from_str(&line).map_err(|e| {
             format!(
                 "mutation log line {} is unparseable ({e}); refusing to read for a write. \
-                 Often a stale `ta` binary that predates a newer event type — rebuild/update \
+                 Often a stale `ta` binary that predates a newer event type - rebuild/update \
                  `ta`, or run `ta resolve` to rewrite the log, then retry.",
                 idx + 1
             )
@@ -407,7 +407,7 @@ fn read_log_strict(file: &mut File) -> Result<Vec<MutationEvent>, DynError> {
 /// Unlike [`read_events`], which tolerates a corrupt line on *read*, this is
 /// **strict**: a line it can't parse is a hard error. Minting `max(seq) + 1` over
 /// a log we can only partially read would under-count the max and hand out a
-/// **duplicate `seq`** — corrupting the append-only order. The classic trigger is
+/// **duplicate `seq`** - corrupting the append-only order. The classic trigger is
 /// a stale binary that predates a newer `OpType` (e.g. `Append`): it can't
 /// deserialize that event, so silently skipping it would mint a seq that already
 /// exists. Better to refuse the write and surface the problem.
@@ -422,7 +422,7 @@ fn max_seq(file: &mut File) -> Result<Option<u64>, DynError> {
         let event: MutationEvent = serde_json::from_str(&line).map_err(|e| {
             format!(
                 "refusing to mint a sequence number: mutation log line {} is unparseable \
-                 ({e}). This can hand out a duplicate seq and corrupt the log — often a stale \
+                 ({e}). This can hand out a duplicate seq and corrupt the log - often a stale \
                  `ta` binary that predates a newer event type. Rebuild/update `ta`, or run \
                  `ta resolve` to rewrite the log, then retry.",
                 idx + 1

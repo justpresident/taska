@@ -25,7 +25,7 @@ pub const REL_KEY: &str = "rel";
 /// of the configured `[workflow] status_field`, which is a DISPLAY name only:
 /// commands map the display name to this key on write, and `action::read` surfaces
 /// the stored value back under the display name on read. That split is what
-/// makes the display name freely renamable in config without touching disk —
+/// makes the display name freely renamable in config without touching disk -
 /// and lets clones with different display configs merge cleanly.
 pub const STATUS_KEY: &str = "status";
 
@@ -42,7 +42,7 @@ pub const TASK_TYPE_KEY: &str = "task_type";
 pub const ID_KEY: &str = "id";
 
 /// Built-in display/query column: a task's typed relationships map
-/// (`{type: [targets…]}`). `deps=x` matches an edge of any type.
+/// (`{type: [targets...]}`). `deps=x` matches an edge of any type.
 pub const DEPS_KEY: &str = "deps";
 
 /// Reserved field name: reads like a dependency, so it's rejected as a field
@@ -67,7 +67,7 @@ pub const SUBTASKS_KEY: &str = "subtasks";
 /// with the envelope or be swallowed by `_meta`), and the static
 /// computed/injected columns (their value is derived at read time, so a stored
 /// field would be silently shadowed; `dep` additionally reads like a
-/// dependency — use `ta dep add`). The config-DEPENDENT reserved names
+/// dependency - use `ta dep add`). The config-DEPENDENT reserved names
 /// (timestamp columns, relationship types and inverses) can't live in a const;
 /// `cli::reserved_field_names` unions them in for the write gate, and
 /// `Config::validate` checks `[task_types]` field declarations against this
@@ -91,7 +91,7 @@ pub const RESERVED_FIELD_KEYS: &[&str] = &[
 /// A total order over heterogeneous JSON scalars.
 ///
 /// Numbers compare numerically, strings/bools by their natural order, and any
-/// mismatch falls back to a stable per-type rank then the value's string form —
+/// mismatch falls back to a stable per-type rank then the value's string form -
 /// so mixed types still order deterministically. Shared by display sorting
 /// (`--sort`, filters) and the engine's canonical set form, so replay and
 /// presentation agree on order.
@@ -140,8 +140,8 @@ pub enum OpType {
     Create,
     Update,
     /// Append text to a field (one entry per line) instead of overwriting it.
-    /// Unlike `Update`, concurrent `Append`s to the same field commute — replay
-    /// concatenates them in `seq` order — so a running notes/comments log
+    /// Unlike `Update`, concurrent `Append`s to the same field commute - replay
+    /// concatenates them in `seq` order - so a running notes/comments log
     /// accumulates conflict-free across branches. FROZEN as text accumulation:
     /// numeric/set `+=` is [`OpType::Add`], so old logs never re-materialize
     /// differently across versions.
@@ -149,8 +149,8 @@ pub enum OpType {
     /// Accumulate into a field (`+=` on numeric and set fields), with
     /// kind-dispatched, config-free replay semantics defined from birth:
     /// number onto number (or onto a missing field, as 0) adds arithmetically;
-    /// an ARRAY operand inserts its elements set-style — deduped, kept in the
-    /// canonical sorted order — so concurrent adds commute like `Append`;
+    /// an ARRAY operand inserts its elements set-style - deduped, kept in the
+    /// canonical sorted order - so concurrent adds commute like `Append`;
     /// any other shape is a deterministic no-op. The command layer emits this
     /// only for declared numeric/set fields; scalars destined for a set are
     /// lifted to singleton arrays so the set path is unambiguous.
@@ -169,7 +169,7 @@ pub enum OpType {
 /// A single append-only record in the mutation log.
 ///
 /// `seq` is a per-store autoincrement assigned by the store at append time. It
-/// is the *authoritative order* — replay, compaction, and merge all key off it,
+/// is the *authoritative order* - replay, compaction, and merge all key off it,
 /// never off the wall clock. It survives compaction: a folded baseline stands in
 /// for every `seq` up to a watermark, so events can never be reordered relative
 /// to the baseline. Sequences start at 1; `0` is the "unassigned draft" sentinel
@@ -185,7 +185,7 @@ pub struct MutationEvent {
     pub op: OpType,
     pub task_id: String,
 
-    /// Optional, non-materialized annotation — currently merge provenance written
+    /// Optional, non-materialized annotation - currently merge provenance written
     /// by the merge driver (which fields it resolved, the values it chose between,
     /// and the strategy used). Replay ignores it, so it never reaches a task's
     /// state and is dropped when its event folds into the baseline at compaction.
@@ -216,10 +216,10 @@ impl MutationEvent {
 /// Verify a log slice is strictly increasing by `seq`.
 ///
 /// Strictly increasing, *not* contiguous: a `git revert` that drops committed
-/// events leaves gaps in the sequence, and that is a normal, supported state —
+/// events leaves gaps in the sequence, and that is a normal, supported state -
 /// only an out-of-order or duplicate `seq` is corruption.
 ///
-/// Every write path — append, compaction, and merge restack — produces
+/// Every write path - append, compaction, and merge restack - produces
 /// strictly-ordered output, so a violation is never a normal state: it means the
 /// log was hand-edited, merged by the wrong tool, or corrupted. We surface it
 /// loudly instead of silently repairing it, so the user can investigate rather
@@ -243,10 +243,10 @@ pub fn verify_seq_order(events: &[MutationEvent]) -> Result<(), String> {
 pub struct TaskState {
     pub id: String,
 
-    /// Typed relationship edges, `type name → target ids` — including the default
+    /// Typed relationship edges, `type name -> target ids` - including the default
     /// blocker (conventionally `depends_on`). This whole map IS the `deps` column
     /// (grouped by type), and the readiness gate walks its blocker-kind entries.
-    /// Every declared type (`depends_on`, `relates_to`, `blocks`, `duplicates`, …)
+    /// Every declared type (`depends_on`, `relates_to`, `blocks`, `duplicates`, ...)
     /// lives here, so the engine and graph treat them uniformly. No type name is
     /// privileged in code; the set is whatever `[relationships]` declares.
     /// `skip_serializing_if` keeps it off the line for a task with no edges.
@@ -256,7 +256,7 @@ pub struct TaskState {
     #[serde(default)]
     pub custom_fields: Map<String, Value>,
 
-    /// Computed, best-effort timestamps materialized from the event log — never
+    /// Computed, best-effort timestamps materialized from the event log - never
     /// user-set. They are persisted into the baseline so they survive
     /// compaction (their source events get folded away), then extended on each
     /// replay. Best-effort because event timestamps are informational only
@@ -284,11 +284,11 @@ pub fn is_done(task: &TaskState, status_field: &str, done_status: &str) -> bool 
     task.custom_fields.get(status_field).and_then(Value::as_str) == Some(done_status)
 }
 
-/// The value of `column` for a task as a JSON `Value` — the single source of
+/// The value of `column` for a task as a JSON `Value` - the single source of
 /// truth shared by JSON output, human rendering, sorting, and filtering.
 ///
 /// `id` is the id string, `deps` the task's typed relationships map
-/// (`{type: [targets…]}` — every edge keyed by relationship type, `{}` when
+/// (`{type: [targets...]}` - every edge keyed by relationship type, `{}` when
 /// none), and anything else a custom or computed field. `None` only for a
 /// missing custom field (the built-ins always resolve), which is how JSON omits
 /// absent fields and sorting orders them last.
@@ -310,7 +310,7 @@ pub fn cell_value(task: &TaskState, column: &str) -> Option<Value> {
 }
 
 /// Compare two tasks by one `column`, ascending, with `id` as the stable
-/// tiebreaker — a present value sorts before a missing one.
+/// tiebreaker - a present value sorts before a missing one.
 ///
 /// The shared ordering behind `list`'s `--sort` and `dep tree`'s sibling sort
 /// (both keyed off [`cell_value`] and [`cmp_json`]); `--reverse` flips the
@@ -404,12 +404,12 @@ mod tests {
         assert_eq!(
             task_cmp(&a2, &z2, "priority"),
             Ordering::Less,
-            "equal column → id tiebreak"
+            "equal column -> id tiebreak"
         );
 
         // Driving a whole-vector sort: ascending with the missing-value task
         // last, an unknown column collapsing to the id tiebreak, and reverse as
-        // a plain flip on top — the policy `list`/`dep tree` apply.
+        // a plain flip on top - the policy `list`/`dep tree` apply.
         let pri3 = task("a", &[], &[("priority", json!(3))]);
         let pri1 = task("b", &[], &[("priority", json!(1))]);
         let pri2 = task("c", &[], &[("priority", json!(2))]);
@@ -424,6 +424,6 @@ mod tests {
 
         let mut unknown = vec![&pri2, &pri3, &pri1];
         unknown.sort_by(|a, b| task_cmp(a, b, "nope"));
-        assert_eq!(ids(&unknown), ["a", "b", "c"], "unknown column → by id");
+        assert_eq!(ids(&unknown), ["a", "b", "c"], "unknown column -> by id");
     }
 }

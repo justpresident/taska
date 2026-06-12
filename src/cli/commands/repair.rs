@@ -1,4 +1,4 @@
-//! `ta repair` — bring a store's on-disk format (`--migrate`) or its DATA
+//! `ta repair` - bring a store's on-disk format (`--migrate`) or its DATA
 //! (`--schema`, `--rename`) up to scratch.
 //!
 //! The fixes live in [`crate::action::repair`] (the one sanctioned non-append-only
@@ -72,7 +72,7 @@ fn render_schema(report: &crate::action::repair::SchemaRepairReport) {
     }
     if !report.remaining.is_empty() {
         println!(
-            "{} task(s) still don't conform (fix each with one `ta update <id> field=value …`, \
+            "{} task(s) still don't conform (fix each with one `ta update <id> field=value ...`, \
              which must bring the whole task into conformance):",
             report.remaining.len()
         );

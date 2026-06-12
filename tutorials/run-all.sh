@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-all.sh — run every tutorial script in order.
+# run-all.sh - run every tutorial script in order.
 #
 # Interactivity passes straight through: by default each script shows each
 # command and waits for Enter to execute it (when run from a terminal).

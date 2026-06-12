@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 06-orphans.sh — detecting and cleaning up orphaned events ("no silent failures").
+# 06-orphans.sh - detecting and cleaning up orphaned events ("no silent failures").
 #
 # An ORPHAN is an Update/AddDep/RemoveDep/Delete whose target task no longer
 # exists, so it applies to nothing during replay. It's the symptom of a dropped
@@ -23,6 +23,6 @@ run ta list
 say "'ta resolve --force' names each orphaned event and drops it from the log."
 run ta resolve --force
 
-say "The warning is gone — the log no longer carries the orphan."
+say "The warning is gone - the log no longer carries the orphan."
 run ta list
 say "Orphans surface loudly instead of failing silently, and resolve cleans them up safely."

@@ -7,7 +7,7 @@
 //! `mktemp` under the system temp dir), so they never touch the repo's own
 //! `.taska`. We run them with the built binary's directory prepended to `PATH`
 //! (matching how the tutorials expect to find `ta`) and `TUTORIAL_NONINTERACTIVE=1`
-//! so every `pause` returns immediately, then assert each exits 0 — naming any
+//! so every `pause` returns immediately, then assert each exits 0 - naming any
 //! that don't.
 
 use std::ffi::OsString;

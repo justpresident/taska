@@ -9,7 +9,7 @@ use crate::error::DynError;
 use crate::model::TaskState;
 use crate::storage::EventStore;
 
-/// What a `compact` did — enough for a frontend to report it.
+/// What a `compact` did - enough for a frontend to report it.
 pub enum CompactOutcome {
     /// The log already fits the retention policy; nothing folded.
     NothingToDo { log_len: usize, keep_events: usize },

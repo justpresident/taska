@@ -1,13 +1,13 @@
 //! `ta` command-line surface: argument parsing, dispatch, and shared plumbing.
 //!
 //! This module owns the clap definitions and `run()`/dispatch. Each subcommand's
-//! handler lives in [`commands`]; the cross-cutting helpers handlers reach for —
+//! handler lives in [`commands`]; the cross-cutting helpers handlers reach for -
 //! raw materialization ([`replay`]), parsing `key=value` fields
-//! ([`parse_field_ops`]), and confirming destructive actions ([`confirm`]) — live
+//! ([`parse_field_ops`]), and confirming destructive actions ([`confirm`]) - live
 //! here so the handlers stay thin. The data work itself is the frontend-agnostic
 //! [`crate::action`] layer (display state, warnings, every command's typed
 //! outcome). The write gate and `[task_types]` schema law
-//! (event vetting, conformance, coercion) are NOT here — they live in the
+//! (event vetting, conformance, coercion) are NOT here - they live in the
 //! crate-level [`crate::schema`] module, the frontend-agnostic domain layer
 //! every frontend funnels writes through; this module only adds the CLI's
 //! presentation (e.g. printing the non-conformance warning). Handlers depend
@@ -52,7 +52,7 @@ enum Commands {
     ///
     /// Errors if `<id>` already exists or a field name is reserved/computed
     /// (`id`, `deps`, the timestamp/graph columns, relationship type names).
-    /// Fields are free-form until `[task_types]` declares schemas — then the
+    /// Fields are free-form until `[task_types]` declares schemas - then the
     /// task must conform to its type (every violation reported in one error).
     Create {
         id: String,
@@ -68,7 +68,7 @@ enum Commands {
     Update {
         id: String,
         /// `key=value` sets a field; `key+=value` appends text (string fields),
-        /// adds (declared numeric fields), or inserts elements (declared set<…>
+        /// adds (declared numeric fields), or inserts elements (declared set<...>
         /// fields); `key-=value` subtracts / removes elements (declared
         /// numeric/set only). Accumulates merge conflict-free across branches.
         /// Values parse as JSON-or-string; `key=@FILE` / `key=@-` read from a
@@ -76,7 +76,7 @@ enum Commands {
         #[arg(required = true)]
         fields: Vec<String>,
     },
-    /// Add/remove typed relationship edges: `ta dep add <task> <type>=<target> …`
+    /// Add/remove typed relationship edges: `ta dep add <task> <type>=<target> ...`
     Dep {
         #[command(subcommand)]
         action: DepAction,
@@ -95,7 +95,7 @@ enum Commands {
         /// inverse name (`subtask_of=epic`, `blocks=x`), or a computed column
         /// (`unblocks`/`blocked_by`/`subtasks`). A MULTI-VALUED field (a set/
         /// array field, `deps`, or a relationship type) matches if ANY element
-        /// does — `tags=urgent` (member), `scores>=5` (some score >= 5) — while
+        /// does - `tags=urgent` (member), `scores>=5` (some score >= 5) - while
         /// `!=`/`!~` hold when NONE does (so also when it's empty/absent). With
         /// none given, lists every task.
         criteria: Vec<String>,
@@ -173,7 +173,7 @@ enum Commands {
     /// result with `git diff .taska`, revert with `git restore .taska` before
     /// committing. Every fix is deterministic for a given store + config, so
     /// two clones running the same repair produce identical bytes. Anything
-    /// ambiguous is reported with a suggested command — repair never guesses,
+    /// ambiguous is reported with a suggested command - repair never guesses,
     /// and never writes data the schemas would reject.
     ///
     /// Typical uses:
@@ -210,7 +210,7 @@ enum Commands {
         schema: bool,
         /// Set this declared task type on every task that has NONE.
         ///
-        /// An explicit migration choice — never inferred, even when only one
+        /// An explicit migration choice - never inferred, even when only one
         /// type is declared (you may be migrating gradually or keeping some
         /// tasks untyped; see also the `workflow.untyped_tasks` config ladder
         /// allow -> warn -> deny). Rejected if TYPE isn't declared in
@@ -270,7 +270,7 @@ pub fn run() -> Result<(), DynError> {
             path,
         } => {
             // Read the conflict policy and marker location from the merged
-            // file's own store (resolved via %P — see `merge_driver_store`),
+            // file's own store (resolved via %P - see `merge_driver_store`),
             // falling back to defaults so a merge never fails merely for lack
             // of config.
             let store = merge_driver_store(&path);
@@ -300,13 +300,13 @@ pub fn run() -> Result<(), DynError> {
         // invalid, so it resolves the store without the validation gate.
         Commands::Resolve { force } => cmd_resolve(&FileStore::discover()?, force),
 
-        // Config viewing/editing must also bypass the validation gate — otherwise
+        // Config viewing/editing must also bypass the validation gate - otherwise
         // a bad hand-edit (e.g. keep_events below the floor) would lock you out of
         // the very command that fixes it. `set` validates the *result* itself.
         Commands::Config { action } => cmd_config(&FileStore::discover()?, action),
 
         // Repair is the format/data fixer, so it bypasses the format gate (but
-        // still needs a valid config — migrations and schema fixes read it).
+        // still needs a valid config - migrations and schema fixes read it).
         Commands::Repair {
             migrate,
             schema,
@@ -315,7 +315,7 @@ pub fn run() -> Result<(), DynError> {
         } => {
             let store = FileStore::discover()?;
             enforce_config(store.config())?;
-            // v1 repair can't read a pre-1.0 store either — refuse rather than
+            // v1 repair can't read a pre-1.0 store either - refuse rather than
             // load-and-rewrite it (which would drop the legacy edges).
             refuse_if_legacy(&store)?;
             cmd_repair(
@@ -342,7 +342,7 @@ pub fn run() -> Result<(), DynError> {
 
 /// Print (never fail on) the SCM health warning before every store-backed
 /// command: an unregistered merge driver in this clone, missing `.gitattributes`
-/// entries, or an unsupported SCM — each pointing at its remedy. Warning-only,
+/// entries, or an unsupported SCM - each pointing at its remedy. Warning-only,
 /// unlike the enforce gates: the store itself is healthy, the clone's merge
 /// protection is what's incomplete, and a warning per command nags exactly until
 /// someone runs `ta init`.
@@ -353,7 +353,7 @@ fn warn_scm_health(store: &FileStore) {
 }
 
 /// The store owning the file a merge driver was invoked on. Git runs drivers
-/// at the repo root and passes `%P`, the merged file's repo-relative path —
+/// at the repo root and passes `%P`, the merged file's repo-relative path -
 /// its parent IS the store dir, so resolving via `%P` finds a store NESTED in
 /// a subdirectory, which walk-up discovery from the repo root cannot.
 /// Discovery remains the fallback for unusual invocations (e.g. an empty `%P`
@@ -374,7 +374,7 @@ fn enforce_config(cfg: &Config) -> Result<(), DynError> {
 
 /// Refuse a normal command if the store is in an older on-disk format, pointing
 /// at `ta repair --migrate` rather than mis-reading or silently rewriting legacy
-/// data. Detection only — `repair` bypasses this and does the migration.
+/// data. Detection only - `repair` bypasses this and does the migration.
 fn enforce_format(store: &FileStore) -> Result<(), DynError> {
     refuse_if_legacy(store)?;
     let snap = crate::migrate::Snapshot {
@@ -383,7 +383,7 @@ fn enforce_format(store: &FileStore) -> Result<(), DynError> {
     };
     if let Some(reason) = crate::migrate::pending(&snap, store.config()) {
         return Err(format!(
-            "{reason}. The store is in an older on-disk format — run \
+            "{reason}. The store is in an older on-disk format - run \
              `ta repair --migrate` to update it."
         )
         .into());
@@ -393,7 +393,7 @@ fn enforce_format(store: &FileStore) -> Result<(), DynError> {
 
 /// Refuse a store written in a PRE-1.0 on-disk format (the read shims are gone,
 /// so reading it would silently drop its legacy edges), pointing at the last
-/// 0.x's `ta repair --migrate`. Shared by the format gate and `repair` — unlike
+/// 0.x's `ta repair --migrate`. Shared by the format gate and `repair` - unlike
 /// the v1.0+ migrations, `repair` can't fix a pre-1.0 store either.
 fn refuse_if_legacy(store: &FileStore) -> Result<(), DynError> {
     if let Some(reason) = store.detect_legacy_format()? {
@@ -468,7 +468,7 @@ pub(crate) fn replay(
     Engine::materialize_state(baseline, mutations, &w.done_status)
 }
 
-/// Render a read's [`Warning`](crate::action::Warning)s to stderr — the CLI's
+/// Render a read's [`Warning`](crate::action::Warning)s to stderr - the CLI's
 /// presentation of the data [`crate::action::read`] returns. Never blocks the
 /// read; the nonconformance warning is already gated (by config) in the action.
 pub(crate) fn print_warnings(warnings: &[crate::action::Warning]) {
@@ -476,14 +476,14 @@ pub(crate) fn print_warnings(warnings: &[crate::action::Warning]) {
     for warning in warnings {
         match warning {
             Warning::Orphans(n) => eprintln!(
-                "taska: warning: {n} orphaned event(s) in the log (no matching task) — \
+                "taska: warning: {n} orphaned event(s) in the log (no matching task) - \
                  run `ta resolve` to clean them up."
             ),
             Warning::NonConformance(report) => {
                 if let Some(example) = report.first() {
                     eprintln!(
                         "taska: warning: {} task(s) do not conform to their task-type schema \
-                         (e.g. {example}) — `ta config validate` lists them, `ta repair \
+                         (e.g. {example}) - `ta config validate` lists them, `ta repair \
                          --schema` applies the lossless fixes; writes to such a task must bring \
                          it into conformance. Silence with `workflow.warn_nonconforming = false`.",
                         report.len()
@@ -501,7 +501,7 @@ pub(crate) fn print_warnings(warnings: &[crate::action::Warning]) {
 /// Values follow the same rules either way: parsed as JSON, falling back to a
 /// plain string (so `status=open` stays a string, `priority=3` becomes a number);
 /// a value of `@PATH` is read from that file and `@-` from stdin (verbatim, one
-/// trailing newline trimmed) — the way to pass long or shell-hostile text without
+/// trailing newline trimmed) - the way to pass long or shell-hostile text without
 /// fighting argv quoting; `@@text` escapes to the literal `@text`.
 pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
     let mut ops = FieldOps {
@@ -540,7 +540,7 @@ pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
             '+' => ops.append.push((key.to_string(), value)),
             '-' => ops.subtract.push((key.to_string(), value)),
             _ => {
-                // The verbatim token is kept for SET values only — it backs the
+                // The verbatim token is kept for SET values only - it backs the
                 // declared-string coercion, which never applies to operands.
                 if !val.starts_with('@') {
                     ops.raw
@@ -569,7 +569,7 @@ fn field_value(key: &str, val: &str) -> Result<Value, DynError> {
         std::fs::read_to_string(src)
             .map_err(|e| format!("cannot read `{src}` for field `{key}`: {e}"))?
     };
-    // Trim a single trailing newline (`\n` or `\r\n`) — files almost always have
+    // Trim a single trailing newline (`\n` or `\r\n`) - files almost always have
     // one and it's rarely wanted in a field value.
     if content.ends_with('\n') {
         content.pop();

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 04-undo.sh — reversing the last event(s) safely, committed vs uncommitted.
+# 04-undo.sh - reversing the last event(s) safely, committed vs uncommitted.
 #
 # 'ta undo' has two paths, chosen by whether the undone events are git-committed:
 #   - uncommitted  -> truncate the log's tail (they were never shared).
@@ -24,7 +24,7 @@ run ta show deploy
 say "Undo it. Because that last event was never committed, undo simply TRUNCATES it."
 say "(--force skips the y/N confirmation, so this runs unattended.)"
 run ta undo --force
-say "status is back to open — the uncommitted Update is gone:"
+say "status is back to open - the uncommitted Update is gone:"
 run ta show deploy
 
 # -------------------------------------------------------------------------
@@ -60,13 +60,13 @@ say "Here we pipe 'n' to decline, so it changes nothing (and won't hang unattend
 run ta update deploy status=open
 # Feed 'n' so the prompt is answered even with no TTY; the decline is expected.
 echo n | run ta undo || true
-say "Declined — the status=open edit is still in place:"
+say "Declined - the status=open edit is still in place:"
 run ta show deploy
 
 # -------------------------------------------------------------------------
 # --remove: the DANGEROUS truncate-committed path.
 # -------------------------------------------------------------------------
-say "'--remove' forces truncation even of COMMITTED events — rewriting shared history."
+say "'--remove' forces truncation even of COMMITTED events - rewriting shared history."
 say "Commit first so the event is committed, then watch the loud DANGER warning."
 run git commit -q -am "commit before --remove"
 run ta undo --remove --force || true

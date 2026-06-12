@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 07-compaction.sh — folding old events into the baseline snapshot.
+# 07-compaction.sh - folding old events into the baseline snapshot.
 #
 # The log is append-only, so it grows forever. 'ta compact' folds the OLD prefix
 # into a baseline.jsonl snapshot, keeping only the most recent events in the log
@@ -37,6 +37,6 @@ run ta compact
 say "Now the log holds the 100 retained events and the baseline holds the 20 folded ones."
 run log_sizes
 
-say "Task state is unchanged — compaction is invisible to what you see. All 120 are still here."
+say "Task state is unchanged - compaction is invisible to what you see. All 120 are still here."
 run task_count
 say "Compaction keeps the log small while preserving every task and enough history to merge."

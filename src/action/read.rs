@@ -1,7 +1,7 @@
 //! The frontend-agnostic READ pipeline.
 //!
 //! Materializes a store into display-ready task state, surfacing non-fatal
-//! conditions as [`Warning`] DATA rather than printing them — the frontend
+//! conditions as [`Warning`] DATA rather than printing them - the frontend
 //! decides whether that's a stderr line, a TUI status bar, or nothing at all.
 
 use std::collections::HashMap;
@@ -25,7 +25,7 @@ pub struct Session {
 /// A non-fatal condition a read surfaced, carrying the DATA a frontend needs to
 /// render its own message.
 pub enum Warning {
-    /// `n` events in the log target a task that doesn't exist — a dropped
+    /// `n` events in the log target a task that doesn't exist - a dropped
     /// `Create` (merge removal-union, a revert, or a hand edit). Cleared by the
     /// `resolve` action.
     Orphans(usize),
@@ -42,7 +42,7 @@ pub enum Warning {
 /// declared defaults are substituted; computed timestamps are injected under
 /// their configured names; and canonical storage keys are renamed to their
 /// display names. This is the inverse of the write-side canonicalization, and
-/// every frontend reads through it — so columns/filters/sort see display names
+/// every frontend reads through it - so columns/filters/sort see display names
 /// while the log keeps canonical keys, which is what makes the names freely
 /// renamable in config.
 pub fn read(store: &impl EventStore) -> Result<Session, DynError> {
@@ -67,7 +67,7 @@ pub fn read(store: &impl EventStore) -> Result<Session, DynError> {
     }
 
     // Missing/invalid declared fields READ as their declared default (after the
-    // warning above, so the report reflects the stored truth) — display-only,
+    // warning above, so the report reflects the stored truth) - display-only,
     // like everything below.
     substitute_schema_defaults(&mut state, config);
 

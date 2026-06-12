@@ -1,4 +1,4 @@
-//! `ta` — taska binary entrypoint.
+//! `ta` - taska binary entrypoint.
 
 #![warn(
     clippy::all,

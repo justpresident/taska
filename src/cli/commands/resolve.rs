@@ -1,4 +1,4 @@
-//! `ta resolve` — clear a surfaced merge conflict and prune orphaned events.
+//! `ta resolve` - clear a surfaced merge conflict and prune orphaned events.
 //!
 //! The data work (parsing the marker, finding orphans, clearing/pruning) lives in
 //! [`crate::action::resolve`]; this file renders the report and runs the confirm.
@@ -14,7 +14,7 @@ use crate::storage::FileStore;
 /// The deterministic merge is already written to the log by the driver, so the
 /// conflict step only acknowledges the conflicts and removes the marker; per-field
 /// resolution is future work. The orphan step prunes events that apply to nothing
-/// (a dropped `Create` left their target missing) — state-neutral, but confirmed
+/// (a dropped `Create` left their target missing) - state-neutral, but confirmed
 /// first. With neither a marker nor an orphan, there is nothing to do.
 pub fn cmd_resolve(store: &FileStore, force: bool) -> Result<(), DynError> {
     let resolution = plan(store)?;

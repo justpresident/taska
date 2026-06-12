@@ -1,4 +1,4 @@
-//! `ta config get|set|list` — view or change `.taska/config.toml` by dotted key.
+//! `ta config get|set|list` - view or change `.taska/config.toml` by dotted key.
 //!
 //! The data work (resolving keys, flattening, validating, the comment-preserving
 //! file edit) lives in [`crate::action::config`]; this file is the clap surface
@@ -35,7 +35,7 @@ pub fn cmd_config(store: &FileStore, action: ConfigAction) -> Result<(), DynErro
 
 /// Validate the effective config against the materialized task graph, reporting
 /// every problem found (or confirming it's clean). Schema NON-conformance of
-/// existing tasks is listed as warnings, not errors — grandfathered data is
+/// existing tasks is listed as warnings, not errors - grandfathered data is
 /// read-tolerated by design.
 fn cmd_config_validate(store: &FileStore) -> Result<(), DynError> {
     let report = crate::action::config::validate(store)?;
@@ -47,7 +47,7 @@ fn cmd_config_validate(store: &FileStore) -> Result<(), DynError> {
         println!("Config OK ({} task(s) checked).", report.task_count);
     } else {
         println!(
-            "Config OK ({} task(s) checked; {} not conforming to their task-type schema — \
+            "Config OK ({} task(s) checked; {} not conforming to their task-type schema - \
              writes to those tasks must bring them into conformance).",
             report.task_count,
             report.nonconformance.len()

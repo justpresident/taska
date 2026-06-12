@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 02-dependencies.sh — dependency edges, 'ta list --ready', and unblocking.
+# 02-dependencies.sh - dependency edges, 'ta list --ready', and unblocking.
 source "$(dirname "$0")/lib.sh"
 
 fresh_repo
@@ -21,13 +21,13 @@ say "'ta show' surfaces a task's relationships both ways: deploy-api depends on 
 run ta show deploy-api
 
 say "'ta list --ready' shows only NOT-done tasks whose dependencies are all done."
-say "Right now only migrate-db is actionable — the others are blocked."
+say "Right now only migrate-db is actionable - the others are blocked."
 run ta list --ready
 
 say "Close the migration (status=closed is the configured 'done' value)."
 run ta update migrate-db status=closed
 
-say "deploy-api now unblocks — its only dependency is done. smoke-test still waits on deploy-api."
+say "deploy-api now unblocks - its only dependency is done. smoke-test still waits on deploy-api."
 run ta list --ready
 
 say "Dependencies form a DAG; 'ta list --ready' walks it and surfaces exactly what you can start now."

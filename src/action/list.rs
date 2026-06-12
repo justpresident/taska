@@ -4,7 +4,7 @@
 //! `!~` their negations, `>`/`>=`/`<`/`<=` ordering), applies the
 //! `--open`/`--ready` shortcuts, injects the graph-computed columns a query
 //! references, and returns the matching tasks ordered by the query's sort
-//! column — rendering is the frontend's job.
+//! column - rendering is the frontend's job.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -31,7 +31,7 @@ pub struct ListQuery<'a> {
     /// the graph-computed columns (`unblocks`/`blocked_by`/`subtasks`), so they
     /// cost nothing unless referenced. Criterion fields are added automatically.
     pub display_columns: &'a [String],
-    /// The column to order by, ascending (`id` tiebreak, missing values last —
+    /// The column to order by, ascending (`id` tiebreak, missing values last -
     /// see [`task_cmp`]). May be `id`, `deps`, a custom field, or an injected
     /// computed column.
     pub sort: &'a str,
@@ -136,10 +136,10 @@ enum Matcher {
     Ne(Value),
     Re(regex::Regex),
     NotRe(regex::Regex),
-    /// An ordering comparison (`op` ∈ `Gt`/`Ge`/`Lt`/`Le`) of the field's value
+    /// An ordering comparison (`op` in `Gt`/`Ge`/`Lt`/`Le`) of the field's value
     /// against the JSON-coerced query, via the shared [`cmp_json`] order. The
     /// comparison only holds when the two share a comparable type (both numbers,
-    /// strings, or bools) — a cross-type compare never matches.
+    /// strings, or bools) - a cross-type compare never matches.
     Cmp(FilterOp, Value),
 }
 
@@ -186,10 +186,10 @@ fn inverse_index(
 
 impl Criterion {
     /// Whether `task` satisfies this criterion. A field offers zero or more
-    /// candidate values (absent→none, a scalar→one, a multi-valued field — a
-    /// set/array, `deps`, a relationship type — one per element). The positive
+    /// candidate values (absent->none, a scalar->one, a multi-valued field - a
+    /// set/array, `deps`, a relationship type - one per element). The positive
     /// forms (`=`/`=~`/comparisons) pass if ANY candidate matches; the negated
-    /// forms (`!=`/`!~`) are their logical NOT, so they pass when NONE does — and
+    /// forms (`!=`/`!~`) are their logical NOT, so they pass when NONE does - and
     /// thus also when the field is empty or absent.
     fn matches(&self, task: &TaskState, ctx: &FilterCtx) -> bool {
         let values = field_values(task, &self.field, ctx);
@@ -237,8 +237,8 @@ fn cmp_holds(op: FilterOp, v: &Value, q: &Value) -> bool {
 /// The JSON value(s) a field offers for matching: the `id`; each relationship
 /// target under ANY type (`deps`); a declared relationship type or inverse name
 /// (the edge targets of that type, resp. the tasks whose edge of that type points
-/// here — a symmetric type is both, so both directions union); or a custom
-/// field's value — flattened to one candidate PER ELEMENT when it's an array
+/// here - a symmetric type is both, so both directions union); or a custom
+/// field's value - flattened to one candidate PER ELEMENT when it's an array
 /// (a `set`/`array` field), the whole value when it's a scalar, none when absent.
 /// So every multi-valued field (custom array, `deps`, relationship type) matches
 /// element-wise alike. Relationship names are reserved as field names, so the
@@ -345,7 +345,7 @@ fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
         }
         return Ok((&raw[..i], op, &raw[i + len..]));
     }
-    // A bare `~` was the old regex spelling — point it at `=~`.
+    // A bare `~` was the old regex spelling - point it at `=~`.
     if raw.contains('~') {
         return Err(format!(
             "invalid criterion `{raw}`: the regex match operator is `=~` (e.g. `field=~regex`), its negation `!~`; a bare `~` is not an operator"
@@ -358,7 +358,7 @@ fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
     .into())
 }
 
-/// Coerce a query string as JSON, falling back to a plain string — the same
+/// Coerce a query string as JSON, falling back to a plain string - the same
 /// coercion `create`/`update` apply, so `priority=3` matches the number 3.
 fn json_or_string(raw: &str) -> Value {
     serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::String(raw.to_string()))
@@ -450,7 +450,7 @@ mod tests {
                 ("priority", serde_json::json!(3)),
                 ("title", serde_json::json!("api server")),
                 ("created", serde_json::json!("2026-06-05")),
-                // A composite (set/array) field value — one whole candidate.
+                // A composite (set/array) field value - one whole candidate.
                 ("scores", serde_json::json!([3, 8])),
             ],
         );
@@ -489,11 +489,11 @@ mod tests {
         assert!(!matches("priority<3"));
 
         // A cross-type compare never matches (number field vs string query, and
-        // vice versa) — rather than ranking number-before-string.
+        // vice versa) - rather than ranking number-before-string.
         assert!(!matches("priority>=x"), "number field vs string query");
         assert!(!matches("title>=3"), "string field vs number query");
 
-        // String/date fields order lexicographically — which is chronological for
+        // String/date fields order lexicographically - which is chronological for
         // RFC 3339 / ISO dates.
         assert!(matches("created>=2026-06-01"));
         assert!(matches("created<2026-07-01"));
@@ -516,7 +516,7 @@ mod tests {
     #[test]
     fn multivalued_fields_match_any_element() {
         // A custom array/set field flattens to one candidate per element, so every
-        // operator works on membership — uniformly with `deps`/relationship fields.
+        // operator works on membership - uniformly with `deps`/relationship fields.
         let t = task(
             "api",
             &[],

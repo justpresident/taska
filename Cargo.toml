@@ -30,7 +30,7 @@ path = "src/lib.rs"
 name = "ta"
 path = "src/main.rs"
 
-# No-dependency perf harness (plain `main()`, std timing — no criterion).
+# No-dependency perf harness (plain `main()`, std timing - no criterion).
 [[bench]]
 name = "perf"
 harness = false
@@ -48,7 +48,7 @@ regex = "1"
 fd-lock = "4.0"
 clap = { version = "4.4", features = ["derive"] }
 
-# Unix-only: reset SIGPIPE to default in `main` so `ta … | head` terminates
+# Unix-only: reset SIGPIPE to default in `main` so `ta ... | head` terminates
 # cleanly instead of panicking in the print macros (which ignore SIGPIPE).
 # Already in the dependency tree transitively; this only makes it direct.
 [target.'cfg(unix)'.dependencies]

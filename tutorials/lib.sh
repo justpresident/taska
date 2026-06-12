@@ -1,4 +1,4 @@
-# tutorials/lib.sh — shared helpers for the taska tutorial scripts.
+# tutorials/lib.sh - shared helpers for the taska tutorial scripts.
 #
 # Source this from every scenario script:
 #
@@ -40,12 +40,12 @@ if ! command -v ta >/dev/null 2>&1; then
   exit 1
 fi
 
-# say <text...> — print a line of narration in a dimmed style.
+# say <text...> - print a line of narration in a dimmed style.
 say() {
   printf '%s## %s%s\n' "$_C_DIM$_C_CYAN" "$*" "$_C_RESET"
 }
 
-# run <cmd...> — echo the command prefixed with `$ `, wait for Enter, then run
+# run <cmd...> - echo the command prefixed with `$ `, wait for Enter, then run
 # it for real so the learner sees the actual output, then print a trailing blank
 # line. The command's own exit status is preserved (returned), so a caller can
 # react to a failure. In non-interactive mode the pause is skipped.
@@ -58,7 +58,7 @@ run() {
   return $status
 }
 
-# pause — wait for the learner to press Enter to execute the shown command.
+# pause - wait for the learner to press Enter to execute the shown command.
 # Skipped (returns immediately) when stdin is not a TTY or
 # TUTORIAL_NONINTERACTIVE=1, so the scripts run unattended in tests/CI.
 pause() {
@@ -69,7 +69,7 @@ pause() {
   read -r _ || true
 }
 
-# fresh_repo — create a throwaway repo OUTSIDE the project tree and cd into it.
+# fresh_repo - create a throwaway repo OUTSIDE the project tree and cd into it.
 #
 # Using mktemp -d (which lives under $TMPDIR, not this checkout) is deliberate:
 # `ta` discovers its store by walking UP the directory tree, so running inside

@@ -1,13 +1,13 @@
 //! Schema law and the write gate: event vetting, `[task_types]` enforcement,
 //! and schema-aware value shaping.
 //!
-//! This is **domain law, not frontend code** — every frontend (the bundled
+//! This is **domain law, not frontend code** - every frontend (the bundled
 //! CLI, a TUI, a library consumer) must funnel its writes through
 //! [`vet_events`] or it can corrupt a schema'd store. Presentation stays out:
-//! nothing here prints — reports come back as data
+//! nothing here prints - reports come back as data
 //! ([`schema_conformance_report`]) for the frontend to surface its own way.
 //!
-//! Everything here implements one law — **schemas are write-time law only**:
+//! Everything here implements one law - **schemas are write-time law only**:
 //! [`vet_events`] is the gate every draft batch passes through (no-op
 //! dropping, reserved names, whole-task schema conformance), while the
 //! read side stays tolerant ([`schema_conformance_report`] reports, never
@@ -16,7 +16,7 @@
 //! shape values toward their declared kinds *before* the gate so it can stay
 //! the single enforcer. [`FieldOps`] is the frontend-neutral description of
 //! one write (a `set` map plus ordered `+=`/`-=` operand lists); how a frontend
-//! produces it — the CLI's `key=value` grammar, a TUI form — is its own business.
+//! produces it - the CLI's `key=value` grammar, a TUI form - is its own business.
 
 use std::collections::{BTreeSet, HashMap};
 use std::hash::BuildHasher;
@@ -30,7 +30,7 @@ use crate::model::{
     TASK_TYPE_KEY,
 };
 
-/// A parsed field list, split by operator — the frontend-neutral description
+/// A parsed field list, split by operator - the frontend-neutral description
 /// of one write.
 ///
 /// The CLI builds it from `key=value` / `key+=value` / `key-=value` tokens
@@ -39,12 +39,12 @@ pub struct FieldOps {
     /// Fields to **set** (`=`), values JSON-guessed. A map, so a repeated `key=`
     /// is last-wins (you're choosing the field's value).
     pub set: Map<String, Value>,
-    /// `+=` operands, in token ORDER as `(field, value)` — a list, not a map, so
+    /// `+=` operands, in token ORDER as `(field, value)` - a list, not a map, so
     /// repeated `field+=` on one field accumulate instead of overwriting
     /// (`tags+=a tags+=b` adds both). Dispatched by declared kind at write time:
     /// text append for strings/undeclared, `Add` for numeric and set fields.
     pub append: Vec<(String, Value)>,
-    /// `-=` operands, in token order as `(field, value)` — like [`append`], a
+    /// `-=` operands, in token order as `(field, value)` - like [`append`], a
     /// list so repeated `field-=` accumulate. Numeric subtract or set-element
     /// removal; requires a declared numeric/set field.
     ///
@@ -52,20 +52,20 @@ pub struct FieldOps {
     pub subtract: Vec<(String, Value)>,
     /// The verbatim inline token text per SET key (always `Value::String`).
     /// Schema-aware coercion uses it to recover exact input the JSON guess
-    /// mangles — `version=3.10` guesses the number 3.1, but a declared string
+    /// mangles - `version=3.10` guesses the number 3.1, but a declared string
     /// field wants "3.10". `@file`/`@-` values are already verbatim strings and
     /// have no entry. A `Map<String, Value>` (not strings) so the same
     /// [`canonicalize_fields`] keeps its keys aligned with `set`.
     pub raw: Map<String, Value>,
 }
 
-/// The display↔canonical field-name boundary, as `(display, canonical)` pairs.
+/// The display<->canonical field-name boundary, as `(display, canonical)` pairs.
 ///
 /// Events and the baseline always store `status`/`task_type` under their
 /// canonical keys ([`STATUS_KEY`]/[`TASK_TYPE_KEY`]); `[workflow] status_field`
 /// /`type_field` are *display* names. This is the one shared list of that
-/// mapping — the read pipeline renames canonical→display, the write side
-/// ([`canonicalize_fields`]) renames display→canonical — so renaming either in
+/// mapping - the read pipeline renames canonical->display, the write side
+/// ([`canonicalize_fields`]) renames display->canonical - so renaming either in
 /// config is free, with no data migration.
 pub const fn canonical_field_pairs(
     workflow: &crate::config::WorkflowConfig,
@@ -79,12 +79,12 @@ pub const fn canonical_field_pairs(
 /// Map a write payload's configured DISPLAY field names onto their canonical
 /// storage keys, before vetting/appending.
 ///
-/// The write-side inverse of the read pipeline's canonical→display rename, over
+/// The write-side inverse of the read pipeline's canonical->display rename, over
 /// the shared [`canonical_field_pairs`] list so the two boundaries can never
 /// disagree. Writing the canonical spelling directly while a different display
 /// name is configured is rejected: one writable name per concept per store.
 /// **Every frontend funnels its writes through this** (then [`vet_events`]) so
-/// the log stays canonical regardless of the configured display names — the CLI
+/// the log stays canonical regardless of the configured display names - the CLI
 /// is one caller, not the owner.
 pub fn canonicalize_fields(
     fields: &mut Map<String, Value>,
@@ -112,7 +112,7 @@ pub fn canonicalize_fields(
 ///
 /// Renames each pair's display key to its canonical storage key in place
 /// (preserving order and repeats), with the same "don't write the canonical
-/// spelling directly" rejection — so a renamed `state+=x` hits the same
+/// spelling directly" rejection - so a renamed `state+=x` hits the same
 /// single-valued-status rejection `status+=x` does. For
 /// [`FieldOps::append`]/[`subtract`].
 ///
@@ -146,7 +146,7 @@ pub fn canonicalize_field_pairs(
 ///
 /// A line reads `task `id`: first violation (+N more)`. Empty while schemas
 /// are off. Shared by the CLI's one-line read warning and `ta config
-/// validate`'s detailed listing — reads stay tolerant (this is a report,
+/// validate`'s detailed listing - reads stay tolerant (this is a report,
 /// never an error), while any WRITE to such a task must bring it into
 /// conformance (the whole-task gate).
 pub fn schema_conformance_report<S: BuildHasher>(
@@ -159,7 +159,7 @@ pub fn schema_conformance_report<S: BuildHasher>(
     let mut report: Vec<String> = state
         .values()
         .filter_map(|task| {
-            // Under `untyped_tasks = "allow"`, a typeless task is sanctioned —
+            // Under `untyped_tasks = "allow"`, a typeless task is sanctioned -
             // not reported anywhere. `warn` and `deny` both report it.
             if !task.custom_fields.contains_key(TASK_TYPE_KEY)
                 && config.workflow.untyped_tasks == crate::config::UntypedTasks::Allow
@@ -184,11 +184,11 @@ pub fn schema_conformance_report<S: BuildHasher>(
 ///
 /// Meant to run inside the store's write lock (via `EventStore::append_checked`),
 /// so the verify-then-write is atomic and can't race a concurrent writer. Rules
-/// (a rejection is a hard error — nothing in the batch is written):
+/// (a rejection is a hard error - nothing in the batch is written):
 /// - Setting a reserved/computed field name (the envelope keys, `id`/`deps`/`dep`,
 ///   the timestamp and graph columns, relationship names) is **rejected**.
-/// - `Create` of an existing id — or any op whose target task is absent (incl.
-///   `Delete`) — is **rejected**, as is an `AddEdge` to itself or to a missing
+/// - `Create` of an existing id - or any op whose target task is absent (incl.
+///   `Delete`) - is **rejected**, as is an `AddEdge` to itself or to a missing
 ///   target.
 /// - An `Update` keeps only the fields that actually change (a value already
 ///   equal, or a `null`-unset of an already-absent field, is dropped); an
@@ -198,7 +198,7 @@ pub fn schema_conformance_report<S: BuildHasher>(
 /// - `Append` (`+=`) never lands on a no-op, but is rejected on the single-valued
 ///   status and task-type fields.
 /// - Finally, [`enforce_schemas`] validates every touched task's RESULTING
-///   field set against its `[task_types]` schema — whole-task, every
+///   field set against its `[task_types]` schema - whole-task, every
 ///   violation in one error.
 pub fn vet_events<S: BuildHasher>(
     drafts: &[MutationEvent],
@@ -208,7 +208,7 @@ pub fn vet_events<S: BuildHasher>(
     let reserved = reserved_field_names(config);
     let mut out = Vec::new();
     // The would-be RESULTING fields of every task a surviving field-carrying
-    // draft touches, simulated with the engine's own apply functions — the
+    // draft touches, simulated with the engine's own apply functions - the
     // schema gate validates WHOLE tasks (per the type-schemas decisions), not
     // just the drafts, so a write to a non-conforming task surfaces every
     // violation at once. `None` marks a task deleted within the batch.
@@ -216,7 +216,7 @@ pub fn vet_events<S: BuildHasher>(
     for draft in drafts {
         let id = draft.task_id.as_str();
         // A field whose value is computed/injected (id, deps, the timestamp and
-        // graph columns, relationship names) can't be set directly — a user value
+        // graph columns, relationship names) can't be set directly - a user value
         // of the same name is silently shadowed. Applies to ops carrying fields.
         if matches!(
             draft.op,
@@ -233,7 +233,7 @@ pub fn vet_events<S: BuildHasher>(
             OpType::Create => {
                 if state.contains_key(id) {
                     return Err(format!(
-                        "task `{id}` already exists (use `ta update {id} …` to change it)"
+                        "task `{id}` already exists (use `ta update {id} ...` to change it)"
                     )
                     .into());
                 }
@@ -278,7 +278,7 @@ pub fn vet_events<S: BuildHasher>(
                 let mut fields = preview_entry(&mut preview, id, task);
                 crate::engine::apply_append(&mut fields, draft.payload.clone());
                 preview.insert(id.to_string(), Some(fields));
-                out.push(draft.clone()); // appends accumulate — never a no-op
+                out.push(draft.clone()); // appends accumulate - never a no-op
             }
             OpType::Add | OpType::Remove => {
                 let task = require_existing(state, id)?;
@@ -321,7 +321,7 @@ pub fn vet_events<S: BuildHasher>(
 
 /// The `Add`/`Remove` arm of [`vet_events`]: reject accumulating into a
 /// single-valued field, apply onto the preview with the engine's own
-/// semantics, and report whether anything changed — an accumulate that changes
+/// semantics, and report whether anything changed - an accumulate that changes
 /// nothing (inserting a present set element, removing an absent one, adding 0)
 /// is dropped rather than logged.
 fn vet_accumulate(
@@ -394,7 +394,7 @@ pub fn schema_default_stamps(
 ///
 /// A declared field that is MISSING or whose stored value is invalid (wrong
 /// kind or constraint-violating) reads as its declared `default`. The stored
-/// log/baseline are untouched — the non-conformance report and `ta repair
+/// log/baseline are untouched - the non-conformance report and `ta repair
 /// --schema` remain the signals to actually fix the data. Runs on RAW state,
 /// before the display renames.
 pub fn substitute_schema_defaults<S: BuildHasher>(
@@ -465,7 +465,7 @@ fn enforce_schemas(
     for (id, fields) in preview {
         let Some(fields) = fields else { continue };
         // The untyped-tasks policy: under `allow`/`warn`, a task with NO type
-        // is outside the schemas — writes proceed unvalidated (the migration
+        // is outside the schemas - writes proceed unvalidated (the migration
         // ladder's lax rungs). Only `deny` makes the type mandatory here.
         if !fields.contains_key(TASK_TYPE_KEY)
             && config.workflow.untyped_tasks != crate::config::UntypedTasks::Deny
@@ -486,7 +486,7 @@ fn enforce_schemas(
 
 /// The stored key a DECLARED schema field name refers to.
 ///
-/// Declarations use display names, storage is canonical — only the status
+/// Declarations use display names, storage is canonical - only the status
 /// field differs (the discriminator can't be declared; `Config::validate`
 /// enforces both rules).
 pub fn declared_field_key<'a>(name: &'a str, status_display: &str) -> &'a str {
@@ -596,15 +596,15 @@ fn schema_violations(fields: &Map<String, Value>, config: &Config) -> Vec<String
 /// Schema-aware value coercion for `Create`/`Update` payloads, run under the
 /// store lock (where the task's type is known) just before [`vet_events`].
 ///
-/// Best-effort lifting toward each DECLARED field's kind — the write gate
+/// Best-effort lifting toward each DECLARED field's kind - the write gate
 /// stays the enforcer with its messages:
 /// - declared string: a guessed scalar reverts to its verbatim token (`raw`)
 ///   or stringifies, so `version=3.10` stores `"3.10"`, not the number 3.1;
 /// - declared int/uint/float: a (quoted) numeric string parses to a number;
 /// - declared bool: the strings "true"/"false" parse;
 /// - declared array<T>/set<T>: a bare scalar lifts to a singleton, elements
-///   coerce per T, and a set canonicalizes to its STORED form — deduped and
-///   sorted (`cmp_json` order) — so concurrent inserts converge bytewise and
+///   coerce per T, and a set canonicalizes to its STORED form - deduped and
+///   sorted (`cmp_json` order) - so concurrent inserts converge bytewise and
 ///   re-adding an element is a no-op, like relationship edges.
 ///
 /// Undeclared fields, unknown/missing types, and `Append` payloads keep the
@@ -688,8 +688,8 @@ pub fn coerce_value(
 
 /// Coerce toward `array<element>`/`set<element>`: lift a bare scalar to a
 /// singleton (its `raw` token still applies), coerce each element, and give a
-/// set its canonical stored form — sorted (`cmp_json`) and deduped (by compact
-/// JSON) — the bytewise form concurrent writers converge on.
+/// set its canonical stored form - sorted (`cmp_json`) and deduped (by compact
+/// JSON) - the bytewise form concurrent writers converge on.
 fn coerce_sequence(
     value: &Value,
     element: &crate::config::FieldKind,
@@ -724,7 +724,7 @@ pub fn build_field_events<S: BuildHasher>(
 ) -> Result<Vec<MutationEvent>, DynError> {
     let (text, add, remove) = dispatch_accumulate(id, ops, state, config)?;
     // Heal-on-write: any write to a task whose declared, DEFAULTED fields are
-    // still absent stamps them in the same Update — so `required` + `default`
+    // still absent stamps them in the same Update - so `required` + `default`
     // never blocks a write, and the task converges toward conformance.
     let mut set = ops.set.clone();
     let touched: BTreeSet<String> = text
@@ -755,8 +755,8 @@ pub fn build_field_events<S: BuildHasher>(
 /// [`dispatch_accumulate`]'s result: the `(Append, Add, Remove)` payloads.
 type AccumulatePayloads = (Map<String, Value>, Map<String, Value>, Map<String, Value>);
 
-/// Split the `+=`/`-=` maps into per-op payloads by each field's DECLARED kind
-/// — the keyboard vocabulary stays `{=, +=, -=}` while the event vocabulary
+/// Split the `+=`/`-=` maps into per-op payloads by each field's DECLARED kind.
+/// The keyboard vocabulary stays `{=, +=, -=}` while the event vocabulary
 /// dispatches:
 /// - `+=`: strings, `any`, undeclared fields, and unknown/missing types keep
 ///   the text `Append` (the schema-agnostic floor); int/uint/float and
@@ -799,7 +799,7 @@ pub(crate) fn dispatch_accumulate<S: BuildHasher>(
 
     // Repeated `field+=`/`field-=` for one field accumulate (the operands arrive
     // in token order): numbers sum, set elements gather into one operand, text
-    // joins with `\n` — each combined the SAME way replay would, so the result is
+    // joins with `\n` - each combined the SAME way replay would, so the result is
     // one event per field carrying the whole accumulation.
     let (mut text, mut add, mut remove) = (Map::new(), Map::new(), Map::new());
     for (key, operand) in &ops.append {
@@ -824,8 +824,8 @@ pub(crate) fn dispatch_accumulate<S: BuildHasher>(
             Some((kind_str, FieldKind::Array(_))) => {
                 return Err(format!(
                     "`+=` is not defined for `{key}` (declared {kind_str}, which allows \
-                     duplicates and keeps order); set the whole value with `{key}=[…]`, or \
-                     declare it set<…> for element inserts"
+                     duplicates and keeps order); set the whole value with `{key}=[...]`, or \
+                     declare it set<...> for element inserts"
                 )
                 .into());
             }
@@ -850,7 +850,7 @@ pub(crate) fn dispatch_accumulate<S: BuildHasher>(
             }
             _ => {
                 return Err(format!(
-                    "`-=` needs a field declared as a number or set<…> (`{key}` isn't)"
+                    "`-=` needs a field declared as a number or set<...> (`{key}` isn't)"
                 )
                 .into());
             }
@@ -886,8 +886,8 @@ fn extend_array(map: &mut Map<String, Value>, key: &str, operand: Value) {
 }
 
 /// Join a text `+=` operand into a per-field accumulator: a single operand is
-/// stored as-is, repeated ones join with `\n` — the same separator replay's
-/// `Append` uses — so `notes+=a notes+=b` becomes one `Append` of "a\nb".
+/// stored as-is, repeated ones join with `\n` - the same separator replay's
+/// `Append` uses - so `notes+=a notes+=b` becomes one `Append` of "a\nb".
 fn append_into_text(map: &mut Map<String, Value>, key: &str, operand: &Value) {
     use crate::engine::append_text;
     match map.get(key) {
@@ -902,7 +902,7 @@ fn append_into_text(map: &mut Map<String, Value>, key: &str, operand: &Value) {
 }
 
 /// The full set of field names the write gate refuses: the static
-/// [`RESERVED_FIELD_KEYS`] plus the config-dependent computed/injected names —
+/// [`RESERVED_FIELD_KEYS`] plus the config-dependent computed/injected names -
 /// the configured timestamp columns and the relationship type names + inverses
 /// (which `show` surfaces and `ta dep` edits). A user field with any of these
 /// names would be silently shadowed at read time, so meaningless and invisible.
@@ -929,7 +929,7 @@ fn reserved_field_names(config: &Config) -> BTreeSet<String> {
     names
 }
 
-/// The task `id` in `state`, or an error if it doesn't exist — so a mutation
+/// The task `id` in `state`, or an error if it doesn't exist - so a mutation
 /// against a typo'd/absent task is rejected at write time rather than becoming a
 /// silent orphan. (Replay still tolerates orphans from merges/reverts.)
 fn require_existing<'a, S: BuildHasher>(
@@ -987,7 +987,7 @@ mod tests {
         assert!(!fields.contains_key("state"), "display key consumed");
 
         // Writing the canonical spelling directly is rejected while a different
-        // display name is configured — one writable name per concept.
+        // display name is configured - one writable name per concept.
         let mut direct = Map::new();
         direct.insert(STATUS_KEY.to_string(), serde_json::json!("x"));
         let err = canonicalize_fields(&mut direct, &renamed).unwrap_err();
@@ -1363,7 +1363,7 @@ required = true
     fn schema_gate_resolves_renamed_status_display_name() {
         use crate::test_support::{state, task};
         // The schema declares the status under its DISPLAY name `state`; the
-        // stored key is canonical `status` — the gate must match them up.
+        // stored key is canonical `status` - the gate must match them up.
         let config: Config = toml::from_str(
             r#"
 [workflow]

@@ -1,4 +1,4 @@
-//! `ta delete` — remove a task via the shared write path.
+//! `ta delete` - remove a task via the shared write path.
 
 use crate::error::DynError;
 use crate::storage::EventStore;

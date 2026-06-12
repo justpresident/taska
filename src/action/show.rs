@@ -23,7 +23,7 @@ pub struct ShowOutcome {
 /// Materialize the store and return one task by id.
 ///
 /// The INVERSE edges of other tasks pointing here are surfaced as ordinary array
-/// fields under their configured inverse names — the task's own forward edges
+/// fields under their configured inverse names - the task's own forward edges
 /// already live in `deps`, grouped by type, so they're not duplicated here.
 pub fn show(store: &impl EventStore, id: &str) -> Result<ShowOutcome, DynError> {
     let session = read(store)?;
@@ -47,7 +47,7 @@ pub fn show(store: &impl EventStore, id: &str) -> Result<ShowOutcome, DynError> 
 ///
 /// For every OTHER task with an edge pointing at `id`, that edge's configured
 /// `inverse` name (an empty inverse is one-way and not surfaced). Keyed by
-/// display name → sorted owner ids.
+/// display name -> sorted owner ids.
 pub fn inverse_edges<S: BuildHasher>(
     state: &HashMap<String, TaskState, S>,
     id: &str,

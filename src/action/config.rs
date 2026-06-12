@@ -3,8 +3,8 @@
 //!
 //! `get`/`list` are pure functions of a [`Config`]; `validate` checks it against
 //! the materialized graph; `set` edits the file in place (preserving comments via
-//! `toml_edit`) and rejects an invalid result. Rendering — the git-config display
-//! form — is the frontend's job; these return values and reports.
+//! `toml_edit`) and rejects an invalid result. Rendering - the git-config display
+//! form - is the frontend's job; these return values and reports.
 
 use crate::action::{materialize, read, Warning};
 use crate::config::Config;
@@ -45,7 +45,7 @@ pub struct ValidateReport {
 
 /// Validate the effective config against the materialized task graph.
 ///
-/// Schema NON-conformance of existing tasks is reported (not errored) —
+/// Schema NON-conformance of existing tasks is reported (not errored) -
 /// grandfathered data is read-tolerated, and erroring here would block declaring
 /// a schema over an existing store at all. The conformance check runs on RAW
 /// state (canonical keys, no injected timestamps) so the display view can't skew
@@ -129,7 +129,7 @@ fn flatten(prefix: &str, v: &toml::Value, out: &mut Vec<(String, toml::Value)>) 
 
 /// Coerce a CLI string into a TOML value using TOML's own value grammar (so
 /// `100` becomes an integer, `true` a bool, `["a","b"]` an array, `"x"` a
-/// string). A bare word that isn't valid TOML — e.g. `open` — falls back to a
+/// string). A bare word that isn't valid TOML - e.g. `open` - falls back to a
 /// string, matching how `create`/`update` coerce field values.
 fn parse_config_value(raw: &str) -> toml_edit::Value {
     format!("__x__ = {raw}")
@@ -173,7 +173,7 @@ fn set_dotted(
     }
     let mut item = toml_edit::Item::Value(value);
     // Replacing an existing value: carry its decor over (the spacing inside an
-    // inline table), and swap the item IN PLACE — `insert` would re-create the
+    // inline table), and swap the item IN PLACE - `insert` would re-create the
     // key and silently drop the comment attached to it.
     if let Some(old) = table.get(last).and_then(toml_edit::Item::as_value) {
         if let Some(new) = item.as_value_mut() {
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn set_dotted_descends_into_inline_tables() {
         // The template styles column_max_width and the relationship defs as
-        // inline tables — a dotted set must walk INTO them (table-like, not
+        // inline tables - a dotted set must walk INTO them (table-like, not
         // table-only) and keep the inline style.
         let mut doc = "[display]\ncolumn_max_width = { title = 80 }\n\
                        [relationships]\ndepends_on = { kind = \"blocker\", inverse = \"blocks\" }\n"

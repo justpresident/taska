@@ -1,4 +1,4 @@
-//! `ta compact` — fold old events into the baseline snapshot.
+//! `ta compact` - fold old events into the baseline snapshot.
 
 use chrono::{DateTime, Utc};
 

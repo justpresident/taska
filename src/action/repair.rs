@@ -1,8 +1,8 @@
 //! `repair` action: bring a store's on-disk format (`migrate`) or its DATA
 //! (`schema`/`rename`/`set-type-if-none`) up to scratch.
 //!
-//! The schema/rename fixes rewrite log and baseline entries IN PLACE — repair is
-//! the one sanctioned non-append-only writer — and return a structured report of
+//! The schema/rename fixes rewrite log and baseline entries IN PLACE - repair is
+//! the one sanctioned non-append-only writer - and return a structured report of
 //! what changed; the frontend prints it. Fixes are deterministic functions of
 //! (store, config), so two clones that run the same repair converge bytewise, and
 //! anything ambiguous is REPORTED (in `remaining`), never guessed.
@@ -29,7 +29,7 @@ pub fn migrate(store: &impl EventStore) -> Result<Vec<(&'static str, usize)>, Dy
         return Ok(Vec::new());
     }
     // Rewrite both files in the current format. `compact` given the *full* log
-    // folds nothing — it's just a normalized rewrite (the baseline was read
+    // folds nothing - it's just a normalized rewrite (the baseline was read
     // through the format-compat path, so it's already current in memory).
     store.compact(&snap.baseline, &snap.log)?;
     Ok(report)
@@ -51,7 +51,7 @@ pub struct RenameOutcome {
 ///
 /// The rename outcome (if any), the type-backfill and lossless-fix report lines,
 /// whether anything was written, and the tasks that STILL don't conform
-/// (ambiguous — reported, not fixed).
+/// (ambiguous - reported, not fixed).
 pub struct SchemaRepairReport {
     pub rename: Option<RenameOutcome>,
     pub typed: Vec<String>,
@@ -64,7 +64,7 @@ pub struct SchemaRepairReport {
 ///
 /// `schema`/`rename`/`set-type-if-none`: rename stray columns, type the untyped
 /// where the user said to, then apply every LOSSLESS fix toward the declared
-/// schemas. Remaining violations come back in `remaining` — never guessed.
+/// schemas. Remaining violations come back in `remaining` - never guessed.
 pub fn schema(
     store: &impl EventStore,
     rename: Option<&str>,
@@ -92,7 +92,7 @@ pub fn schema(
         store.compact(&baseline, &log)?;
     }
 
-    // What remains is ambiguous by definition — report it actionably.
+    // What remains is ambiguous by definition - report it actionably.
     let state = materialize(config, &baseline, &log);
     let remaining = schema_conformance_report(&state, config);
     Ok(SchemaRepairReport {
@@ -107,13 +107,13 @@ pub fn schema(
 /// Move one field to a new name across every event payload and baseline task.
 /// The spec is assignment-style `NEW=OLD` (`severity=sev` moves `sev`'s values
 /// under `severity`), one pair per invocation. A record already carrying `new`
-/// keeps it (the stray `old` is left for a human — merging values would be a
+/// keeps it (the stray `old` is left for a human - merging values would be a
 /// guess). The destination's declared-kind coercion happens in the
 /// lossless-fix pass that always follows.
 ///
 /// The TASK-TYPE field is a legal destination (either spelling; stored under
 /// the canonical key), for migrating a de-facto discriminator column
-/// (`category=bug`) into real task types — but only records whose value names
+/// (`category=bug`) into real task types - but only records whose value names
 /// a DECLARED type convert: repair never writes data the schema would reject.
 /// The status field stays guarded (every task already carries a status, so a
 /// rename there would mostly skip-and-confuse).
@@ -142,14 +142,14 @@ fn apply_rename(
         }
         if new == crate::model::STATUS_KEY || new == workflow.status_field {
             return Err(format!(
-                "can't rename onto `{new}`: it is the status field — set it per task, \
+                "can't rename onto `{new}`: it is the status field - set it per task, \
                  not via rename"
             )
             .into());
         }
     }
     // Type destination: store the canonical key, and convert only values that
-    // name a declared type — the rest keep their old column, reported.
+    // name a declared type - the rest keep their old column, reported.
     let target = if to_type { TASK_TYPE_KEY } else { new };
     let converts = |value: &Value| -> bool {
         !to_type
@@ -198,7 +198,7 @@ fn apply_rename(
 /// `set-type-if-none`: stamp the user's chosen (declared) type onto every task
 /// that has NONE, written onto the task's first `Create` event (else the baseline
 /// task) so the log reads as if the task was always typed. An EXPLICIT migration
-/// choice — repair never infers a type, even when only one is declared.
+/// choice - repair never infers a type, even when only one is declared.
 fn backfill_type(
     log: &mut [MutationEvent],
     baseline: &mut [TaskState],
@@ -240,8 +240,8 @@ fn backfill_type(
     Ok(report)
 }
 
-/// Write a NEW field onto the record that establishes the task — its first
-/// `Create` event, else its baseline entry — so the log reads as if the field
+/// Write a NEW field onto the record that establishes the task - its first
+/// `Create` event, else its baseline entry - so the log reads as if the field
 /// was always there. Shared by the type backfill and the default stamping.
 fn stamp_new_field(
     log: &mut [MutationEvent],
@@ -267,7 +267,7 @@ fn stamp_new_field(
 /// Every deterministic, lossless VALUE fix toward the declared schemas, applied
 /// where the offending value is stored: declared-field coercions on the
 /// materialized value (numeric strings, scalars to singletons, bool strings,
-/// common date formats to RFC 3339). Tasks without a type are untouched —
+/// common date formats to RFC 3339). Tasks without a type are untouched -
 /// typing them is `set-type-if-none`'s explicit job.
 fn apply_lossless_fixes(
     log: &mut [MutationEvent],
@@ -289,7 +289,7 @@ fn apply_lossless_fixes(
             let key = crate::schema::declared_field_key(name, &config.workflow.status_field);
             let Some(value) = task.custom_fields.get(key) else {
                 // A missing REQUIRED field with a declared default is stamped
-                // (onto the establishing record, like the type backfill) — the
+                // (onto the establishing record, like the type backfill) - the
                 // deterministic half of "missing required"; without a default it
                 // stays a suggestion.
                 if schema.required() {
@@ -322,7 +322,7 @@ fn apply_lossless_fixes(
 }
 
 /// A deterministic, lossless conversion of `value` toward `kind`, or `None`
-/// (ambiguous — never guess). The schema-aware write coercions cover most of it;
+/// (ambiguous - never guess). The schema-aware write coercions cover most of it;
 /// repair adds normalizing common date formats to RFC 3339.
 fn lossless_fix(value: &Value, kind: &FieldKind, values: &[String]) -> Option<Value> {
     if let Some(coerced) = crate::schema::coerce_value(value, kind, None) {
@@ -347,7 +347,7 @@ fn lossless_fix(value: &Value, kind: &FieldKind, values: &[String]) -> Option<Va
 
 /// Rewrite the record the field's CURRENT value comes from: the latest
 /// `Create`/`Update` event carrying the key (non-null), else the baseline task.
-/// `false` when neither holds it (e.g. a value built up by appends) — such a fix
+/// `false` when neither holds it (e.g. a value built up by appends) - such a fix
 /// stays a suggestion.
 fn rewrite_field_source(
     log: &mut [MutationEvent],

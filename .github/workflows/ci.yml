@@ -55,8 +55,8 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       # cargo-llvm-cov merges the per-process .profraw files (the e2e suite spawns
-      # the `ta` binary ~2000 times) via `llvm-profdata merge --sparse` — the C++
-      # tool, streaming and memory-light — instead of tarpaulin's in-Rust merge,
+      # the `ta` binary ~2000 times) via `llvm-profdata merge --sparse` - the C++
+      # tool, streaming and memory-light - instead of tarpaulin's in-Rust merge,
       # which OOM'd on that many files. Same cobertura output for the badge below.
       - name: Generate coverage
         run: |

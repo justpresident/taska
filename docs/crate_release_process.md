@@ -1,7 +1,7 @@
 # Crate release process
 
 Publishing a new `taska` release to crates.io. Examples below use `v0.2.0` as the
-previous release tag and `v0.3.0` as the new one — substitute the real versions.
+previous release tag and `v0.3.0` as the new one - substitute the real versions.
 Get the previous tag with `git describe --tags --abbrev=0`.
 
 crates.io versions are **immutable**: once `cargo publish` succeeds you cannot
@@ -12,13 +12,13 @@ A release ships two things: the crate on crates.io (`cargo publish`, manual) and
 prebuilt `ta` binaries on the GitHub release (built by the
 `.github/workflows/release.yml` workflow, automatic). The binary workflow fires
 when you **publish** the GitHub release in the last step and never touches
-crates.io — the two halves are independent.
+crates.io - the two halves are independent.
 
 ## Pre-flight
 
 0. Be on `master`, up to date, with a clean working tree and CI green on the last
    commit. Make sure you're authenticated to crates.io (`cargo login`, or
-   `CARGO_REGISTRY_TOKEN` set) — otherwise the final publish fails after all the
+   `CARGO_REGISTRY_TOKEN` set) - otherwise the final publish fails after all the
    work.
 
 ## Review what's shipping
@@ -27,9 +27,9 @@ crates.io — the two halves are independent.
 2. Check the files that changed: `git diff v0.2.0..HEAD --name-status`.
 3. Read all the changed Rust files in full and make sure:
    - a) all code comments are correct and precise;
-   - b) all CLI commands are well documented — every supported feature is
+   - b) all CLI commands are well documented - every supported feature is
      discoverable via `--help`.
-4. **Look for opportunities to improve the code** — abstractions that can be
+4. **Look for opportunities to improve the code** - abstractions that can be
    simplified, code that can be made more readable, duplication that can be
    removed. THIS IS REALLY IMPORTANT. Ask a human if you have ideas you are not
    certain about. Commit and re-test any changes you make here before continuing.
@@ -49,7 +49,7 @@ crates.io — the two halves are independent.
    the [Keep a Changelog](https://keepachangelog.com/) format). From the
    `git log` review above, write a new section for the version, dated with today's
    date, grouping notable changes under `Added` / `Changed` / `Fixed` / `Removed`.
-   Keep it human-readable — summarize what users care about, not raw commit
+   Keep it human-readable - summarize what users care about, not raw commit
    subjects. This section is the single source of truth for the GitHub release
    notes in the last step.
    ```markdown
@@ -61,7 +61,7 @@ crates.io — the two halves are independent.
    ### Fixed
    - ...
    ```
-   (`CHANGELOG.md` ships in the published crate — `exclude` only drops `/docs`.)
+   (`CHANGELOG.md` ships in the published crate - `exclude` only drops `/docs`.)
 
 ## Bump and verify the artifact
 
@@ -69,7 +69,7 @@ crates.io — the two halves are independent.
    bump the **minor**, features/fixes bump the **patch**). Bump `version` in
    `Cargo.toml`, then run `cargo build` so `Cargo.lock` picks up the new `taska`
    version.
-8. Verify the package on a **clean** tree (do not use `--allow-dirty` — it would
+8. Verify the package on a **clean** tree (do not use `--allow-dirty` - it would
    validate a tarball containing uncommitted changes you'll never tag):
    ```bash
    cargo package --list          # eyeball the included files (note: /docs is excluded)
@@ -106,21 +106,21 @@ crates.io — the two halves are independent.
 
 13. Create a GitHub release for the tag, using the new `CHANGELOG.md` section as
     the notes. Write that section to a **temporary** scratch file at
-    `docs/release-notes-v0.3.0.md` — `docs/` keeps it out of the crate package
+    `docs/release-notes-v0.3.0.md` - `docs/` keeps it out of the crate package
     (`exclude = ["/docs"]`), but it is still a scratch file: **never commit it,
     and delete it as soon as the release exists**. Preferred (automated, via the
     `gh` CLI):
     ```bash
     gh release create v0.3.0 --title "v0.3.0" --notes-file docs/release-notes-v0.3.0.md
-    rm docs/release-notes-v0.3.0.md   # done with it — remove, don't commit
+    rm docs/release-notes-v0.3.0.md   # done with it - remove, don't commit
     ```
     If you'd rather have GitHub draft the notes from merged commits/PRs instead,
     use `--generate-notes` (no scratch file needed). If `gh` is unavailable or
-    unauthenticated, create it manually: GitHub → **Releases** → **Draft a new
-    release** → choose the existing `v0.3.0` tag → paste the changelog section →
-    **Publish release** — then delete the scratch file.
+    unauthenticated, create it manually: GitHub -> **Releases** -> **Draft a new
+    release** -> choose the existing `v0.3.0` tag -> paste the changelog section ->
+    **Publish release** - then delete the scratch file.
 
-    Publishing the release **fires the binary workflow** (next section) — that is
+    Publishing the release **fires the binary workflow** (next section) - that is
     the trigger, so the release must be *published*, not left as a draft.
 
 ## Attach the prebuilt binaries
@@ -139,10 +139,10 @@ crates.io — the two halves are independent.
     + `LICENSE`) with a sibling `.sha256`. Watch the run finish
     (`gh run watch` / Actions tab) and confirm **all six assets** (three archives
     + three checksums) are attached to the release. The binaries are stripped and
-    fat-LTO'd via `[profile.release]` in `Cargo.toml` — nothing to do per target.
+    fat-LTO'd via `[profile.release]` in `Cargo.toml` - nothing to do per target.
 
 15. **If CI is unavailable**, build the binaries by hand from the tagged tree and
-    upload them. For each target (the two macOS ones must be built on a Mac —
+    upload them. For each target (the two macOS ones must be built on a Mac -
     cross-compiling Apple targets from Linux needs Apple's SDK and is not
     supported here):
     ```bash

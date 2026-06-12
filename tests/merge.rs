@@ -356,8 +356,8 @@ fn baseline_keep_ours_merges_after_both_branches_compact() {
     );
 
     // ours' baseline is kept verbatim (the 50 folded tasks), and the log driver
-    // still reconciles the recent suffix, so every task — old, new, and feature's
-    // late `extra` — remains visible after the merge.
+    // still reconciles the recent suffix, so every task - old, new, and feature's
+    // late `extra` - remains visible after the merge.
     assert_eq!(
         rows(&dir.join(".taska/baseline.jsonl")),
         50,
@@ -372,7 +372,7 @@ fn baseline_keep_ours_merges_after_both_branches_compact() {
 #[test]
 fn reverts_converge_regardless_of_merge_direction() {
     // A git revert of the commit that ADDED some tasks must converge to the same
-    // surviving set no matter which way the branches are later merged — the merge
+    // surviving set no matter which way the branches are later merged - the merge
     // driver unions both sides' removals. We build the identical history twice and
     // merge it both directions, then assert the materialized task sets match.
     fn build(dir: &Path) {
@@ -473,7 +473,7 @@ fn revert_to_empty_log_is_handled() {
 fn merge_warns_when_one_branch_reverts_a_shared_event() {
     // main and feature share a committed task `shared`; main alone reverts it.
     // The merge reconciles (the revert wins) but must WARN that a shared event was
-    // reverted on one branch and kept on the other — not silently drop it.
+    // reverted on one branch and kept on the other - not silently drop it.
     let dir = fresh_dir("revert-warn");
     init_repo(&dir);
     ta(&dir, &["init"]);
@@ -536,7 +536,7 @@ fn concurrent_appends_merge_without_conflict() {
     ta(&dir, &["update", "log", "notes+=from feature"]);
     git(&dir, &["commit", "-aqm", "feature note"]);
 
-    // Default on_conflict=surface FAILS the merge on a real conflict — so a clean
+    // Default on_conflict=surface FAILS the merge on a real conflict - so a clean
     // merge here proves appends commute. Both entries must survive.
     git(&dir, &["checkout", "-q", "main"]);
     let m = run("git", &dir, &["merge", "feature", "-m", "merge"]);
@@ -555,7 +555,7 @@ fn concurrent_appends_merge_without_conflict() {
 #[test]
 fn nested_store_merge_honors_the_configured_conflict_policy() {
     // The store lives BELOW the repo root. Git runs the merge driver at the
-    // repo root, where walk-up discovery can't see the store — it must be
+    // repo root, where walk-up discovery can't see the store - it must be
     // located via %P (the merged file's path). Proof: the nested store
     // configures on_conflict=theirs; an unfound store would fall back to the
     // default `surface` and FAIL this merge.

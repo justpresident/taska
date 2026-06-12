@@ -46,7 +46,7 @@ fn config_get_set_list_validates_and_preserves_comments() {
         let out = run(ta_bin(), &dir, &bad);
         assert!(!out.status.success(), "`ta {}` should fail", bad.join(" "));
     }
-    // keep_events is still 500 — no rejected edit slipped through.
+    // keep_events is still 500 - no rejected edit slipped through.
     assert_eq!(
         ta(&dir, &["config", "get", "compaction.keep_events"]).trim(),
         "500"
@@ -171,7 +171,7 @@ fn renamed_status_field_is_display_only_storage_stays_canonical() {
     let out = run(ta_bin(), &dir, &["update", "t1", "state+=more"]);
     assert!(!out.status.success(), "+= on the renamed status rejected");
 
-    // Renaming AGAIN is free — the data was canonical all along.
+    // Renaming AGAIN is free - the data was canonical all along.
     ta(&dir, &["config", "set", "workflow.status_field", "phase"]);
     assert!(
         ta(&dir, &["show", "t1", "--format", "json"]).contains(r#""phase":"open""#),
@@ -185,7 +185,7 @@ fn task_type_schemas_validate_and_the_discriminator_maps_canonically() {
     init_repo(&dir);
     ta(&dir, &["init"]);
 
-    // Declare a sound schema (no enforcement yet — config layer only).
+    // Declare a sound schema (no enforcement yet - config layer only).
     let cfg_path = dir.join(".taska/config.toml");
     let mut cfg = fs::read_to_string(&cfg_path).unwrap();
     cfg.push_str(

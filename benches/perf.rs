@@ -1,4 +1,4 @@
-//! Performance harness for `taska` — run with `cargo bench`.
+//! Performance harness for `taska` - run with `cargo bench`.
 //!
 //! Deliberately dependency-free: `harness = false` in Cargo.toml makes this a
 //! plain `main()` that times operations with `std::time` and prints markdown
@@ -30,7 +30,7 @@ const DONE_STATUS: &str = "closed";
 const KEEP_EVENTS: usize = 5_000;
 const ITERS: usize = 5;
 
-/// SplitMix64 — a tiny deterministic PRNG, so "random" dependency targets are
+/// SplitMix64 - a tiny deterministic PRNG, so "random" dependency targets are
 /// reproducible run to run without a `rand` dependency.
 struct Rng(u64);
 impl Rng {
@@ -46,7 +46,7 @@ impl Rng {
     }
 }
 
-/// A synthetic log of `n` events at a given dependency density. ~¼ of the events
+/// A synthetic log of `n` events at a given dependency density. ~1/4 of the events
 /// are `Create`s; of the rest, `dep_pct`% are `AddEdge` to a random task and the
 /// remainder are `Update`s. Seqs are `1..=n`, timestamps 1s apart; the PRNG seed
 /// is fixed per `(n, dep_pct)` so the log is identical across runs.
@@ -118,7 +118,7 @@ fn bench_materialize(baseline: &[TaskState], log: &[MutationEvent]) -> Duration 
 fn fmt_dur(d: Duration) -> String {
     let us = d.as_secs_f64() * 1e6;
     if us < 1000.0 {
-        format!("{us:.0} µs")
+        format!("{us:.0} us")
     } else {
         format!("{:.1} ms", us / 1000.0)
     }
@@ -147,7 +147,7 @@ fn commas(n: usize) -> String {
 }
 
 /// Count events by kind: (creates, updates, dependency-adds). `Update`/`Append`/
-/// `RemoveDep`/`Delete` all fold into "updates" — this generator only emits the
+/// `RemoveDep`/`Delete` all fold into "updates" - this generator only emits the
 /// first three kinds anyway.
 fn op_mix(log: &[MutationEvent]) -> (usize, usize, usize) {
     let mut creates = 0;
@@ -178,8 +178,8 @@ fn write_log(path: &Path, log: &[MutationEvent]) {
 fn bench_replay() {
     // The `dep_pct` knob is the chance a *non-create* event is an `AddEdge`; the
     // "create / update / dep" column reports the resulting whole-log mix (creates
-    // are ~¼ of every log), so the composition is explicit rather than implied.
-    println!("Replay / materialize — by log size and event mix:\n");
+    // are ~1/4 of every log), so the composition is explicit rather than implied.
+    println!("Replay / materialize - by log size and event mix:\n");
     println!("| events | create / update / dep | log size | replay |");
     println!("|---|---|---|---|");
     for n in [1_000usize, 10_000, 100_000, 200_000, 500_000] {
@@ -201,7 +201,7 @@ fn bench_replay() {
 }
 
 fn bench_compaction() {
-    // Each `history` value below appears on TWO rows — the SAME set of events in
+    // Each `history` value below appears on TWO rows - the SAME set of events in
     // two storage shapes: the full log, vs a compacted store (a baseline of the
     // folded events plus the retained `keep_events` tail). Both materialize to
     // identical state; we compare on-disk size and the everyday replay time, which
@@ -210,7 +210,7 @@ fn bench_compaction() {
     let dep_pct = 20usize;
     let (c, u, d) = op_mix(&gen_log(10_000, dep_pct));
     println!(
-        "\nCompaction — the SAME history replays from a baseline + retained tail,\n\
+        "\nCompaction - the SAME history replays from a baseline + retained tail,\n\
          not the full log (keep_events={}, mix {}% / {}% / {}%):\n",
         commas(KEEP_EVENTS),
         pct(c, 10_000),
@@ -221,8 +221,8 @@ fn bench_compaction() {
     println!("|---|---|---|---|");
     for n in [100_000usize, 200_000, 500_000] {
         let log = gen_log(n, dep_pct);
-        // Measure the uncompacted replay first, in a clean heap — before the
-        // baseline is resident — so it agrees with the replay table above.
+        // Measure the uncompacted replay first, in a clean heap - before the
+        // baseline is resident - so it agrees with the replay table above.
         let cold = bench_materialize(&[], &log);
 
         let now = Utc
@@ -302,7 +302,7 @@ fn bench_merge() {
     }
     let _ = fs::remove_dir_all(&dir);
 
-    println!("\nMerge — two branches diverged from a shared ancestor:\n");
+    println!("\nMerge - two branches diverged from a shared ancestor:\n");
     println!("| scenario | events | branch log | merge |");
     println!("|---|---|---|---|");
     println!(
@@ -318,7 +318,7 @@ fn bench_merge() {
 
 /// Like `gen_log`, but every dependency-add is spread across `depends_on` and
 /// the three [`REL_TYPES`], so the per-task `relationships` BTreeMap is heavily
-/// populated — the storage this measurement targets. Edges always point to a
+/// populated - the storage this measurement targets. Edges always point to a
 /// lower-indexed task, so the graph stays acyclic and the toposort/ready paths
 /// run in full rather than bailing on a cycle.
 fn gen_rel_log(n: usize) -> Vec<MutationEvent> {
@@ -374,7 +374,7 @@ fn time_op<R>(iters: usize, mut f: impl FnMut() -> R) -> Duration {
     median(times)
 }
 
-/// `graph::blocker_edges` as a lazy iterator — produces the edges with no
+/// `graph::blocker_edges` as a lazy iterator - produces the edges with no
 /// intermediate collection, so a consumer that only iterates allocates nothing.
 fn edge_iter<'a>(
     task: &'a TaskState,
@@ -387,7 +387,7 @@ fn edge_iter<'a>(
         .flat_map(|(rel, targets)| targets.iter().map(move |t| (t.as_str(), rel.as_str())))
 }
 
-/// The same edges materialized into an inline-buffer SmallVec (≤4 edges stay on
+/// The same edges materialized into an inline-buffer SmallVec (<=4 edges stay on
 /// the stack), so a consumer can sort/index in place without a heap allocation.
 fn edge_smallvec<'a>(
     task: &'a TaskState,
@@ -429,7 +429,7 @@ fn bench_relationships() {
     }
 
     println!(
-        "\nRelationship storage — materialized state of 100,000 events ({} tasks):\n",
+        "\nRelationship storage - materialized state of 100,000 events ({} tasks):\n",
         commas(state.len())
     );
     println!("| metric | value |");
@@ -453,7 +453,7 @@ fn bench_relationships() {
 
     // Per-task blocker-edge access in a materialize-and-sort workload (what
     // `dep tree` does), to settle Vec vs SmallVec where the edges are actually
-    // collected — not just iterated. The iterate-only floor shows the work that
+    // collected - not just iterated. The iterate-only floor shows the work that
     // remains once the allocation is removed entirely.
     let floor = time_op(20, || {
         state
@@ -480,8 +480,8 @@ fn bench_relationships() {
         total
     });
 
-    // Graph traversal. toposort/ready are O(V+E) — cheap even at 25k tasks;
-    // reachability is O(V·(V+E)), so it runs over a smaller store.
+    // Graph traversal. toposort/ready are O(V+E) - cheap even at 25k tasks;
+    // reachability is O(V*(V+E)), so it runs over a smaller store.
     let order = time_op(ITERS, || {
         graph::validate_and_sort_dependencies(&state, &blockers)
     });
@@ -534,7 +534,7 @@ fn bench_relationships() {
 /// The hot graph ops discard the edge type; the only per-task type work is the
 /// blocker-membership filter inside `blocker_edges`. Compare three ways to do that
 /// filter over every task's edges: the current `BTreeSet<String>` membership; a
-/// `DepTypeId` that still maps each type *string* → id (because the materialized
+/// `DepTypeId` that still maps each type *string* -> id (because the materialized
 /// `relationships` map is string-keyed); and a "ceiling" where edges are already
 /// stored as `(DepTypeId, target)` so the filter is integer-only.
 fn bench_dep_type_id(state: &HashMap<String, TaskState>, blockers: &BTreeSet<String>) {
@@ -593,7 +593,7 @@ fn bench_dep_type_id(state: &HashMap<String, TaskState>, blockers: &BTreeSet<Str
             .count()
     });
 
-    println!("\nDepTypeId — blocker-membership filter over every task's edges:\n");
+    println!("\nDepTypeId - blocker-membership filter over every task's edges:\n");
     println!("| filter | tasks | median |");
     println!("|---|---|---|");
     println!(
@@ -602,7 +602,7 @@ fn bench_dep_type_id(state: &HashMap<String, TaskState>, blockers: &BTreeSet<Str
         fmt_dur(string_filter),
     );
     println!(
-        "| DepTypeId (string→id lookup + mask) | {} | {} |",
+        "| DepTypeId (string->id lookup + mask) | {} | {} |",
         commas(state.len()),
         fmt_dur(int_filter),
     );

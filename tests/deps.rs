@@ -163,19 +163,19 @@ fn dep_tree_nests_dependencies_and_collapses_shared_nodes() {
     for id in ["a", "b", "c", "d", "e"] {
         ta(&dir, &["create", id]);
     }
-    // a → {b, c}; both b and c → d (a shared/diamond node); d → e.
+    // a -> {b, c}; both b and c -> d (a shared/diamond node); d -> e.
     ta(&dir, &["dep", "add", "a", "depends_on=b", "depends_on=c"]);
     ta(&dir, &["dep", "add", "b", "depends_on=d"]);
     ta(&dir, &["dep", "add", "c", "depends_on=d"]);
     ta(&dir, &["dep", "add", "d", "depends_on=e"]);
 
     let tree = ta(&dir, &["dep", "tree", "a"]);
-    assert!(tree.contains("├─ b"), "first child branch: {tree}");
-    assert!(tree.contains("└─ c"), "last child branch: {tree}");
-    assert!(tree.contains("└─ e"), "e nested under d: {tree}");
+    assert!(tree.contains("|- b"), "first child branch: {tree}");
+    assert!(tree.contains("`- c"), "last child branch: {tree}");
+    assert!(tree.contains("`- e"), "e nested under d: {tree}");
     // d (with its e subtree) is reached again under c, but was already expanded
-    // under b — the second occurrence collapses rather than reprinting.
-    assert!(tree.contains('…'), "shared node collapsed: {tree}");
+    // under b - the second occurrence collapses rather than reprinting.
+    assert!(tree.contains("..."), "shared node collapsed: {tree}");
 }
 
 #[test]
@@ -189,11 +189,14 @@ fn dep_cycles_reports_circular_dependencies() {
     // No cycle yet.
     assert!(ta(&dir, &["dep", "cycles"]).contains("No dependency cycles"));
 
-    // Close a → b → a into a cycle.
+    // Close a -> b -> a into a cycle.
     ta(&dir, &["dep", "add", "a", "depends_on=b"]);
     ta(&dir, &["dep", "add", "b", "depends_on=a"]);
     let cycles = ta(&dir, &["dep", "cycles"]);
-    assert!(cycles.contains("a ↔ b"), "cycle members reported: {cycles}");
+    assert!(
+        cycles.contains("a <-> b"),
+        "cycle members reported: {cycles}"
+    );
 
     // The tree marks the back-edge rather than looping forever.
     assert!(
@@ -234,7 +237,7 @@ fn custom_blocker_relationship_gates_readiness() {
     // A cycle through the custom blocker type is detected too.
     ta(&dir, &["dep", "add", "b", "requires=a"]);
     assert!(
-        ta(&dir, &["dep", "cycles"]).contains("a ↔ b"),
+        ta(&dir, &["dep", "cycles"]).contains("a <-> b"),
         "custom-blocker cycle reported"
     );
     ta(&dir, &["dep", "remove", "b", "requires=a"]);
@@ -253,7 +256,7 @@ fn dep_tree_hides_the_configured_default_blocker_not_literal_depends_on() {
     init_repo(&dir);
     ta(&dir, &["init"]);
     // Add a blocker type whose name sorts BEFORE `depends_on`, so it (not
-    // `depends_on`) becomes the default blocker — the first blocker type by name.
+    // `depends_on`) becomes the default blocker - the first blocker type by name.
     let cfg = dir.join(".taska/config.toml");
     let mut text = fs::read_to_string(&cfg).unwrap();
     text.push_str("\n[relationships.consumes]\nkind = \"blocker\"\ninverse = \"consumed_by\"\n");
@@ -267,7 +270,7 @@ fn dep_tree_hides_the_configured_default_blocker_not_literal_depends_on() {
 
     let tree = ta(&dir, &["dep", "tree", "a"]);
     // The configured default blocker's tag is hidden (it's the implied relation),
-    // and `depends_on` — no longer the default — is tagged like any other type.
+    // and `depends_on` - no longer the default - is tagged like any other type.
     assert!(
         !tree.contains("[consumes]"),
         "the configured default blocker is not tagged: {tree}"
@@ -390,7 +393,7 @@ fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
     for id in ["epic", "build-form", "wire-auth"] {
         ta(&dir, &["create", id, "status=open"]);
     }
-    // Add from the parent side, and from the child side via the inverse — both
+    // Add from the parent side, and from the child side via the inverse - both
     // land as `has_subtask` edges on the parent.
     ta(&dir, &["dep", "add", "epic", "has_subtask=build-form"]);
     ta(&dir, &["dep", "add", "wire-auth", "subtask_of=epic"]);
@@ -454,7 +457,7 @@ fn dep_tree_marks_subtasks_and_rolls_up_progress() {
         tree.matches("[subtask]").count() == 2,
         "both subtasks tagged: {tree}"
     );
-    // A plain depends_on edge is a dependency, not a subtask — never tagged.
+    // A plain depends_on edge is a dependency, not a subtask - never tagged.
     assert!(
         tree.contains("dep1") && !tree.contains("dep1 [subtask]"),
         "plain dependency untagged: {tree}"
@@ -502,16 +505,16 @@ fn dep_tree_exact_by_default_titles_done_marks_and_open_prune() {
     ta(&dir, &["update", "done-sub", "status=closed"]);
     ta(&dir, &["update", "done-mid", "status=closed"]);
 
-    // Default: the exact graph — titles shown, done tasks marked `✓`, and a done
+    // Default: the exact graph - titles shown, done tasks marked `[x]`, and a done
     // mid-chain node is kept (never spliced), with its open descendant beneath it.
     let tree = ta(&dir, &["dep", "tree", "epic"]);
     assert!(tree.contains("Epic goal"), "title shown: {tree}");
     assert!(
-        tree.contains("✓ done-sub"),
+        tree.contains("[x] done-sub"),
         "done subtask check-marked: {tree}"
     );
     assert!(
-        tree.contains("✓ done-mid"),
+        tree.contains("[x] done-mid"),
         "done mid-chain kept + marked: {tree}"
     );
     assert!(
@@ -574,7 +577,7 @@ fn show_surfaces_typed_relationships_forward_and_inverse() {
         "child mirrors subtask_of"
     );
 
-    // depends_on lives in the deps map — never duplicated as a top-level
+    // depends_on lives in the deps map - never duplicated as a top-level
     // field; its inverse `blocks` surfaces on the depended-upon task.
     let aj = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(

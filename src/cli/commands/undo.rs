@@ -1,4 +1,4 @@
-//! `ta undo` — reverse the last N events (truncate local, compensate committed).
+//! `ta undo` - reverse the last N events (truncate local, compensate committed).
 //!
 //! The plan (what changes, and the resulting log) comes from
 //! [`crate::action::undo`]; this file renders the preview, runs the confirm, and
@@ -62,7 +62,7 @@ pub fn cmd_undo(
 
 /// Render a task's salient state for the before/after preview: `(absent)` for a
 /// missing task, else the JSON of its custom fields plus `deps=<typed map>` when
-/// it has any edge — the same `{type: [targets…]}` shape the `deps` column
+/// it has any edge - the same `{type: [targets...]}` shape the `deps` column
 /// shows. Mirrors the field-centric framing of the other task views.
 fn describe(task: Option<&TaskState>) -> String {
     task.map_or_else(

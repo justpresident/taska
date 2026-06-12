@@ -1,4 +1,4 @@
-//! `ta show <id>` — a single task in full (every field it has, by default).
+//! `ta show <id>` - a single task in full (every field it has, by default).
 //!
 //! The task (with its inverse edges surfaced) comes from [`crate::action::show`];
 //! this file is just its presentation.

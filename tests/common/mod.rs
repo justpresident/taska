@@ -1,8 +1,8 @@
 //! Shared harness for the end-to-end test binaries.
 //!
 //! Each `tests/<theme>.rs` drives the real compiled `ta` binary (path from
-//! `CARGO_BIN_EXE_ta`) against throwaway git repos under the *system* temp dir
-//! — outside the project tree, so `ta`'s walk-up store discovery can't climb
+//! `CARGO_BIN_EXE_ta`) against throwaway git repos under the *system* temp dir,
+//! outside the project tree, so `ta`'s walk-up store discovery can't climb
 //! into the repo's own `.taska`. The merge-driver tests prepend the binary's
 //! directory to `PATH`. Start each theme file with `mod common; use common::*;`
 //! (a `tests/common.rs` would wrongly be its own empty test binary; the
@@ -79,7 +79,7 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 /// Whether `id` appears as a listed task. The human table puts the id in the
-/// first column, so we check each line's first whitespace-delimited token —
+/// first column, so we check each line's first whitespace-delimited token -
 /// robust to alignment padding and to a later `deps` column naming the id.
 pub fn lists_task(output: &str, id: &str) -> bool {
     output
@@ -105,7 +105,7 @@ pub fn rows(path: &Path) -> usize {
 /// Append a raw `Update` event for `task_id` directly to the log, at the next
 /// seq. Used to plant an *orphan* (an event whose target task doesn't exist):
 /// the write-time gate now rejects mutating a missing task, so orphans only arise
-/// from merges/reverts/manual edits — which this simulates.
+/// from merges/reverts/manual edits - which this simulates.
 pub fn append_orphan_update(log: &Path, task_id: &str) {
     let mut content = fs::read_to_string(log).unwrap();
     let next = content

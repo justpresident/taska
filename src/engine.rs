@@ -14,7 +14,7 @@ use crate::model::{edge_rel, edge_target, is_done, MutationEvent, OpType, TaskSt
 pub struct Engine;
 
 /// A field value's text form for `Append`: a raw string for a JSON string, else
-/// its compact JSON — so appending to a non-string field still yields readable
+/// its compact JSON - so appending to a non-string field still yields readable
 /// text rather than a quoted blob. `pub(crate)` so the write gate can fold
 /// repeated `+=` operands into one event with the SAME join replay uses.
 pub(crate) fn append_text(v: &Value) -> String {
@@ -25,9 +25,9 @@ pub(crate) fn append_text(v: &Value) -> String {
 }
 
 /// Apply a `Create`/`Update` payload: set each field, or remove it when the value
-/// is JSON `null` (the field-unset convention — null never reaches state).
+/// is JSON `null` (the field-unset convention - null never reaches state).
 /// `pub(crate)` so the write gate can PREVIEW a draft's resulting fields with
-/// the same semantics replay will use — never a parallel implementation.
+/// the same semantics replay will use - never a parallel implementation.
 pub(crate) fn apply_set(fields: &mut Map<String, Value>, payload: Map<String, Value>) {
     for (k, v) in payload {
         if v.is_null() {
@@ -39,7 +39,7 @@ pub(crate) fn apply_set(fields: &mut Map<String, Value>, payload: Map<String, Va
 }
 
 /// Apply an `AddEdge`/`RemoveEdge` (`add` = true/false). The edge's `rel` keys it
-/// in the `relationships` map — every type, `depends_on` included, is stored
+/// in the `relationships` map - every type, `depends_on` included, is stored
 /// uniformly. An emptied entry is dropped so the map stays clean. An edge missing
 /// its `target` or `rel` is malformed (e.g. a pre-1.0 untyped event that was
 /// never migrated) and is skipped.
@@ -78,12 +78,12 @@ pub(crate) fn apply_append(fields: &mut Map<String, Value>, payload: Map<String,
     }
 }
 
-/// Apply an `Add` (`add` = true) or `Remove` payload — see [`OpType::Add`] for
+/// Apply an `Add` (`add` = true) or `Remove` payload - see [`OpType::Add`] for
 /// the contract. Config-free and shape-dispatched, so replay stays
 /// deterministic from the log alone:
-/// - number operand onto a number (or missing, as 0): arithmetic `±`;
+/// - number operand onto a number (or missing, as 0): arithmetic `+/-`;
 /// - array operand: set-style insert/remove on the current array (missing =
-///   empty), deduped and kept in [`crate::model::cmp_json`] order — the
+///   empty), deduped and kept in [`crate::model::cmp_json`] order - the
 ///   canonical form concurrent branches converge on;
 /// - anything else: a deterministic no-op.
 ///
@@ -119,11 +119,11 @@ pub(crate) fn apply_accumulate(
     }
 }
 
-/// `current ± operand` as the narrowest JSON number: exact `i64` math while
+/// `current +/- operand` as the narrowest JSON number: exact `i64` math while
 /// both sides are integral (so `int`/`uint` fields keep their kind and
 /// precision), falling back to `f64`. `None` (overflowing integers whose float
 /// form is not representable, infinite results) means "leave the field
-/// unchanged" — a deterministic no-op, never a stored `null`. `pub(crate)` so the
+/// unchanged" - a deterministic no-op, never a stored `null`. `pub(crate)` so the
 /// write gate can fold repeated numeric `+=`/`-=` operands the same way replay
 /// accumulates them.
 pub(crate) fn accumulate_numbers(
@@ -149,8 +149,8 @@ pub(crate) fn accumulate_numbers(
 }
 
 /// Update `close_time` to reflect a task's CURRENT closure: set it on a
-/// transition INTO done (`was_done` → `now_done`), clear it whenever the task is
-/// currently not done. Staying done leaves the prior close time untouched — so it
+/// transition INTO done (`was_done` -> `now_done`), clear it whenever the task is
+/// currently not done. Staying done leaves the prior close time untouched - so it
 /// records the *most recent* close and resets to empty on reopen.
 const fn refresh_close_time(
     task: &mut TaskState,
@@ -308,7 +308,7 @@ impl Engine {
     /// are retained in the log.
     ///
     /// An event is retained if it is within the most recent `keep_events` **or**
-    /// newer than `keep_days` (0 disables the time window) — kept if either rule
+    /// newer than `keep_days` (0 disables the time window) - kept if either rule
     /// says so. The count rule yields a seq-suffix directly; the time rule folds
     /// only up to the first event newer than the window, so no recent event is
     /// ever folded even if timestamps are non-monotonic along the seq order (as

@@ -1,6 +1,6 @@
 # taska configuration
 #
-# Created by `ta init`. Edit freely — `ta init` will not overwrite this file
+# Created by `ta init`. Edit freely - `ta init` will not overwrite this file
 # once it exists. Missing keys fall back to the defaults shown below.
 
 [compaction]
@@ -23,7 +23,7 @@ keep_days = 30
 # The DISPLAY name of the status field, and the value that marks a task
 # complete. `ta list --ready` treats a dependency as satisfied once it reaches
 # `done_status`. On disk the status always lives under the canonical key
-# `status`, so renaming this is free at any time (no data migration) — just
+# `status`, so renaming this is free at any time (no data migration) - just
 # update [display] columns to the new name too.
 status_field = "status"
 done_status = "closed"
@@ -39,7 +39,7 @@ type_field = "type"
 # such a task must bring it into conformance). Set false to silence.
 warn_nonconforming = true
 # Tasks WITHOUT a type while [task_types] schemas are declared: "allow"
-# (sanctioned — untouched by schemas, never reported), "warn" (tolerated, but
+# (sanctioned - untouched by schemas, never reported), "warn" (tolerated, but
 # counted in the non-conformance warning), or "deny" (a type is mandatory: any
 # write to an untyped task is rejected until one is set). A long migration
 # typically walks allow -> warn -> deny.
@@ -49,14 +49,14 @@ untyped_tasks = "deny"
 # What to do when concurrent branches change the SAME field (or dependency) to
 # incompatible values. Non-overlapping changes always merge cleanly; this only
 # governs genuine contradictions, and it resolves them per-field:
-#   "surface" — stop the merge and let a human resolve it (run `ta resolve`)
-#   "latest"  — keep the most recently written value (by timestamp)
-#   "ours"    — keep the value on the branch being merged INTO
-#   "theirs"  — keep the value from the branch being merged IN
+#   "surface" - stop the merge and let a human resolve it (run `ta resolve`)
+#   "latest"  - keep the most recently written value (by timestamp)
+#   "ours"    - keep the value on the branch being merged INTO
+#   "theirs"  - keep the value from the branch being merged IN
 on_conflict = "surface"
 
 [display]
-# Columns shown by list/ready in human format — and the field set and
+# Columns shown by list/ready in human format - and the field set and
 # order used by `--format json`. "id" and "deps" are built-ins; any other name
 # is a task field (blank when a task lacks it). Override per command with
 # `--columns a,b,c` or `--full`.
@@ -93,7 +93,7 @@ close_time = "close_time"
 # --ready` and cycle detection); kind = "hierarchy"
 # is a parent/child (subtask) edge that gates like a blocker but renders
 # distinctly; kind = "info" is informational. inverse names the reverse direction
-# and is OPTIONAL — omit it for a one-way relationship; a type's OWN name means it
+# and is OPTIONAL - omit it for a one-way relationship; a type's OWN name means it
 # is symmetric (`a relates_to b` also reads as `b relates_to a`, removable from
 # either side); any other name labels the inverse (`depends_on`'s reverse is `blocks`).
 [relationships]
@@ -101,10 +101,10 @@ depends_on  = { kind = "blocker", inverse = "blocks" }
 # Parent/child: `epic has_subtask child` (or `child subtask_of epic`).
 has_subtask = { kind = "hierarchy", inverse = "subtask_of" }
 relates_to  = { kind = "info", inverse = "relates_to" }
-# One-way: `a duplicates b` (no reverse surfaced) — inverse omitted.
+# One-way: `a duplicates b` (no reverse surfaced) - inverse omitted.
 duplicates  = { kind = "info" }
 
-# Per-type task schemas — OFF while no [task_types.<name>] is declared (the
+# Per-type task schemas - OFF while no [task_types.<name>] is declared (the
 # store stays fully schema-agnostic). Once declared, the `type` field (see
 # workflow.type_field) selects a task's schema, enforced on every create/update
 # (whole-task: every violation reported in one error). Field kinds: string,
@@ -114,7 +114,7 @@ duplicates  = { kind = "info" }
 # This file is TOML 1.1: a long-form field reads best as a multi-line inline
 # table (trailing comma allowed).
 #
-# This repo's roadmap uses a single type: `ta create <id> type=task title=… notes=…`.
+# This repo's roadmap uses a single type: `ta create <id> type=task title=... notes=...`.
 [task_types.task]
 closed = true                         # no fields beyond the declared ones
 fields = {

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 01-basics.sh — creating tasks with arbitrary fields, and the ways to view them.
+# 01-basics.sh - creating tasks with arbitrary fields, and the ways to view them.
 source "$(dirname "$0")/lib.sh"
 
 fresh_repo
 
-say "taska tasks are just an id plus arbitrary key=value fields — no fixed schema."
+say "taska tasks are just an id plus arbitrary key=value fields - no fixed schema."
 say "Values parse as JSON when they can (priority=3 is a number; status=open a string)."
 run ta create migrate-db title="Run DB migration" status=open priority=2
 run ta create deploy-api title="Deploy the API" status=open priority=1 owner=alice
@@ -16,10 +16,10 @@ run ta list
 say "Pick columns for one run with --columns (overrides the configured default)."
 run ta list --columns id,priority,status
 
-say "'--full' shows every field any task has — note 'owner' appears only where set."
+say "'--full' shows every field any task has - note 'owner' appears only where set."
 run ta list --full
 
-say "'--format json' emits the same fields as a parseable array — ideal for agents or jq."
+say "'--format json' emits the same fields as a parseable array - ideal for agents or jq."
 run ta list --format json
 
 say "'ta list' filters by AND-combined criteria: '=' exact, '=~' regex, '!=' / '!~' negated."

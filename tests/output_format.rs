@@ -55,13 +55,16 @@ fn full_flag_disables_truncation_in_human_output() {
 
     // Default human view truncates with an ellipsis and drops the tail.
     let default = ta(&dir, &["list"]);
-    assert!(default.contains('…'), "default truncates: {default}");
+    assert!(default.contains('\u{2026}'), "default truncates: {default}");
     assert!(!default.contains(long), "default drops the tail: {default}");
 
     // --full prints the whole value, no ellipsis.
     let full = ta(&dir, &["list", "--full"]);
     assert!(full.contains(long), "--full prints untruncated: {full}");
-    assert!(!full.contains('…'), "--full adds no ellipsis: {full}");
+    assert!(
+        !full.contains('\u{2026}'),
+        "--full adds no ellipsis: {full}"
+    );
 }
 
 #[test]
@@ -147,7 +150,7 @@ fn per_column_max_width_overrides_the_global_default() {
     // ...while notes falls back to the global 10 and is truncated.
     assert!(!human.contains(long_notes), "notes truncated: {human}");
     assert!(
-        human.contains('…'),
+        human.contains('\u{2026}'),
         "ellipsis from the notes column: {human}"
     );
 
@@ -157,7 +160,10 @@ fn per_column_max_width_overrides_the_global_default() {
         full.contains(long_notes),
         "--full prints notes whole: {full}"
     );
-    assert!(!full.contains('…'), "--full adds no ellipsis: {full}");
+    assert!(
+        !full.contains('\u{2026}'),
+        "--full adds no ellipsis: {full}"
+    );
 }
 
 #[test]
@@ -246,7 +252,7 @@ fn config_columns_and_max_width_are_honored() {
         "config columns drive the header: {human}"
     );
     assert!(
-        human.contains("ThisIsA…"),
+        human.contains("ThisIsA\u{2026}"),
         "max_width truncates with an ellipsis: {human}"
     );
     assert!(
@@ -359,7 +365,7 @@ fn human_output_is_uncolored_when_not_a_tty() {
     ta(&dir, &["create", "a", "status=open"]);
 
     // The test harness captures stdout (a pipe, not a TTY), so color auto-disables
-    // — no ANSI escape bytes leak into output that might be piped or grepped.
+    // - no ANSI escape bytes leak into output that might be piped or grepped.
     for args in [
         vec!["list"],
         vec!["list", "--format", "json"],
@@ -481,7 +487,7 @@ fn deps_column_groups_every_relationship_type() {
     ta(&dir, &["dep", "add", "api", "relates_to=infra"]);
 
     // The human table cell shows EVERY edge as labeled type groups joined by
-    // `;` — gating and informational types alike (styling is TTY-only).
+    // `;` - gating and informational types alike (styling is TTY-only).
     let table = ta(&dir, &["list", "--full"]);
     assert!(
         table.contains("depends_on: db, web; relates_to: infra"),

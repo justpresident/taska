@@ -65,7 +65,7 @@ fn init_updates_existing_file_in_place_and_is_idempotent() {
     assert_eq!(claude, claude2, "re-run is byte-identical");
 }
 
-/// The block is config-AGNOSTIC, so it does NOT change when the config changes —
+/// The block is config-AGNOSTIC, so it does NOT change when the config changes -
 /// renaming the status field leaves it byte-identical. (The dynamic, tailored
 /// detail lives in `ta prime`, which the block points at.)
 #[test]

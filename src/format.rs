@@ -30,7 +30,7 @@ pub(crate) fn sgr(text: &str, code: &str, on: bool) -> String {
 /// way: which display column is the status field (painted green), and the done
 /// values (a DONE task's whole row greys, overriding the column colors). Built
 /// once per render from the workflow config and threaded through every renderer
-/// (table, record, tree) — THE one place row coloring is decided, so all commands
+/// (table, record, tree) - THE one place row coloring is decided, so all commands
 /// agree and a new task-rendering command inherits it for free.
 #[derive(Clone, Copy)]
 pub(crate) struct RowStyle<'a> {
@@ -46,7 +46,7 @@ impl RowStyle<'_> {
 
     /// The SGR code a `column` cell takes on a maybe-`done` task: a done task
     /// dims every column uniformly (grey row); otherwise the built-in `id` is
-    /// cyan and the CONFIGURED status column green. `deps` is `None` — it styles
+    /// cyan and the CONFIGURED status column green. `deps` is `None` - it styles
     /// its own type groups (and dims them whole when done) via [`deps_cell`].
     fn cell_sgr(&self, column: &str, done: bool) -> Option<&'static str> {
         if column == DEPS_KEY {
@@ -63,7 +63,7 @@ impl RowStyle<'_> {
     }
 }
 
-/// Paint `text` with the shared cell style for `column` on a maybe-`done` task —
+/// Paint `text` with the shared cell style for `column` on a maybe-`done` task -
 /// the ONE coloring decision every task renderer uses, so all output is
 /// consistent. Plain when `color` is off or the column carries no style.
 pub(crate) fn paint_cell(
@@ -80,7 +80,7 @@ pub(crate) fn paint_cell(
 
 /// The SGR code for one deps-cell type group: a relationship type that gates
 /// readiness (the blocker/hierarchy kinds) renders bold, an informational one
-/// dim — so what blocks vs what's just related is visible at a glance.
+/// dim - so what blocks vs what's just related is visible at a glance.
 const fn group_sgr(gates: bool) -> &'static str {
     if gates {
         "1" // bold
@@ -97,7 +97,7 @@ pub(crate) fn want_color(no_color: bool) -> bool {
 }
 
 /// Output format for the listing commands. `--format` changes only *how* tasks
-/// are rendered, never *which* fields show — that is `--columns`/`--full`/config.
+/// are rendered, never *which* fields show - that is `--columns`/`--full`/config.
 #[derive(ValueEnum, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutputFormat {
     /// Aligned human table.
@@ -151,7 +151,7 @@ pub(crate) struct DisplayArgs {
 
 /// Emit `value` per the chosen format: the prebuilt `human` string, pretty JSON,
 /// or NDJSON (one line per top-level array element, else one compact line). Color
-/// is the caller's concern (human output only) — json/jsonl are never colored.
+/// is the caller's concern (human output only) - json/jsonl are never colored.
 /// The single output dispatch for the structured commands (`status`, `dep *`).
 pub(crate) fn emit(out: &OutputArgs, human: &str, value: &Value) {
     match out.format {
@@ -211,7 +211,7 @@ fn render(
 
 /// Dispatch the chosen `--format` over an already-resolved column set. Shared by
 /// the multi-row `render` path and single-task `show`, so a new output format is
-/// wired in exactly one place. `blockers` only styles the human deps cell —
+/// wired in exactly one place. `blockers` only styles the human deps cell -
 /// json/jsonl carry the typed map itself, so kinds stay out of machine output.
 pub(crate) fn render_rows(
     tasks: &[&TaskState],
@@ -269,9 +269,9 @@ fn deps_groups(task: &TaskState) -> Vec<(String, String)> {
 }
 
 /// Build the deps table cell: the type groups joined by `"; "`, truncated on the
-/// PLAIN text to `cap` (0 = no limit, ellipsis when cut — mirroring [`truncate`],
+/// PLAIN text to `cap` (0 = no limit, ellipsis when cut - mirroring [`truncate`],
 /// which can't be reused because cutting styled text would slice escape
-/// sequences), each surviving group wrapped per its kind when `color` — or, on a
+/// sequences), each surviving group wrapped per its kind when `color` - or, on a
 /// `done` task, dimmed whole so the row stays uniformly grey. Returns the
 /// possibly SGR-laden cell together with its plain display width, so the table
 /// pads on visible characters.
@@ -301,8 +301,8 @@ fn deps_cell(
             .join("; ");
         return (cell, total);
     }
-    // Spend the cap-1 budget group by group (the last char is the `…`), cutting
-    // the group that crosses the boundary and dropping the rest.
+    // Spend the cap-1 budget group by group (the last char is the ellipsis),
+    // cutting the group that crosses the boundary and dropping the rest.
     let budget = cap - 1;
     let mut used = 0;
     let mut cell = String::new();
@@ -322,7 +322,7 @@ fn deps_cell(
             break;
         }
     }
-    cell.push('…');
+    cell.push('\u{2026}');
     (cell, used + 1)
 }
 
@@ -346,7 +346,7 @@ fn truncation_caps(columns: &[String], display: &DisplayArgs, cfg: &DisplayConfi
         .collect()
 }
 
-/// The column names this display will *reference* — the sort key plus the
+/// The column names this display will *reference* - the sort key plus the
 /// columns it will show (explicit `--columns`, else the configured default).
 /// `--full` is excluded because it shows only fields already on the task; a
 /// caller uses this to inject a computed column (e.g. `unblocks`/`blocked_by`) only
@@ -379,7 +379,7 @@ fn resolve_columns(
 
 /// The canonical column order for an all-fields view (`--full` and `show`'s
 /// default): the configured `columns` that are actually present, in their exact
-/// configured order — so `deps` keeps its slot — then every other present field
+/// configured order - so `deps` keeps its slot - then every other present field
 /// sorted alphabetically. The built-ins `id`/`deps` are always covered. A
 /// configured column that no task in the view has is dropped, so a single-task
 /// `show` and `--full` never pad with empty columns. Both human and JSON
@@ -468,7 +468,7 @@ fn render_human(
     lines.join("\n")
 }
 
-/// Render one task as a vertical record — a `field: value` line per column,
+/// Render one task as a vertical record - a `field: value` line per column,
 /// values **untruncated**, and a multi-line value continued under its label.
 /// This is `show`'s human view: a single task across the aligned table
 /// degenerates into one unreadable row, especially for long fields like `notes`;
@@ -507,7 +507,7 @@ pub(crate) fn render_record(
                 })
                 .collect()
         } else {
-            // Style EVERY line, not just the first — so a done task's multi-line
+            // Style EVERY line, not just the first - so a done task's multi-line
             // value (e.g. `notes`) greys whole, not just its opening line.
             let code = style.cell_sgr(col, done);
             human_cell(task, col)
@@ -527,8 +527,8 @@ pub(crate) fn render_record(
     lines.join("\n")
 }
 
-/// Pad each `(cell, plain_width)` to its column width — padding by the plain
-/// width, so an SGR-laden cell (deps) still aligns — and, when `color`, wrap it
+/// Pad each `(cell, plain_width)` to its column width - padding by the plain
+/// width, so an SGR-laden cell (deps) still aligns - and, when `color`, wrap it
 /// in the SGR code `code_for(i)` returns. Cells are joined with two spaces and
 /// the trailing padding is trimmed.
 fn emit_row(
@@ -567,7 +567,7 @@ fn render_json(tasks: &[&TaskState], columns: &[String]) -> String {
 }
 
 /// Newline-delimited JSON (NDJSON): one compact object per line, no array
-/// wrapper — better for streaming, `grep`, and agents. Empty input yields no
+/// wrapper - better for streaming, `grep`, and agents. Empty input yields no
 /// lines (an empty string).
 fn render_jsonl(tasks: &[&TaskState], columns: &[String]) -> String {
     tasks
@@ -624,14 +624,14 @@ fn human_display(value: &Value) -> String {
     }
 }
 
-/// Truncate `s` to `max_width` characters (0 = no limit), with a trailing `…`
-/// when cut. Shared by the human table and `dep tree`'s title column.
+/// Truncate `s` to `max_width` characters (0 = no limit), with a trailing
+/// ellipsis when cut. Shared by the human table and `dep tree`'s title column.
 pub(crate) fn truncate(s: &str, max_width: usize) -> String {
     if max_width == 0 || s.chars().count() <= max_width {
         return s.to_string();
     }
     let mut out: String = s.chars().take(max_width.saturating_sub(1)).collect();
-    out.push('…');
+    out.push('\u{2026}');
     out
 }
 
@@ -747,7 +747,7 @@ mod tests {
 
     #[test]
     fn human_cell_renders_each_column_form() {
-        // The column→value projection itself ([`crate::model::cell_value`]) is
+        // The column->value projection itself ([`crate::model::cell_value`]) is
         // tested in `model`; here we cover only the human rendering on top of it.
         let mut t = task(
             "api",
@@ -790,15 +790,15 @@ mod tests {
         );
         assert_eq!(w, plain.chars().count(), "width counts only visible chars");
 
-        // Truncation cuts on the PLAIN text (`truncate` semantics: cap-1 + `…`),
-        // never mid-escape; the cut group keeps its styling.
+        // Truncation cuts on the PLAIN text (`truncate` semantics: cap-1 + an
+        // ellipsis), never mid-escape; the cut group keeps its styling.
         let (cell, w) = deps_cell(&t, &blockers(), 10, false, false);
-        assert_eq!(cell, "depends_o…");
+        assert_eq!(cell, "depends_o\u{2026}");
         assert_eq!(w, 10);
         let (cell, w) = deps_cell(&t, &blockers(), 25, true, false);
         assert_eq!(
             cell,
-            "\x1b[1mdepends_on: db, web\x1b[0m; \x1b[2mrel\x1b[0m…"
+            "\x1b[1mdepends_on: db, web\x1b[0m; \x1b[2mrel\x1b[0m\u{2026}"
         );
         assert_eq!(w, 25);
 
@@ -936,7 +936,7 @@ mod tests {
 
     #[test]
     fn done_record_greys_label_and_every_value_line() {
-        // `show` on a closed task: the whole record recedes — labels dim (no bold)
+        // `show` on a closed task: the whole record recedes - labels dim (no bold)
         // and EVERY line of a multi-line value greys (regression: only the first
         // line did).
         let t = task(
@@ -1014,7 +1014,7 @@ mod tests {
             out.contains("\"x\"") && out.contains("\"y\""),
             "union: {out}"
         );
-        // But an absent field is OMITTED, never emitted as null — no nulls anywhere.
+        // But an absent field is OMITTED, never emitted as null - no nulls anywhere.
         assert!(
             !out.contains("null"),
             "absent fields omitted, not null: {out}"
@@ -1086,7 +1086,7 @@ mod tests {
     fn truncate_caps_long_values() {
         assert_eq!(truncate("hello", 0), "hello");
         assert_eq!(truncate("hello", 10), "hello");
-        assert_eq!(truncate("hello world", 5), "hell…");
+        assert_eq!(truncate("hello world", 5), "hell\u{2026}");
     }
 
     #[test]
@@ -1112,7 +1112,10 @@ mod tests {
             "(none)",
         );
         assert!(full.contains(long), "--full prints untruncated: {full}");
-        assert!(!full.contains('…'), "--full adds no ellipsis: {full}");
+        assert!(
+            !full.contains('\u{2026}'),
+            "--full adds no ellipsis: {full}"
+        );
 
         // Default (config columns) still truncates per max_width.
         let default = render(
@@ -1124,7 +1127,10 @@ mod tests {
             "(none)",
         );
         assert!(!default.contains(long), "default truncates: {default}");
-        assert!(default.contains('…'), "default shows ellipsis: {default}");
+        assert!(
+            default.contains('\u{2026}'),
+            "default shows ellipsis: {default}"
+        );
 
         // An explicit --columns view also still truncates.
         let cols = render(
@@ -1135,7 +1141,10 @@ mod tests {
             style(),
             "(none)",
         );
-        assert!(cols.contains('…'), "--columns still truncates: {cols}");
+        assert!(
+            cols.contains('\u{2026}'),
+            "--columns still truncates: {cols}"
+        );
     }
 
     #[test]
@@ -1169,7 +1178,7 @@ mod tests {
         // notes keeps all 20 chars (override 60 > 20, no ellipsis); summary is cut.
         assert!(out.contains(long), "notes column not truncated: {out}");
         assert!(
-            out.contains('…'),
+            out.contains('\u{2026}'),
             "summary column truncated to max_width: {out}"
         );
 
@@ -1182,7 +1191,10 @@ mod tests {
             style(),
             "(none)",
         );
-        assert!(!full.contains('…'), "--full disables truncation: {full}");
+        assert!(
+            !full.contains('\u{2026}'),
+            "--full disables truncation: {full}"
+        );
     }
 
     #[test]
@@ -1213,7 +1225,7 @@ mod tests {
         );
         // Long values are never truncated (the whole point of the record view).
         assert!(
-            out.contains(long) && !out.contains('…'),
+            out.contains(long) && !out.contains('\u{2026}'),
             "untruncated: {out}"
         );
         // A multi-line value continues under its label, with no second `notes:`.

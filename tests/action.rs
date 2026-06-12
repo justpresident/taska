@@ -1,5 +1,5 @@
-//! Integration test that drives the `action` layer DIRECTLY — no cli, no binary,
-//! no `format` — exactly as an external frontend (a TUI, a library consumer)
+//! Integration test that drives the `action` layer DIRECTLY - no cli, no binary,
+//! no `format` - exactly as an external frontend (a TUI, a library consumer)
 //! would. This is the guard for the frontend-agnostic claim: it uses only the
 //! crate's public API (`taska::action::*` + `taska::storage::FileStore`), so if
 //! an action ever needs `cli` or `format`, or the public surface stops being
@@ -37,7 +37,7 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
     create(&store, "a", "Task A", "todo");
     create(&store, "b", "Task B", "todo");
 
-    // Add an edge: b depends_on a — through the dep action, types from config.
+    // Add an edge: b depends_on a - through the dep action, types from config.
     let types = store.config().relationships.types.clone();
     let written = action::dep::apply_edges(
         &store,
@@ -69,7 +69,7 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
     )
     .unwrap();
     assert_eq!(list.tasks.len(), 2);
-    // The action returns ORDERED data — by `id` here, so `a` before `b`.
+    // The action returns ORDERED data - by `id` here, so `a` before `b`.
     let ids: Vec<&str> = list.tasks.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(ids, ["a", "b"], "list_tasks returns sorted tasks");
 
@@ -89,7 +89,7 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
     assert_eq!(ready.tasks.len(), 1);
     assert_eq!(ready.tasks[0].id, "a");
 
-    // show: one task, with the INVERSE edge surfaced (b depends_on a ⇒ a `blocks` b).
+    // show: one task, with the INVERSE edge surfaced (b depends_on a => a `blocks` b).
     let show = action::show(&store, "a").unwrap();
     assert_eq!(show.task.id, "a");
     assert_eq!(
@@ -99,7 +99,7 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
         show.task.custom_fields
     );
 
-    // prime: the config-tailored facts, as structured data — drivable without the
+    // prime: the config-tailored facts, as structured data - drivable without the
     // cli's markdown rendering (an external frontend would render its own).
     let prime = action::prime(&store).unwrap();
     assert_eq!(prime.facts.status_field, "status");
@@ -121,8 +121,8 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
 
 #[test]
 fn write_prep_translates_display_names_to_canonical_via_public_api() {
-    // A frontend honoring a renamed `status_field` translates display→canonical
-    // through the PUBLIC schema helper before the write action — proving the
+    // A frontend honoring a renamed `status_field` translates display->canonical
+    // through the PUBLIC schema helper before the write action - proving the
     // write half is usable without the cli's (private) plumbing.
     use taska::config::WorkflowConfig;
     use taska::schema::canonicalize_fields;
@@ -138,7 +138,7 @@ fn write_prep_translates_display_names_to_canonical_via_public_api() {
 
     assert!(
         payload.contains_key("status"),
-        "display `state` → canonical `status`: {payload:?}"
+        "display `state` -> canonical `status`: {payload:?}"
     );
     assert!(!payload.contains_key("state"), "display key consumed");
     assert_eq!(payload.get("title"), Some(&json!("X")), "others untouched");
@@ -189,7 +189,7 @@ fn dep_tree_returns_the_requested_columns_per_node() {
     )
     .unwrap();
 
-    // No field name is hardcoded — the caller names the columns it wants; the
+    // No field name is hardcoded - the caller names the columns it wants; the
     // node `cells` carry exactly those (here `title` is a plain field, not a
     // special one). The action orders siblings itself, given the sort column.
     let outcome = action::dep::tree(

@@ -1,4 +1,4 @@
-//! `ta edit <id>` (alias `ed`) — round-trip a task's fields through `$EDITOR`.
+//! `ta edit <id>` (alias `ed`) - round-trip a task's fields through `$EDITOR`.
 //!
 //! The task's stored fields are serialized to a temp file (TOML by default,
 //! JSON with `--json`), opened in the editor, and the saved result is diffed
@@ -8,8 +8,8 @@
 //! schema coercion, heal-on-write defaults, no-op dropping, and reserved-name
 //! rejection all apply.
 //!
-//! On any failure — TOML/JSON syntax, a canonical-name conflict, or a schema
-//! violation from the write gate — the message prints to stderr (same as
+//! On any failure - TOML/JSON syntax, a canonical-name conflict, or a schema
+//! violation from the write gate - the message prints to stderr (same as
 //! `ta update`) and the user is offered to re-edit *the same file, exactly as
 //! they saved it*; declining discards the edit. Relationships are out of scope
 //! (managed by `ta dep`): only the scalar/array custom fields are shown.
@@ -40,7 +40,7 @@ pub fn cmd_edit(store: &impl EventStore, id: &str, as_json: bool) -> Result<(), 
     let ext = if as_json { "json" } else { "toml" };
     let tmp = TempFile::create(id, ext, &initial)?;
     eprintln!(
-        "editing `{id}` — save to apply, delete a field to unset it, save unchanged for no-op."
+        "editing `{id}` - save to apply, delete a field to unset it, save unchanged for no-op."
     );
 
     // Re-edit loop: open, validate the saved result, and on any error offer to
@@ -50,7 +50,7 @@ pub fn cmd_edit(store: &impl EventStore, id: &str, as_json: bool) -> Result<(), 
         open_in_editor(&tmp.path)?;
         let edited = std::fs::read_to_string(&tmp.path)?;
         if edited.trim().is_empty() {
-            println!("Empty file — discarded; `{id}` left unchanged.");
+            println!("Empty file - discarded; `{id}` left unchanged.");
             return Ok(());
         }
         match preview(&edited, as_json, &view, &snapshot, id, config) {
@@ -66,7 +66,7 @@ pub fn cmd_edit(store: &impl EventStore, id: &str, as_json: bool) -> Result<(), 
     };
 
     if payload.is_empty() {
-        println!("No changes — `{id}` left unchanged.");
+        println!("No changes - `{id}` left unchanged.");
         return Ok(());
     }
 
@@ -79,7 +79,7 @@ pub fn cmd_edit(store: &impl EventStore, id: &str, as_json: bool) -> Result<(), 
 
 /// Validate a saved edit against the pre-edit snapshot and return the canonical
 /// `set` payload (changed/added fields, plus removed fields as `null`). Runs the
-/// same parse → diff → canonicalize → build → vet pipeline the final write does,
+/// same parse -> diff -> canonicalize -> build -> vet pipeline the final write does,
 /// so the user sees the real diagnostics *before* the store lock is taken.
 fn preview(
     edited: &str,
@@ -98,7 +98,7 @@ fn preview(
     Ok(set)
 }
 
-/// A `FieldOps` carrying only `set` fields — edit never appends or subtracts.
+/// A `FieldOps` carrying only `set` fields - edit never appends or subtracts.
 fn set_only(set: Map<String, Value>) -> FieldOps {
     FieldOps {
         set,

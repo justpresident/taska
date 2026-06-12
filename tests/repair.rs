@@ -2,9 +2,9 @@ mod common;
 use common::*;
 
 /// A PRE-1.0 store (a legacy `AddDep` op / `dep`/`type` edge keys) can no longer
-/// be read OR migrated in v1 — the read shims and the depends_on migration passes
+/// be read OR migrated in v1 - the read shims and the depends_on migration passes
 /// are gone. Both a normal command and `repair` refuse, pointing at the last 0.x
-/// release's `ta repair --migrate` (the sanctioned 0.x→v1 upgrade path), rather
+/// release's `ta repair --migrate` (the sanctioned 0.x->v1 upgrade path), rather
 /// than silently dropping the legacy edge.
 #[test]
 fn pre_1_0_store_is_refused_with_a_migration_hint() {
@@ -40,7 +40,7 @@ fn pre_1_0_store_is_refused_with_a_migration_hint() {
     );
 
     // `repair --migrate` ALSO refuses: v1 has no pass for a pre-1.0 store, so it
-    // must not load-and-rewrite (which would drop the legacy edge) — it points
+    // must not load-and-rewrite (which would drop the legacy edge) - it points
     // back at the last 0.x. The store is left untouched.
     let repaired = run(ta_bin(), &dir, &["repair", "--migrate"]);
     assert!(
@@ -59,8 +59,8 @@ fn pre_1_0_store_is_refused_with_a_migration_hint() {
     );
 }
 
-/// `repair --schema` fixes everything lossless by direct rewrite — numeric
-/// strings, scalars to singletons, bool strings, date normalization — and
+/// `repair --schema` fixes everything lossless by direct rewrite - numeric
+/// strings, scalars to singletons, bool strings, date normalization - and
 /// lists the ambiguous remainder without guessing; typing untyped tasks
 /// happens only via the explicit `--set-type-if-none TYPE`. Review surface is
 /// the git diff; no confirmation.
@@ -96,7 +96,7 @@ fn repair_schema_applies_lossless_fixes_and_reports_the_rest() {
     );
     fs::write(&cfg, text).unwrap();
 
-    // `--schema` alone NEVER types a task — typing is an explicit migration
+    // `--schema` alone NEVER types a task - typing is an explicit migration
     // choice, even with a single declared type (the user may be migrating
     // gradually or keeping tasks untyped).
     let bare = ta(&dir, &["repair", "--schema"]);
@@ -187,7 +187,7 @@ fn repair_rename_moves_a_column_and_coerces_it() {
     );
 
     // Guards: reserved destinations and the status field are refused (the
-    // TYPE field is a legal destination — covered separately).
+    // TYPE field is a legal destination - covered separately).
     assert!(!run(ta_bin(), &dir, &["repair", "--rename", "deps=sev"])
         .status
         .success());
@@ -197,7 +197,7 @@ fn repair_rename_moves_a_column_and_coerces_it() {
 }
 
 /// `--rename type=OLD` adopts a de-facto discriminator column as the task
-/// type — converting ONLY records whose value names a declared type (repair
+/// type - converting ONLY records whose value names a declared type (repair
 /// never writes data the schema would reject).
 #[test]
 fn repair_rename_adopts_a_type_column_only_for_declared_values() {

@@ -1,4 +1,4 @@
-//! `ta create` — parse the `key=value` fields, then create via the shared write path.
+//! `ta create` - parse the `key=value` fields, then create via the shared write path.
 
 use std::collections::HashMap;
 
@@ -20,7 +20,7 @@ pub fn cmd_create(store: &impl EventStore, id: &str, fields: &[String]) -> Resul
     } = parse_field_ops(fields)?;
     if let Some((key, _)) = subtract.first() {
         return Err(format!(
-            "`{key}-=…` is meaningless on create: a new task has nothing to remove from"
+            "`{key}-=...` is meaningless on create: a new task has nothing to remove from"
         )
         .into());
     }
@@ -31,10 +31,10 @@ pub fn cmd_create(store: &impl EventStore, id: &str, fields: &[String]) -> Resul
     canonicalize_field_pairs(&mut append, workflow)?;
     canonicalize_fields(&mut raw, workflow)?;
 
-    // A new task's fields start absent, so each `+=` is its INITIAL value —
+    // A new task's fields start absent, so each `+=` is its INITIAL value -
     // accumulate the operands by declared kind exactly as `update` would against
-    // an empty field (`tags+=a tags+=b` → both, `points+=2 points+=3` → 5,
-    // repeated `notes+=` → joined text), then fold the result into the Create
+    // an empty field (`tags+=a tags+=b` -> both, `points+=2 points+=3` -> 5,
+    // repeated `notes+=` -> joined text), then fold the result into the Create
     // payload. The payload carries the task's type, so the dispatch finds its
     // schema; `-=` was already rejected above.
     let combine = FieldOps {

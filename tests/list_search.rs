@@ -72,7 +72,7 @@ fn list_supports_regex_negation_and_combined_criteria() {
         "bare ~ rejected"
     );
 
-    // `deps=<x>` matches a target under ANY relationship type, info included —
+    // `deps=<x>` matches a target under ANY relationship type, info included -
     // the filter sees exactly what the deps column shows.
     ta(&dir, &["dep", "add", "web", "relates_to=db"]);
     let info = ta(&dir, &["list", "deps=db"]);
@@ -102,7 +102,7 @@ fn relationship_names_and_computed_columns_filter() {
     );
 
     // Inverse names resolve the reverse direction: children of the umbrella,
-    // and what a task blocks — the queries from the motivating session.
+    // and what a task blocks - the queries from the motivating session.
     let children = ta(&dir, &["list", "subtask_of=epic", "--sort", "id"]);
     assert!(
         lists_task(&children, "c1")

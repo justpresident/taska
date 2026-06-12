@@ -110,7 +110,7 @@ pub fn multi_parent_tasks<S: BuildHasher>(
         .collect()
 }
 
-/// A task's `(done, total)` direct hierarchy children — its subtask completion.
+/// A task's `(done, total)` direct hierarchy children - its subtask completion.
 pub fn subtask_counts<S: BuildHasher>(
     task: &TaskState,
     state: &HashMap<String, TaskState, S>,
@@ -188,7 +188,7 @@ pub fn reachability_counts<S: BuildHasher>(
         }
     }
     // A monotonically increasing stamp marks nodes seen in the current DFS, so
-    // `seen` is reused across all 2·n traversals without an O(n) reset each time.
+    // `seen` is reused across all 2*n traversals without an O(n) reset each time.
     let mut seen = vec![0u64; n];
     let mut stamp = 0u64;
     (0..n)

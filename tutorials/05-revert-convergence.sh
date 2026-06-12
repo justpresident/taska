@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 05-revert-convergence.sh — `git revert` of task events converges either merge way.
+# 05-revert-convergence.sh - `git revert` of task events converges either merge way.
 #
 # Because the merge driver UNIONS both sides' removals, a reverted commit stays
 # reverted no matter which direction you merge. We prove it by merging the same
@@ -39,7 +39,7 @@ run git merge main -m "merge main into feature" || true
 RESULT_FEATURE=$(ta list --columns id --format json)
 run ta list --columns id,title
 
-say "Compare the two results. Reverts CONVERGE: b,c stay gone, a and d survive — both ways."
+say "Compare the two results. Reverts CONVERGE: b,c stay gone, a and d survive - both ways."
 if [ "$RESULT_MAIN" = "$RESULT_FEATURE" ]; then
   say "IDENTICAL. The merge direction did not matter."
 else

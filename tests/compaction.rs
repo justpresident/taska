@@ -79,7 +79,7 @@ fn compact_folds_log_and_appends_resume() {
     ta(&dir, &["init"]);
     // A valid retention floor (>= MIN_KEEP_EVENTS = 300). We then generate MORE
     // events than that so compaction actually folds the old prefix and retains
-    // exactly the recent suffix — the fold-and-resume path.
+    // exactly the recent suffix - the fold-and-resume path.
     fs::write(
         dir.join(".taska/config.toml"),
         "[compaction]\nkeep_events = 300\nkeep_days = 0\n",
@@ -104,7 +104,7 @@ fn compact_folds_log_and_appends_resume() {
     );
 
     // Appends overlay the baseline after compaction, and the older folded tasks
-    // are still visible — fold-and-resume keeps everything reachable.
+    // are still visible - fold-and-resume keeps everything reachable.
     ta(&dir, &["create", "resumed"]);
     let list = ta(&dir, &["list"]);
     for id in ["t0", "t75", "t349", "resumed"] {
@@ -175,7 +175,7 @@ fn low_keep_events_is_rejected_on_the_next_command() {
     )
     .unwrap();
 
-    // Without the test hatch, even a plain `ta list` must refuse and explain —
+    // Without the test hatch, even a plain `ta list` must refuse and explain -
     // the error surfaces immediately, not weeks later at compaction time.
     let out = Command::new(ta_bin())
         .args(["list"])
@@ -214,8 +214,8 @@ fn compact_is_noop_below_threshold() {
     );
 }
 
-/// A baseline written in the PRE-1.0 format — `depends_on` as a top-level field,
-/// before it was folded into the relationships map — is no longer read: the
+/// A baseline written in the PRE-1.0 format - `depends_on` as a top-level field,
+/// before it was folded into the relationships map - is no longer read: the
 /// compat shim is gone, so a top-level `depends_on` would now be silently
 /// dropped. The store is refused instead, pointing at the last 0.x's migration.
 #[test]

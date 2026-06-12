@@ -1,6 +1,6 @@
 //! The shared write choreography.
 //!
-//! Every task write funnels through one verify-then-append path —
+//! Every task write funnels through one verify-then-append path -
 //! materialize the current state, build/coerce the events, run the schema gate
 //! ([`vet_events`]), and append, all under the store lock so the checks can't
 //! race a concurrent writer. A single implementation serves every frontend; the
@@ -21,7 +21,7 @@ use crate::storage::EventStore;
 /// Create a new task from a CANONICAL payload (plus the `raw` inline-token map
 /// backing declared-string coercion).
 ///
-/// Stamps the workflow default status (unless the payload already names it — even
+/// Stamps the workflow default status (unless the payload already names it - even
 /// as JSON `null`, the explicit-unset convention) and the task type's schema
 /// defaults, then coerces, vets (which rejects a duplicate create atomically),
 /// and appends. A create is never a no-op, so on success it always wrote.
@@ -38,7 +38,7 @@ pub fn create(
             Value::String(workflow.default_status.clone()),
         );
     }
-    // The declared schema defaults (same convention: an explicit value — or null —
+    // The declared schema defaults (same convention: an explicit value - or null -
     // in the payload wins over the default).
     let stamps = schema_default_stamps(None, &payload, &BTreeSet::default(), store.config());
     for (key, value) in stamps {
@@ -60,7 +60,7 @@ pub fn create(
 /// written (empty = nothing changed).
 ///
 /// Builds the events (the `+=`/`-=` dispatch, schema coercion, and heal-on-write
-/// defaults), then vets — which errors if the task doesn't exist and drops no-op
+/// defaults), then vets - which errors if the task doesn't exist and drops no-op
 /// writes (re-asserting a value, inserting a present element, adding 0).
 pub fn update(
     store: &impl EventStore,

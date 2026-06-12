@@ -1,4 +1,4 @@
-//! The `ta dep` command group — add, remove, and inspect (tree/cycles/plan)
+//! The `ta dep` command group - add, remove, and inspect (tree/cycles/plan)
 //! typed relationship edges between tasks.
 
 use std::collections::BTreeMap;
@@ -17,7 +17,7 @@ use crate::storage::EventStore;
 /// in `[relationships]`.
 #[derive(Subcommand)]
 pub enum DepAction {
-    /// Add typed edge(s): `ta dep add <task> depends_on=<other> [relates_to=<x> …]`
+    /// Add typed edge(s): `ta dep add <task> depends_on=<other> [relates_to=<x> ...]`
     ///
     /// Both tasks must exist and a task can't reference itself; a duplicate edge
     /// is a no-op. At most one blocker between a pair, and one parent per task.
@@ -27,14 +27,14 @@ pub enum DepAction {
         #[arg(required = true)]
         edges: Vec<String>,
     },
-    /// Remove typed edge(s): `ta dep remove <task> depends_on=<other> …`
+    /// Remove typed edge(s): `ta dep remove <task> depends_on=<other> ...`
     Remove {
         task: String,
         /// `type=target` pairs to remove
         #[arg(required = true)]
         edges: Vec<String>,
     },
-    /// ASCII dependency tree: `ta dep tree [<task> …]` (roots default to tasks
+    /// ASCII dependency tree: `ta dep tree [<task> ...]` (roots default to tasks
     /// nothing depends on)
     Tree {
         /// Root tasks (default: every task nothing depends on)
@@ -57,7 +57,7 @@ pub enum DepAction {
         #[command(flatten)]
         output: OutputArgs,
     },
-    /// Ordered remaining prerequisites of a goal: `ta dep plan <goal> …`
+    /// Ordered remaining prerequisites of a goal: `ta dep plan <goal> ...`
     Plan {
         /// Goal task(s) to plan toward
         #[arg(required = true)]
@@ -124,10 +124,10 @@ fn dep_write(
 /// A shortened title is truncated to this many characters in the tree.
 const TREE_TITLE_MAX: usize = 50;
 
-/// `ta dep tree` — ASCII tree of the blocker graph (the `depends_on` field plus
+/// `ta dep tree` - ASCII tree of the blocker graph (the `depends_on` field plus
 /// any `blocker`- or `hierarchy`-typed relationship), children nested under their
-/// dependents. Shows the exact graph by default — done tasks are dimmed and marked
-/// `✓`, never spliced out — so the structure is faithful; `--open` prunes only
+/// dependents. Shows the exact graph by default - done tasks are dimmed and marked
+/// `[x]`, never spliced out - so the structure is faithful; `--open` prunes only
 /// fully-resolved branches (those with no open task). Roots default to tasks
 /// nothing depends on, ordered by `--sort`/`[display].sort` (`--reverse` flips).
 /// Subtask edges are tagged `[subtask]` with a `[subtasks d/t]` parent rollup;
@@ -184,12 +184,12 @@ fn dep_tree(
 }
 
 /// The label for one node. The edge tag (`[subtask]` magenta, `[type]` plain,
-/// nothing for the default blocker / a root) LEADS — so the relationship that
-/// reached this node reads first — then the id and each requested column's value
+/// nothing for the default blocker / a root) LEADS - so the relationship that
+/// reached this node reads first - then the id and each requested column's value
 /// (truncated), then the `[subtasks d/t]` rollup. The id/columns are colored by
 /// the shared [`RowStyle`], identical to a `list` row (id cyan, the status column
-/// green); a done node greys whole (dim) and is prefixed `✓`. The connectors and
-/// position markers (`(cycle)`/`(missing)`/`…`) are added by the caller.
+/// green); a done node greys whole (dim) and is prefixed `[x]`. The connectors and
+/// position markers (`(cycle)`/`(missing)`/`...`) are added by the caller.
 fn node_label(node: &Node, color: bool, style: RowStyle) -> String {
     let done = node.done;
     let paint = |text: &str, col: &str| crate::format::paint_cell(text, col, done, style, color);
@@ -206,7 +206,7 @@ fn node_label(node: &Node, color: bool, style: RowStyle) -> String {
         }
     });
     if done {
-        s.push_str(&crate::format::sgr("✓ ", "2", color));
+        s.push_str(&crate::format::sgr("[x] ", "2", color));
     }
     s.push_str(&paint(&node.id, ID_KEY));
     for (col, v) in &node.cells {
@@ -256,16 +256,16 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool, style: Ro
     for (i, kid) in kids.iter().enumerate() {
         let last = i + 1 == n;
         out.push_str(prefix);
-        out.push_str(if last { "└─ " } else { "├─ " });
+        out.push_str(if last { "`- " } else { "|- " });
         out.push_str(&node_label(kid, color, style));
         match &kid.kids {
             Kids::Missing => out.push_str(" (missing)"),
             Kids::Cycle => out.push_str(" (cycle)"),
-            Kids::Collapsed => out.push_str(" …"),
+            Kids::Collapsed => out.push_str(" ..."),
             Kids::Children(_) => {}
         }
         out.push('\n');
-        let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
+        let child_prefix = format!("{prefix}{}", if last { "   " } else { "|  " });
         push_kids(kid, &child_prefix, out, color, style);
     }
 }
@@ -309,7 +309,7 @@ fn node_json(node: &Node) -> Value {
     Value::Object(o)
 }
 
-/// `ta dep cycles` — report any cycles in the blocker graph. JSON is an array of
+/// `ta dep cycles` - report any cycles in the blocker graph. JSON is an array of
 /// cycles (each an array of member ids); human is one cycle per line.
 fn dep_cycles(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynError> {
     let outcome = crate::action::dep::cycles(store)?;
@@ -335,7 +335,7 @@ fn dep_cycles(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynErr
             if cycle.len() == 1 {
                 lines.push(format!("  {} (depends on itself)", cycle[0]));
             } else {
-                lines.push(format!("  {}", cycle.join(" ↔ ")));
+                lines.push(format!("  {}", cycle.join(" <-> ")));
             }
         }
         lines.join("\n")
@@ -344,12 +344,12 @@ fn dep_cycles(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynErr
     Ok(())
 }
 
-/// `ta dep plan <goal> …` — the not-done transitive prerequisites of the goal(s)
+/// `ta dep plan <goal> ...` - the not-done transitive prerequisites of the goal(s)
 /// (the goals included), in dependency order: do exactly these, in this order.
 /// Prerequisites are the blocker edges (the `depends_on` field plus any
 /// `blocker`-typed relationship); already-done ones are dropped as satisfied.
 /// `--critical` narrows the list to the longest single chain of incomplete
-/// prerequisites — the sequence that sets the minimum remaining duration.
+/// prerequisites - the sequence that sets the minimum remaining duration.
 fn dep_plan(
     store: &impl EventStore,
     goals: &[String],
@@ -369,7 +369,7 @@ fn dep_plan(
             .collect(),
     );
     let human = if steps.is_empty() {
-        "Nothing to do — every prerequisite is already done.".to_string()
+        "Nothing to do - every prerequisite is already done.".to_string()
     } else {
         let width = steps.iter().map(|s| s.id.len()).max().unwrap_or(0);
         let mut lines: Vec<String> = steps

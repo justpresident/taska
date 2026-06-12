@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# taska (`ta`) installer — download a prebuilt binary for this OS/arch from the
+# taska (`ta`) installer - download a prebuilt binary for this OS/arch from the
 # latest GitHub release, verify its checksum, and drop it on your PATH.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/justpresident/taska/master/scripts/install.sh | bash
 #
 # This script must be EXECUTED, not SOURCED (it calls `exit` on errors).
-#   ✅  curl -fsSL … | bash        ✅  bash install.sh        ❌  source install.sh
+#   [ok]  curl -fsSL ... | bash        [ok]  bash install.sh        [no]  source install.sh
 #
 # Environment overrides:
 #   TASKA_VERSION         release tag to install (default: the latest), e.g. v0.5.0
@@ -22,7 +22,7 @@ BIN="ta"      # the binary
 CRATE="taska" # the crates.io package (the cargo fallback)
 
 # The download temp dir, removed on exit. GLOBAL (not main-local) so the EXIT
-# trap — which runs after main's locals are gone — can still see it under `set -u`.
+# trap - which runs after main's locals are gone - can still see it under `set -u`.
 tmp=""
 cleanup() { if [ -n "$tmp" ]; then rm -rf "$tmp"; fi; }
 trap cleanup EXIT
@@ -63,13 +63,13 @@ sha256() { # sha256 <file> -> hex on stdout, or non-zero if no tool
 detect_target() {
   case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
-      die "Windows is not covered by the prebuilt binaries — use WSL, or 'cargo install ${CRATE}'" ;;
+      die "Windows is not covered by the prebuilt binaries - use WSL, or 'cargo install ${CRATE}'" ;;
   esac
   local os arch
   case "$(uname -s)" in
     Linux) os="unknown-linux-musl" ;;
     Darwin) os="apple-darwin" ;;
-    *) die "unsupported OS '$(uname -s)' — prebuilt binaries cover Linux and macOS" ;;
+    *) die "unsupported OS '$(uname -s)' - prebuilt binaries cover Linux and macOS" ;;
   esac
   case "$(uname -m)" in
     x86_64 | amd64) arch="x86_64" ;;
@@ -99,7 +99,7 @@ resolve_version() {
 ensure_on_path() {
   local dir="$1"
   case ":${PATH:-}:" in
-    *":$dir:"*) return 0 ;; # already on PATH — nothing to do
+    *":$dir:"*) return 0 ;; # already on PATH - nothing to do
   esac
 
   # Pick the rc file and the line to add, by the user's login shell.
@@ -124,7 +124,7 @@ ensure_on_path() {
 
   # Idempotent: if the rc already references the dir, just remind how to activate.
   if [ -f "$rc" ] && grep -Fq "$dir" "$rc" 2>/dev/null; then
-    info "$dir is already configured in $rc — restart your shell, or run: $line"
+    info "$dir is already configured in $rc - restart your shell, or run: $line"
     return 0
   fi
 
@@ -134,7 +134,7 @@ ensure_on_path() {
     info "Restart your shell, or run this now to use ${BIN} immediately:"
     printf '    %s\n' "$line" >&2
   else
-    warn "couldn't write $rc — add $dir to your PATH manually:"
+    warn "couldn't write $rc - add $dir to your PATH manually:"
     printf '    %s\n' "$line" >&2
   fi
 }
@@ -142,7 +142,7 @@ ensure_on_path() {
 # --- fall back to building from crates.io ----------------------------------
 fallback_cargo() {
   if have cargo; then
-    warn "No prebuilt binary for this platform — installing from crates.io with cargo."
+    warn "No prebuilt binary for this platform - installing from crates.io with cargo."
     cargo install "$CRATE" && { ok "Installed via 'cargo install ${CRATE}'."; exit 0; }
     die "'cargo install ${CRATE}' failed"
   fi
@@ -173,13 +173,13 @@ main() {
     local want got
     want="$(awk '{print $1; exit}' "${tmp}/${asset}.sha256")"
     if got="$(sha256 "${tmp}/${asset}")"; then
-      [ "$want" = "$got" ] || die "checksum mismatch for ${asset} — refusing to install"
+      [ "$want" = "$got" ] || die "checksum mismatch for ${asset} - refusing to install"
       ok "Checksum verified"
     else
-      warn "no sha256 tool (sha256sum/shasum/openssl) — skipping checksum verification"
+      warn "no sha256 tool (sha256sum/shasum/openssl) - skipping checksum verification"
     fi
   else
-    warn "no checksum published for ${asset} — skipping verification"
+    warn "no checksum published for ${asset} - skipping verification"
   fi
 
   tar -xzf "${tmp}/${asset}" -C "$tmp" || die "failed to extract ${asset}"
@@ -192,7 +192,7 @@ main() {
   elif [ -w /usr/local/bin ]; then dir="/usr/local/bin"
   else dir="${HOME}/.local/bin"; fi
   mkdir -p "$dir" || die "couldn't create ${dir}"
-  cp "$src" "${dir}/${BIN}" || die "couldn't write ${dir}/${BIN} — set TASKA_INSTALL_DIR to a writable directory"
+  cp "$src" "${dir}/${BIN}" || die "couldn't write ${dir}/${BIN} - set TASKA_INSTALL_DIR to a writable directory"
   chmod 0755 "${dir}/${BIN}"
 
   # Clear the macOS Gatekeeper quarantine flag on the unsigned binary, if set.

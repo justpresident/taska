@@ -3,7 +3,7 @@
 //! The split mirrors how the values are consumed: `[compaction]` tunes how much
 //! history `ta compact` leaves in the log, `[workflow]` describes task semantics
 //! used by the engine/graph layer, and `[merge]` controls how the git merge
-//! driver reconciles concurrent branches. Every key here is honored somewhere —
+//! driver reconciles concurrent branches. Every key here is honored somewhere -
 //! this file is not a list of aspirations.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -25,11 +25,11 @@ pub const MIN_KEEP_EVENTS: usize = 300;
 /// The `config.toml` written by `ta init`.
 ///
 /// Rendered from [`Config::default`] so the values live in exactly one place
-/// (the `Default` impls) while the file keeps its explanatory comments — TOML
+/// (the `Default` impls) while the file keeps its explanatory comments - TOML
 /// serialization alone can't emit those. A test asserts the rendered file
 /// round-trips back to `Config::default()`, which also catches template typos
 /// such as a misspelled key.
-// A prose template that grows with each config option — line count is not a
+// A prose template that grows with each config option - line count is not a
 // useful signal here, unlike for real logic.
 #[allow(clippy::too_many_lines)]
 pub fn default_toml() -> String {
@@ -51,7 +51,7 @@ pub fn default_toml() -> String {
     format!(
         r#"# taska configuration
 #
-# Created by `ta init`. Edit freely — `ta init` will not overwrite this file
+# Created by `ta init`. Edit freely - `ta init` will not overwrite this file
 # once it exists. Missing keys fall back to the defaults shown below.
 
 [compaction]
@@ -74,7 +74,7 @@ keep_days = {keep_days}
 # The DISPLAY name of the status field, and the value that marks a task
 # complete. `ta list --ready` treats a dependency as satisfied once it reaches
 # `done_status`. On disk the status always lives under the canonical key
-# `status`, so renaming this is free at any time (no data migration) — just
+# `status`, so renaming this is free at any time (no data migration) - just
 # update [display] columns to the new name too.
 status_field = "{status_field}"
 done_status = "{done_status}"
@@ -90,7 +90,7 @@ type_field = "{type_field}"
 # such a task must bring it into conformance). Set false to silence.
 warn_nonconforming = {warn_nonconforming}
 # Tasks WITHOUT a type while [task_types] schemas are declared: "allow"
-# (sanctioned — untouched by schemas, never reported), "warn" (tolerated, but
+# (sanctioned - untouched by schemas, never reported), "warn" (tolerated, but
 # counted in the non-conformance warning), or "deny" (a type is mandatory: any
 # write to an untyped task is rejected until one is set). A long migration
 # typically walks allow -> warn -> deny.
@@ -100,14 +100,14 @@ untyped_tasks = "{untyped_tasks}"
 # What to do when concurrent branches change the SAME field (or dependency) to
 # incompatible values. Non-overlapping changes always merge cleanly; this only
 # governs genuine contradictions, and it resolves them per-field:
-#   "surface" — stop the merge and let a human resolve it (run `ta resolve`)
-#   "latest"  — keep the most recently written value (by timestamp)
-#   "ours"    — keep the value on the branch being merged INTO
-#   "theirs"  — keep the value from the branch being merged IN
+#   "surface" - stop the merge and let a human resolve it (run `ta resolve`)
+#   "latest"  - keep the most recently written value (by timestamp)
+#   "ours"    - keep the value on the branch being merged INTO
+#   "theirs"  - keep the value from the branch being merged IN
 on_conflict = "{on_conflict}"
 
 [display]
-# Columns shown by list/ready in human format — and the field set and
+# Columns shown by list/ready in human format - and the field set and
 # order used by `--format json`. "id" and "deps" are built-ins; any other name
 # is a task field (blank when a task lacks it). Override per command with
 # `--columns a,b,c` or `--full`.
@@ -142,12 +142,12 @@ close_time = "{close_time}"
 # rejected. Each type's `kind` says how it behaves: "blocker" makes the target a
 # prerequisite (feeds `ta list --ready` and cycle detection); "hierarchy" is a
 # parent/child (subtask) edge that gates like a blocker but renders distinctly;
-# "info" is informational. inverse names the reverse direction and is OPTIONAL —
+# "info" is informational. inverse names the reverse direction and is OPTIONAL -
 # omit it for a one-way type; the type's own name makes it symmetric
 # (`a relates_to b` reads both ways); else it labels the inverse.
 {relationships_toml}
 
-# Per-type task schemas — OFF while no [task_types.<name>] is declared (the
+# Per-type task schemas - OFF while no [task_types.<name>] is declared (the
 # store stays fully schema-agnostic). Once declared, the `type` field (see
 # workflow.type_field) selects a task's schema, enforced on every create/update
 # (whole-task: every violation reported in one error). Field kinds: string,
@@ -272,7 +272,7 @@ impl Default for CompactionConfig {
 pub struct WorkflowConfig {
     /// DISPLAY name of the status field. Storage is always the canonical
     /// [`crate::model::STATUS_KEY`]: commands map this name to the key on
-    /// write, `action::read` maps it back on read — so renaming it is free.
+    /// write, `action::read` maps it back on read - so renaming it is free.
     pub status_field: String,
     pub done_status: String,
     /// Status stamped onto a new task when `ta create` doesn't set the status
@@ -290,7 +290,7 @@ pub struct WorkflowConfig {
     /// repair). `false` silences it.
     pub warn_nonconforming: bool,
     /// Policy for tasks WITHOUT a task type while `[task_types]` schemas are
-    /// declared — the migration ladder: `allow` (sanctioned: untouched by
+    /// declared - the migration ladder: `allow` (sanctioned: untouched by
     /// schemas, never reported), `warn` (tolerated, but counted in the
     /// non-conformance report), `deny` (a type is mandatory: any write to an
     /// untyped task is rejected until one is set).
@@ -299,7 +299,7 @@ pub struct WorkflowConfig {
 
 /// See [`WorkflowConfig::untyped_tasks`].
 ///
-/// Typed tasks always validate fully — this only governs tasks missing the
+/// Typed tasks always validate fully - this only governs tasks missing the
 /// discriminator entirely (a task with an UNKNOWN type name is a violation
 /// under every policy).
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -346,7 +346,7 @@ pub struct MergeConfig {
 ///
 /// A contradiction is the same field or dependency set to different values on
 /// both branches. Commuting concurrent edits always auto-merge regardless of
-/// this setting; it only governs true conflicts, and it applies per-field —
+/// this setting; it only governs true conflicts, and it applies per-field -
 /// each conflicting field is resolved on its own.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -481,7 +481,7 @@ pub enum RelKind {
     /// children are), but is rendered distinctly as a hierarchy, not a plain
     /// dependency.
     Hierarchy,
-    /// No effect on readiness or cycles — purely informational.
+    /// No effect on readiness or cycles - purely informational.
     #[default]
     Info,
 }
@@ -500,7 +500,7 @@ impl RelKind {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct RelationshipDef {
-    /// `blocker` (gates readiness/cycles), `hierarchy` (parent/child — gates like
+    /// `blocker` (gates readiness/cycles), `hierarchy` (parent/child - gates like
     /// a blocker but renders as subtasks), or `info` (informational). The config
     /// key is `kind`; the pre-rename key `type` still loads as an alias.
     #[serde(alias = "type")]
@@ -508,7 +508,7 @@ pub struct RelationshipDef {
     /// Name the reverse edge is shown under. **Optional**; empty (the default)
     /// means a one-way relationship whose reverse isn't surfaced (e.g. a small
     /// task that `duplicates` part of a bigger one). The type's OWN name means
-    /// **symmetric** — `a relates_to b` also reads as `b relates_to a`, removable
+    /// **symmetric** - `a relates_to b` also reads as `b relates_to a`, removable
     /// from either side. Any other name labels the inverse direction
     /// (`depends_on`'s reverse is `blocks`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -529,7 +529,7 @@ pub struct RelationshipConfig {
 impl RelationshipConfig {
     /// Relationship-type names that gate readiness, cycle detection, and the
     /// dependency tree: every declared `blocker` *or* `hierarchy` type (both
-    /// gate). Config is the sole source of truth — there is no implicit
+    /// gate). Config is the sole source of truth - there is no implicit
     /// `depends_on` (`Config::validate` requires at least one `blocker` type).
     pub fn blocker_types(&self) -> BTreeSet<String> {
         self.types
@@ -549,7 +549,7 @@ impl RelationshipConfig {
             .map(|(name, _)| name.as_str())
     }
 
-    /// Relationship-type names whose edges are parent→child containment
+    /// Relationship-type names whose edges are parent->child containment
     /// (`kind = "hierarchy"`). These gate like blockers but render distinctly as
     /// subtasks, and a parent rolls up completion over them.
     pub fn hierarchy_types(&self) -> BTreeSet<String> {
@@ -572,7 +572,7 @@ impl Default for RelationshipConfig {
             // (reverse `subtask_of`); `relates_to` is symmetric (self-inverse);
             // `duplicates` is one-way (no inverse surfaced).
             types: [
-                // `depends_on` is the conventional default blocker NAME — the one
+                // `depends_on` is the conventional default blocker NAME - the one
                 // place the literal lives. Everything else is config-driven (the
                 // first blocker type by name; see `default_blocker`), so no code
                 // hardcodes this string.
@@ -591,7 +591,7 @@ impl Default for RelationshipConfig {
 }
 
 /// A declared field's value kind, parsed from its spec string (`"uint"`,
-/// `"enum"`, `"array<string>"`, `"set<enum>"`, …).
+/// `"enum"`, `"array<string>"`, `"set<enum>"`, ...).
 ///
 /// This is the grammar the schema write gate will enforce; the config layer
 /// parses and validates declarations only. `set<T>` is an `array<T>` with
@@ -613,7 +613,7 @@ pub enum FieldKind {
 
 impl FieldKind {
     /// Parse a kind string. Containers take exactly one SCALAR element kind:
-    /// `array<…>`/`set<…>` don't nest, and `any` can't be an element.
+    /// `array<...>`/`set<...>` don't nest, and `any` can't be an element.
     pub fn parse(spec: &str) -> Result<Self, String> {
         let scalar = |name: &str| match name {
             "string" => Some(Self::String),
@@ -643,7 +643,7 @@ impl FieldKind {
                     .map(|kind| container(Box::new(kind)))
                     .ok_or_else(|| {
                         format!(
-                            "`{element}` is not a valid element kind for `{prefix}…>` \
+                            "`{element}` is not a valid element kind for `{prefix}...>` \
                              (expected a scalar: string|bool|int|uint|float|datetime|enum)"
                         )
                     });
@@ -651,7 +651,7 @@ impl FieldKind {
         }
         Err(format!(
             "unknown field kind `{spec}` (expected string|bool|int|uint|float|datetime|enum|any, \
-             or array<…>/set<…> of a scalar kind)"
+             or array<...>/set<...> of a scalar kind)"
         ))
     }
 
@@ -762,8 +762,8 @@ impl FieldSchema {
     }
 
     /// Every way `value` (assumed kind-correct) violates this field's declared
-    /// constraints — message fragments for the write gate's violation list
-    /// (`is below min 1`, `does not match pattern …`). Empty = conforming. An
+    /// constraints - message fragments for the write gate's violation list
+    /// (`is below min 1`, `does not match pattern ...`). Empty = conforming. An
     /// uncompilable pattern is skipped here; `Config::validate` reports it.
     #[must_use]
     pub fn constraint_violations(&self, value: &serde_json::Value) -> Vec<String> {
@@ -828,8 +828,8 @@ impl FieldSchema {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct FieldSpec {
-    /// The field's value kind (`"enum"`, `"uint"`, `"array<string>"`, …). The
-    /// config key is `type` — a field's type and a TASK's type are different
+    /// The field's value kind (`"enum"`, `"uint"`, `"array<string>"`, ...). The
+    /// config key is `type` - a field's type and a TASK's type are different
     /// entities; both are legitimately called type.
     #[serde(rename = "type")]
     pub kind: String,
@@ -845,7 +845,7 @@ pub struct FieldSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
     /// Inclusive lower/upper bounds, compared with the shared value ordering
-    /// (numeric for numbers, lexicographic for strings — which makes RFC 3339
+    /// (numeric for numbers, lexicographic for strings - which makes RFC 3339
     /// datetime bounds chronological). Plain scalar kinds only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min: Option<serde_json::Value>,
@@ -872,7 +872,7 @@ pub struct FieldSpec {
 #[serde(default, deny_unknown_fields)]
 pub struct TaskTypeDef {
     /// `true` = tasks of this type may carry NO field names beyond the declared
-    /// ones (plus the discriminator itself). Open (`false`) is the default —
+    /// ones (plus the discriminator itself). Open (`false`) is the default -
     /// the schema-agnostic ethos.
     pub closed: bool,
     pub fields: BTreeMap<String, FieldSchema>,
@@ -891,7 +891,7 @@ pub struct TaskTypesConfig {
 
 impl Config {
     /// Load config from `path`, falling back to defaults if the file is absent.
-    /// `#[serde(default)]` means a partial file still loads — only the keys
+    /// `#[serde(default)]` means a partial file still loads - only the keys
     /// present override their defaults.
     pub fn load(path: &Path) -> Result<Self, DynError> {
         match std::fs::read_to_string(path) {
@@ -904,7 +904,7 @@ impl Config {
     /// Cheap, struct-only validation: reject configurations that would corrupt the
     /// store regardless of the task data (today: the `keep_events` floor). The CLI
     /// calls this on every store-backed command so a bad edit is reported on the
-    /// very next `ta` invocation rather than silently at the next compaction — and
+    /// very next `ta` invocation rather than silently at the next compaction - and
     /// because it never inspects the graph, it can't lock you out of the commands
     /// (`resolve`, `dep remove`, `config get`) you'd use to fix a deeper problem.
     pub fn validate(&self) -> Result<(), DynError> {
@@ -915,9 +915,9 @@ impl Config {
 
     /// Full validation: the struct-only checks plus consistency against the
     /// materialized task graph. `ta config validate` and `ta config set` run this
-    /// so a manual edit (or a `set`) that contradicts the data — an edge of an
+    /// so a manual edit (or a `set`) that contradicts the data - an edge of an
     /// undeclared type, a blocker cycle, an inverse name colliding with another
-    /// type — is caught up front. This is the hook `type-schemas` extends with
+    /// type - is caught up front. This is the hook `type-schemas` extends with
     /// per-type field validation.
     pub fn validate_against(&self, state: &HashMap<String, TaskState>) -> Result<(), DynError> {
         let mut problems = Vec::new();
@@ -946,7 +946,7 @@ impl Config {
         self.collect_task_type_problems(problems);
     }
 
-    /// The relationship-type names + their non-empty inverse display names —
+    /// The relationship-type names + their non-empty inverse display names -
     /// the vocabulary task fields and workflow display names must not shadow.
     fn relationship_names(&self) -> BTreeSet<&str> {
         let mut names: BTreeSet<&str> = self
@@ -982,9 +982,9 @@ impl Config {
     /// Every configured name lives in ONE namespace: the canonical storage keys,
     /// the workflow display names, the timestamp columns, and the relationship
     /// type + inverse names all end up as field/column names, so a name claimed
-    /// by two roles — or by the static reserved list — garbles reads (a
+    /// by two roles - or by the static reserved list - garbles reads (a
     /// timestamp clobbering the status, a relationship shadowed by the `deps`
-    /// built-in, …). Schema field declarations are checked separately,
+    /// built-in, ...). Schema field declarations are checked separately,
     /// membership-only: two task types sharing a field name is deliberate.
     fn collect_name_collision_problems(&self, problems: &mut Vec<String>) {
         fn claim<'a>(
@@ -1070,14 +1070,14 @@ impl Config {
         }
         // An inverse name colliding with a *different* declared type makes
         // `ta dep` unable to tell the forward edge from the inverse one.
-        // (Structural, so it belongs here — every store command checks it.)
+        // (Structural, so it belongs here - every store command checks it.)
         for (name, def) in &self.relationships.types {
             if !def.inverse.is_empty()
                 && def.inverse != *name
                 && self.relationships.types.contains_key(&def.inverse)
             {
                 problems.push(format!(
-                    "relationship `{name}` has inverse `{}`, which is also a declared type — \
+                    "relationship `{name}` has inverse `{}`, which is also a declared type - \
                      ambiguous (use a distinct inverse name, or set inverse = \"{name}\" to make \
                      it symmetric)",
                     def.inverse
@@ -1111,7 +1111,7 @@ impl Config {
                     problems.push(format!("{ctx}: collides with a computed timestamp column"));
                 } else if field == &w.type_field || field == crate::model::TASK_TYPE_KEY {
                     problems.push(format!(
-                        "{ctx}: the task-type discriminator is implicit — don't declare it"
+                        "{ctx}: the task-type discriminator is implicit - don't declare it"
                     ));
                 } else if field == crate::model::STATUS_KEY
                     && w.status_field != crate::model::STATUS_KEY
@@ -1209,7 +1209,7 @@ impl Config {
         let is_container = matches!(kind, FieldKind::Array(_) | FieldKind::Set(_));
         if (spec.min_items.is_some() || spec.max_items.is_some()) && !is_container {
             problems.push(format!(
-                "{ctx}: min_items/max_items only apply to array<…>/set<…> (declared `{}`)",
+                "{ctx}: min_items/max_items only apply to array<...>/set<...> (declared `{}`)",
                 spec.kind
             ));
         }
@@ -1243,7 +1243,7 @@ impl Config {
         let types = &self.relationships.types;
 
         // 1. Every typed relationship edge present in the data must use a declared
-        //    type — so renaming/removing a type that tasks still use is caught.
+        //    type - so renaming/removing a type that tasks still use is caught.
         let mut undeclared: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         for (id, task) in state {
             for rel in task.relationships.keys() {
@@ -1268,7 +1268,7 @@ impl Config {
             let shown = if cycle.len() == 1 {
                 format!("{} (depends on itself)", cycle[0])
             } else {
-                cycle.join(" ↔ ")
+                cycle.join(" <-> ")
             };
             problems.push(format!("blocker dependency cycle: {shown}"));
         }
@@ -1316,7 +1316,7 @@ mod tests {
     #[test]
     fn template_parses_to_defaults() {
         // The rendered template must round-trip to the defaults it was built
-        // from — catches a typo'd key or section in the prose template.
+        // from - catches a typo'd key or section in the prose template.
         let parsed: Config = toml::from_str(&default_toml()).unwrap();
         assert_eq!(parsed, Config::default());
     }

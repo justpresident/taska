@@ -25,7 +25,7 @@ pub struct ConflictItem {
     pub kept: String,
 }
 
-/// An orphaned event — one that applies to no existing task during replay.
+/// An orphaned event - one that applies to no existing task during replay.
 pub struct OrphanEvent {
     pub seq: u64,
     pub op: OpType,
@@ -33,15 +33,15 @@ pub struct OrphanEvent {
 }
 
 /// What a `resolve` would act on. `conflicts` is `None` when there's no merge
-/// marker, `Some(list)` when one is present (the list may be empty — a marker
+/// marker, `Some(list)` when one is present (the list may be empty - a marker
 /// that names no conflicts).
 pub struct ResolvePlan {
     pub conflicts: Option<Vec<ConflictItem>>,
     pub orphans: Vec<OrphanEvent>,
 }
 
-/// Inspect the store — parse the merge marker (if any) and compute the orphaned
-/// events — without writing anything.
+/// Inspect the store - parse the merge marker (if any) and compute the orphaned
+/// events - without writing anything.
 pub fn plan(store: &FileStore) -> Result<ResolvePlan, DynError> {
     let conflicts = read_marker(store)?;
 

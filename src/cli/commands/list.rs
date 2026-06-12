@@ -1,4 +1,4 @@
-//! `ta list` — tasks rendered per the display args, optionally filtered.
+//! `ta list` - tasks rendered per the display args, optionally filtered.
 //!
 //! The filtered, ordered set comes from [`crate::action::list_tasks`]
 //! (positional `field<op>value` criteria, `--open`, `--ready`, `--sort`); this

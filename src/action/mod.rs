@@ -1,17 +1,17 @@
 //! The frontend-agnostic **action layer**: every operation a frontend performs
-//! on a store, returning typed data and warnings-*as-data* — never printing.
+//! on a store, returning typed data and warnings-*as-data* - never printing.
 //!
 //! This is the seam that lets more than one frontend (the bundled CLI, a TUI, a
 //! library consumer) drive the same functionality and present it differently.
 //! An action depends only on the [`EventStore`](crate::storage::EventStore)
 //! trait plus the domain layers (engine/schema/graph/config); it knows nothing
-//! of `cli` or `format`. Presentation — `println!`, color, prompts, tables —
+//! of `cli` or `format`. Presentation - `println!`, color, prompts, tables -
 //! stays entirely in the frontend, which consumes an action's typed result and
 //! renders it however it likes.
 //!
 //! Every command drives through here: `read`, the display actions
 //! (`list`/`show`/`status`/`prime`), the `dep` group, `write::{create,update,delete}`,
-//! the plan→apply pairs (`undo`/`resolve`), `compact`, `repair`, `config`, and
+//! the plan->apply pairs (`undo`/`resolve`), `compact`, `repair`, `config`, and
 //! `init`. [`materialize`] is the shared raw-materialization primitive every
 //! write/maintenance action uses (so it lives here, not in any one sibling).
 
@@ -47,7 +47,7 @@ pub use status::{status, StatusOutcome, StatusSummary};
 ///
 /// The write-side counterpart to [`read`]: the `append_checked` verifier closures
 /// and the maintenance actions hold slices read under the store lock (not a
-/// store) and want raw state — canonical keys, no display shaping. A thin
+/// store) and want raw state - canonical keys, no display shaping. A thin
 /// convenience over [`Engine::materialize_state`], at the action root so no
 /// action depends on a *sibling* module for it.
 pub(crate) fn materialize(
@@ -63,16 +63,16 @@ pub(crate) fn materialize(
 }
 
 /// Inject the graph-computed columns onto `state`, but only those `wanted` by the
-/// caller — so they cost nothing unless a query/display actually references one.
+/// caller - so they cost nothing unless a query/display actually references one.
 ///
 /// The shared generic-column primitive: `list` (display + criterion columns) and
 /// `dep tree` (its configured columns) both call this, so every multi-result
 /// action surfaces the same computed columns the same way. They're injected as
 /// ordinary fields, so `cell_value`/sorting/filtering/rendering handle them with
 /// no special-casing:
-/// - `unblocks`/`blocked_by` — transitive not-done dependents / prerequisites
+/// - `unblocks`/`blocked_by` - transitive not-done dependents / prerequisites
 ///   over the blocker edges (numbers).
-/// - `subtasks` — a parent's `done/total` direct-child completion (string).
+/// - `subtasks` - a parent's `done/total` direct-child completion (string).
 pub(crate) fn inject_computed_columns(
     store: &impl EventStore,
     state: &mut HashMap<String, TaskState>,

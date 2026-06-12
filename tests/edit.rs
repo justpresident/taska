@@ -1,4 +1,4 @@
-//! End-to-end tests for `ta edit` — the `$EDITOR` round-trip and its re-edit
+//! End-to-end tests for `ta edit` - the `$EDITOR` round-trip and its re-edit
 //! loop. A throwaway shell script stands in for the editor: it receives the temp
 //! file as `$1` and rewrites it, exactly as a real editor's save would.
 
@@ -80,7 +80,7 @@ fn edit_changes_a_field() {
 fn edit_unsets_a_deleted_field() {
     let dir = setup("edit_unsets_a_deleted_field");
     ta(&dir, &["create", "t2", "title=A", "priority=2"]);
-    // Drop the `priority` line — a removed field unsets via the null convention.
+    // Drop the `priority` line - a removed field unsets via the null convention.
     let ed = editor_script(
         &dir,
         "ed.sh",
@@ -131,7 +131,7 @@ fn edit_reedits_after_syntax_error() {
     ta(&dir, &["create", "t5", "title=A", "status=todo"]);
     let counter = dir.join("count");
     // First save is broken TOML; after the user answers `y`, the second save is
-    // valid — exercising the re-edit loop on the SAME file.
+    // valid - exercising the re-edit loop on the SAME file.
     let ed = editor_script(
         &dir,
         "ed.sh",
@@ -164,7 +164,7 @@ fn edit_reedits_after_syntax_error() {
 #[test]
 fn edit_reedits_after_schema_violation() {
     let dir = setup("edit_reedits_after_schema_violation");
-    // Declare a schema so the write gate rejects an out-of-enum status — a
+    // Declare a schema so the write gate rejects an out-of-enum status - a
     // different error source than syntax, but the same re-edit loop.
     let cfg = dir.join(".taska/config.toml");
     let mut text = fs::read_to_string(&cfg).unwrap();

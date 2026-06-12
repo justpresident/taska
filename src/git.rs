@@ -6,7 +6,7 @@
 //! Note the split: `.gitattributes` is committed and travels with the repo, but
 //! the `merge.<driver>.driver` settings live in *local* git config, which is
 //! per-clone and never committed. So a fresh clone of a repo that already has a
-//! `.taska` store still needs the drivers registered locally — which is why
+//! `.taska` store still needs the drivers registered locally - which is why
 //! [`setup`] is idempotent and safe to re-run via `ta init`.
 
 use std::io::Write;
@@ -23,7 +23,7 @@ const BASELINE_PATH: &str = ".taska/baseline.jsonl";
 /// driver for the event log, and a keep-ours driver for the compacted baseline.
 ///
 /// Idempotent and safe to call at any time: attribute lines are only added if
-/// absent, and `git config` simply re-asserts the same values. Best-effort — a
+/// absent, and `git config` simply re-asserts the same values. Best-effort - a
 /// missing git repo warns rather than failing, so `ta init` still works in a
 /// plain directory.
 pub fn setup(repo_root: &Path) -> Result<(), DynError> {
@@ -74,7 +74,7 @@ fn ensure_gitattribute(repo_root: &Path, file: &str, driver: &str) -> Result<(),
 }
 
 /// The SCM owning a directory: the nearest `.git` or `.hg` walking UP from
-/// `start` (the store's parent — which need not be the SCM root: a `.taska`
+/// `start` (the store's parent - which need not be the SCM root: a `.taska`
 /// nested deeper inside a repo is supported), together with the checkout root
 /// it was found at. `.git` may be a FILE (worktrees, submodules), so `exists()`
 /// not `is_dir()`. `None` means a plain directory.
@@ -108,9 +108,9 @@ pub fn scm_root(start: &Path) -> Option<&Path> {
 /// A health warning when the store's merge protection is incomplete, for the
 /// CLI to print on stderr before every store-backed command.
 ///
-/// Never blocking — the store itself is fine, the *clone* is missing setup:
+/// Never blocking - the store itself is fine, the *clone* is missing setup:
 /// `.gitattributes` travels with the repo, but the driver *definitions* live in
-/// per-clone local git config — so `ta init` before `git init`, or any fresh
+/// per-clone local git config - so `ta init` before `git init`, or any fresh
 /// clone, leaves git silently falling back to its text merge on a diverged log
 /// (conflict markers inside the JSONL). Detection walks up from the store's
 /// parent and is ordered cheapest-first: no SCM anywhere costs only stats and
@@ -122,7 +122,7 @@ pub fn health_warning(repo_root: &Path) -> Option<String> {
     match detect_scm(repo_root)?.0 {
         Scm::Mercurial => Some(
             "mercurial repository detected; taska's merge protection currently \
-             supports only git — merging concurrent .taska edits in hg can corrupt \
+             supports only git - merging concurrent .taska edits in hg can corrupt \
              the task log"
                 .to_string(),
         ),
@@ -136,7 +136,7 @@ pub fn health_warning(repo_root: &Path) -> Option<String> {
                 );
             }
             // Check the .gitattributes where `setup` writes it: the store's
-            // parent (valid for a nested store too — attribute files apply to
+            // parent (valid for a nested store too - attribute files apply to
             // the tree below their directory).
             let attrs =
                 std::fs::read_to_string(repo_root.join(".gitattributes")).unwrap_or_default();
@@ -157,7 +157,7 @@ pub fn health_warning(repo_root: &Path) -> Option<String> {
     }
 }
 
-/// Whether both merge-driver definitions resolve in git config (any scope —
+/// Whether both merge-driver definitions resolve in git config (any scope -
 /// a globally registered driver works just as well as a local one). One spawn
 /// for both drivers; a missing repo or git binary reads as "not registered".
 fn drivers_registered(repo_root: &Path) -> bool {

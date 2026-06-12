@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 03-merge.sh — concurrent edits on two branches, reconciled by the git merge driver.
+# 03-merge.sh - concurrent edits on two branches, reconciled by the git merge driver.
 #
 # Shows three things:
 #   1. a clean auto-merge (the branches touch DIFFERENT fields),
@@ -10,7 +10,7 @@
 # so those calls are guarded with `|| true` and must not abort the script.
 source "$(dirname "$0")/lib.sh"
 
-# set_policy <surface|latest|ours|theirs> — rewrite [merge] on_conflict in config.
+# set_policy <surface|latest|ours|theirs> - rewrite [merge] on_conflict in config.
 set_policy() {
   sed -i "s/^on_conflict = .*/on_conflict = \"$1\"/" .taska/config.toml
 }
@@ -33,7 +33,7 @@ run git checkout -q main
 run ta update feature-x owner=bob
 run git commit -q -am "main: reassign owner"
 
-say "Merge 'review' into main. Different fields don't collide — the driver merges cleanly."
+say "Merge 'review' into main. Different fields don't collide - the driver merges cleanly."
 run git merge review -m "merge review" || true
 
 say "Both edits survived: status=closed AND owner=bob. No conflict, no human needed."
@@ -60,7 +60,7 @@ run git commit -q -am "main: blocked"
 
 say "Under 'surface', a genuine conflict STOPS the merge for a human (this failure is expected)."
 run git merge qa -m "merge qa" || true
-say "git left the path unmerged — exactly as intended:"
+say "git left the path unmerged - exactly as intended:"
 run git status --short
 
 say "'ta resolve' reports what was tentatively kept (ours) and points at how to finish."
@@ -101,5 +101,5 @@ for policy in theirs latest; do
   run ta show release
 done
 
-say "Recap: non-overlapping edits always merge; same-field conflicts follow on_conflict —"
+say "Recap: non-overlapping edits always merge; same-field conflicts follow on_conflict -"
 say "surface (stop + ta resolve), or theirs / latest / ours to resolve automatically."

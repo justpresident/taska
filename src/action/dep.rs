@@ -5,7 +5,7 @@
 //! edges, enforces the structural blocker invariants, and appends under the lock;
 //! the read side returns typed graph data (cycle lists, ordered prerequisites,
 //! the tree forest with the requested columns per node) plus warnings. No field
-//! name is hardcoded — `tree` fetches whatever columns the caller asks for.
+//! name is hardcoded - `tree` fetches whatever columns the caller asks for.
 //! Nothing here prints.
 
 use std::cmp::Ordering;
@@ -50,7 +50,7 @@ pub fn apply_edges(
         .map(|(owner, rel_type, dep)| {
             let mut payload = Map::new();
             payload.insert(TARGET_KEY.to_string(), Value::String(dep.clone()));
-            // Every edge carries an explicit type now — no implicit `depends_on`.
+            // Every edge carries an explicit type now - no implicit `depends_on`.
             payload.insert(REL_KEY.to_string(), Value::String(rel_type.clone()));
             MutationEvent::new(op.clone(), owner.clone(), payload)
         })
@@ -87,7 +87,7 @@ fn validate_blocker_additions(
         return Ok(());
     }
 
-    // Seed the would-be view from current state: each owner's blocker target→type,
+    // Seed the would-be view from current state: each owner's blocker target->type,
     // and each child's parent.
     let mut blocker_to: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut parent_of: HashMap<String, String> = HashMap::new();
@@ -308,8 +308,8 @@ pub fn plan(
 }
 
 /// The longest chain of incomplete prerequisites within `remaining` (already in
-/// topological order, prerequisites first). A DP over that order — `depth(t) =
-/// 1 + max(depth(p))` across `t`'s not-done blocker prerequisites — then a
+/// topological order, prerequisites first). A DP over that order - `depth(t) =
+/// 1 + max(depth(p))` across `t`'s not-done blocker prerequisites - then a
 /// backtrack from the deepest task. Ties break on the smaller id so the chosen
 /// path is deterministic.
 fn critical_path(
@@ -361,15 +361,15 @@ fn critical_path(
 /// One node of a dependency tree, built once for any frontend to render.
 ///
 /// `cells` carries the FULL value of each requested column the task has (no
-/// hardcoded field names — the caller chooses which columns); renderers truncate
+/// hardcoded field names - the caller chooses which columns); renderers truncate
 /// to taste, so this layer stays free of display concerns.
 pub struct Node {
     pub id: String,
     /// `(column name, value)` for each [`TreeQuery::columns`] the task has, in
     /// the order requested. The label the frontend shows is its own choice over
-    /// these — the domain assumes nothing about a "title" field.
+    /// these - the domain assumes nothing about a "title" field.
     pub cells: Vec<(String, Value)>,
-    /// Whether the task is done — the load-bearing use of the status field, kept
+    /// Whether the task is done - the load-bearing use of the status field, kept
     /// so the renderer can mark/dim done nodes.
     pub done: bool,
     /// Edge to the parent: `subtask` for a hierarchy edge, the type name for
@@ -544,7 +544,7 @@ fn build(
         };
     };
     let done = is_done(task, ctx.status_field, ctx.done_status);
-    // The requested columns the task actually has, full values, in order — no
+    // The requested columns the task actually has, full values, in order - no
     // field name is hardcoded; the frontend chose the columns.
     let cells: Vec<(String, Value)> = ctx
         .columns

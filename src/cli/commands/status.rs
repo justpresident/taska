@@ -1,4 +1,4 @@
-//! `ta status` — total, per-status, blocked, ready, and closed counts.
+//! `ta status` - total, per-status, blocked, ready, and closed counts.
 //!
 //! The counts come from [`crate::action::status`]; this file is just their
 //! presentation (the aligned human table and the JSON object).
@@ -71,7 +71,7 @@ fn render_status_human(s: &StatusSummary, color: bool) -> String {
 }
 
 /// The summary as a JSON object (a single value; `emit` renders it for
-/// json/jsonl). Keys serialize in sorted order — deterministic for scripting.
+/// json/jsonl). Keys serialize in sorted order - deterministic for scripting.
 fn status_value(s: &StatusSummary) -> Value {
     let by_status: serde_json::Map<String, Value> = s
         .by_status
@@ -95,7 +95,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     // The counts are computed and tested in `action::status`; here we cover the
-    // PRESENTATION of a summary — the human table and the JSON object.
+    // PRESENTATION of a summary - the human table and the JSON object.
     fn sample() -> StatusSummary {
         StatusSummary {
             total: 5,

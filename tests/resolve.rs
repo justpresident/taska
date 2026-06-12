@@ -7,7 +7,7 @@ fn orphaned_events_warn_on_read_and_resolve_drops_them() {
     init_repo(&dir);
     ta(&dir, &["init"]);
 
-    // Create then delete `a`, then plant an Update event for the (now gone) `a` —
+    // Create then delete `a`, then plant an Update event for the (now gone) `a` -
     // an orphan that applies to nothing at replay. (The gate rejects `ta update a`
     // on a missing task, so we write the orphan directly, as a merge/revert would.)
     ta(&dir, &["create", "a", "status=open"]);

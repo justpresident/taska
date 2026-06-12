@@ -1,4 +1,4 @@
-//! `taska` — local-first, git-native task & dependency tracker.
+//! `taska` - local-first, git-native task & dependency tracker.
 //!
 //! The core (model, engine, storage, merge, graph, config, error), the
 //! frontend-agnostic [`action`] layer, and the bundled CLI surface live in this

@@ -3,7 +3,7 @@ name: Release binaries
 # Build prebuilt `ta` binaries on each target's NATIVE runner (cross-compiling
 # macOS from Linux would need Apple's SDK and is a licensing/fragility trap), then
 # attach them to the GitHub release for the tag. This never publishes to crates.io
-# — `cargo publish` stays a separate manual step in docs/crate_release_process.md.
+# - `cargo publish` stays a separate manual step in docs/crate_release_process.md.
 # Fires when a GitHub release is PUBLISHED (the curated-notes step in
 # docs/crate_release_process.md), so binaries attach to that release with no race
 # against its creation.

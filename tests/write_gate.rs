@@ -30,7 +30,7 @@ fn reserved_field_keys_are_rejected() {
 }
 
 /// A new write must REFUSE to mint a `seq` when the log holds a line it can't
-/// parse — otherwise `max_seq` would under-count and hand out a duplicate seq,
+/// parse - otherwise `max_seq` would under-count and hand out a duplicate seq,
 /// corrupting the append-only order. The classic trigger is a stale binary that
 /// predates a newer `OpType`; here we simulate it with an unknown-op line that
 /// already carries `seq` 2, so a tolerant (skip-and-mint) writer would re-mint 2.
@@ -141,7 +141,7 @@ fn gate_rejects_dangling_targets_reserved_fields_and_missing_delete() {
     );
     assert!(String::from_utf8_lossy(&dangling.stderr).contains("ghost"));
 
-    // Reserved/computed field names can't be set — they'd be silently shadowed.
+    // Reserved/computed field names can't be set - they'd be silently shadowed.
     // `create_time` is a timestamp column, `unblocks` a graph column, `blocks` a
     // relationship inverse, `deps`/`id` structural.
     for field in [

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 09-schemas.sh — per-type schemas: the write gate, constraints, defaults, and
+# 09-schemas.sh - per-type schemas: the write gate, constraints, defaults, and
 # migrating a legacy untyped store into a schema with `ta repair`.
 #
 # taska starts schema-agnostic: any field name, any value. Declaring
-# [task_types.<name>] turns on a per-type schema enforced on every write —
-# whole-task, with EVERY violation reported in one error — plus constraints and
+# [task_types.<name>] turns on a per-type schema enforced on every write -
+# whole-task, with EVERY violation reported in one error - plus constraints and
 # a default life-cycle. This walks that arc, then adopts two legacy untyped tasks
 # into the schema and ratchets the untyped policy allow -> warn -> deny.
 source "$(dirname "$0")/lib.sh"
@@ -14,7 +14,7 @@ fresh_repo
 say "A fresh store is schema-agnostic: any field name, any value is accepted."
 run ta create parser title="Parser crashes on EOF" severity=high
 run ta create login title="Login 500s under load" severity=low
-say "Neither has a 'type' — these are our 'legacy' tasks for the migration later."
+say "Neither has a 'type' - these are our 'legacy' tasks for the migration later."
 
 say "Declare a schema for a 'bug' type by adding [task_types.bug] to .taska/config.toml:"
 SCHEMA='
@@ -55,7 +55,7 @@ run ta show crash
 say "(severity: low, though we never set it.)"
 
 say "Now the migration. The two legacy tasks (parser, login) are still untyped;"
-say "in 'allow' mode they're sanctioned — never reported:"
+say "in 'allow' mode they're sanctioned - never reported:"
 run ta list --columns id,type,title --sort id
 
 say "Step the policy up to 'warn': reads now flag the untyped tasks on stderr,"
@@ -63,7 +63,7 @@ say "without blocking anything."
 run ta config set workflow.untyped_tasks warn
 run ta list --columns id,type,title --sort id
 
-say "Adopt them into the schema with one repair pass — type every untyped task as"
+say "Adopt them into the schema with one repair pass - type every untyped task as"
 say "'bug'. Defaults are healed in; both already have title + severity, so they"
 say "conform immediately."
 run ta repair --schema --set-type-if-none bug
@@ -73,4 +73,4 @@ say "Every task now has a conforming type, so close the ladder at 'deny':"
 say "from here an untyped write is rejected outright."
 run ta config set workflow.untyped_tasks deny
 run ta list --columns id,type,title --sort id
-say "Schema declared, data migrated, gate fully on — the store is self-describing."
+say "Schema declared, data migrated, gate fully on - the store is self-describing."

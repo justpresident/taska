@@ -1,4 +1,4 @@
-//! `ta update` — set (`=`), accumulate (`+=`), or remove (`-=`) fields on a task.
+//! `ta update` - set (`=`), accumulate (`+=`), or remove (`-=`) fields on a task.
 
 use crate::cli::parse_field_ops;
 use crate::error::DynError;
@@ -20,7 +20,7 @@ pub fn cmd_update(store: &impl EventStore, id: &str, fields: &[String]) -> Resul
     canonicalize_field_pairs(&mut ops.subtract, workflow)?;
     let written = crate::action::write::update(store, id, &ops)?;
     if written.is_empty() {
-        println!("`{id}` already up to date — no changes");
+        println!("`{id}` already up to date - no changes");
     } else {
         println!("Updated task `{id}`");
     }
