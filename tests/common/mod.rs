@@ -162,6 +162,47 @@ pub fn init_renamed(dir: &Path) {
     ta(dir, &["init"]);
 }
 
+/// A schema-LESS renamed config: it renames the configurable NAMES (status field
+/// `state`, type field `kind`, timestamp columns, and all relationship types +
+/// inverses) but declares no task types and allows untyped tasks, so a theme test
+/// converts with only field/relationship token swaps (no required fields to add).
+/// Status VALUES stay near the defaults here; the fully-renamed-VALUE coverage
+/// lives in `configurable_names.rs` / [`init_renamed`].
+const RENAMED_OPEN_CONFIG: &str = r#"
+[workflow]
+status_field = "state"
+default_status = "todo"
+done_status = "closed"
+type_field = "kind"
+untyped_tasks = "allow"
+
+[timestamps]
+create_time = "made_at"
+update_time = "touched_at"
+close_time = "shipped_at"
+
+[display]
+columns = ["id", "state", "deps"]
+max_width = 40
+
+[relationships]
+needs    = { kind = "blocker", inverse = "feeds" }
+contains = { kind = "hierarchy", inverse = "part_of" }
+related  = { kind = "info", inverse = "related" }
+dup      = { kind = "info" }
+"#;
+
+/// Provision a store with the schema-less renamed config (see
+/// [`RENAMED_OPEN_CONFIG`]): the configurable NAMES are non-default, so a theme
+/// converted onto this helper catches any hardcoded `status`/`depends_on`/`type`/
+/// `create_time`/... in the code paths it exercises.
+pub fn init_renamed_open(dir: &Path) {
+    init_repo(dir);
+    fs::create_dir_all(dir.join(".taska")).unwrap();
+    fs::write(dir.join(".taska/config.toml"), RENAMED_OPEN_CONFIG).unwrap();
+    ta(dir, &["init"]);
+}
+
 pub fn rows(path: &Path) -> usize {
     fs::read_to_string(path)
         .unwrap()

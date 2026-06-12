@@ -3,15 +3,15 @@ use common::*;
 
 #[test]
 fn list_supports_regex_negation_and_combined_criteria() {
+    // Renamed config: status field is `state`, blocker is `needs`, info is `related`.
     let dir = fresh_dir("search-improve");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(
         &dir,
         &[
             "create",
             "api",
-            "status=open",
+            "state=open",
             "priority=3",
             "title=API work",
         ],
@@ -21,19 +21,19 @@ fn list_supports_regex_negation_and_combined_criteria() {
         &[
             "create",
             "db",
-            "status=closed",
+            "state=closed",
             "priority=1",
             "title=DB migration",
         ],
     );
     ta(
         &dir,
-        &["create", "web", "status=open", "priority=2", "title=Web UI"],
+        &["create", "web", "state=open", "priority=2", "title=Web UI"],
     );
-    ta(&dir, &["dep", "add", "web", "depends_on=api"]);
+    ta(&dir, &["dep", "add", "web", "needs=api"]);
 
     // Multiple criteria are AND-combined.
-    let both = ta(&dir, &["list", "status=open", "priority=3"]);
+    let both = ta(&dir, &["list", "state=open", "priority=3"]);
     assert!(
         lists_task(&both, "api") && !lists_task(&both, "web"),
         "AND: {both}"
@@ -47,7 +47,7 @@ fn list_supports_regex_negation_and_combined_criteria() {
     );
 
     // Negation, and querying built-in id / deps fields.
-    let ne = ta(&dir, &["list", "status!=open"]);
+    let ne = ta(&dir, &["list", "state!=open"]);
     assert!(
         lists_task(&ne, "db") && !lists_task(&ne, "api"),
         "negation: {ne}"
@@ -61,7 +61,7 @@ fn list_supports_regex_negation_and_combined_criteria() {
         lists_task(&ta(&dir, &["list", "id=~^a"]), "api"),
         "id=~ regex"
     );
-    let nre = ta(&dir, &["list", "status!~^op"]);
+    let nre = ta(&dir, &["list", "state!~^op"]);
     assert!(
         lists_task(&nre, "db") && !lists_task(&nre, "api"),
         "!~ negated regex: {nre}"
@@ -74,54 +74,52 @@ fn list_supports_regex_negation_and_combined_criteria() {
 
     // `deps=<x>` matches a target under ANY relationship type, info included -
     // the filter sees exactly what the deps column shows.
-    ta(&dir, &["dep", "add", "web", "relates_to=db"]);
+    ta(&dir, &["dep", "add", "web", "related=db"]);
     let info = ta(&dir, &["list", "deps=db"]);
     assert!(lists_task(&info, "web"), "info edge matches deps=: {info}");
 }
 
 #[test]
 fn relationship_names_and_computed_columns_filter() {
+    // Renamed relationships: blocker `needs` (inverse `feeds`), hierarchy
+    // `contains` (inverse `part_of`), info `related` (symmetric).
     let dir = fresh_dir("rel-filters");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     for id in ["epic", "c1", "c2", "other"] {
-        ta(&dir, &["create", id, "status=open"]);
+        ta(&dir, &["create", id, "state=open"]);
     }
-    ta(
-        &dir,
-        &["dep", "add", "epic", "has_subtask=c1", "has_subtask=c2"],
-    );
-    ta(&dir, &["dep", "add", "c2", "depends_on=c1"]);
-    ta(&dir, &["dep", "add", "c1", "relates_to=other"]);
+    ta(&dir, &["dep", "add", "epic", "contains=c1", "contains=c2"]);
+    ta(&dir, &["dep", "add", "c2", "needs=c1"]);
+    ta(&dir, &["dep", "add", "c1", "related=other"]);
 
     // Forward: a declared type name filters by that type's edges.
-    let dependents = ta(&dir, &["list", "depends_on=c1"]);
+    let dependents = ta(&dir, &["list", "needs=c1"]);
     assert!(
         lists_task(&dependents, "c2") && !lists_task(&dependents, "epic"),
-        "only the depends_on edge matches: {dependents}"
+        "only the needs edge matches: {dependents}"
     );
 
     // Inverse names resolve the reverse direction: children of the umbrella,
     // and what a task blocks - the queries from the motivating session.
-    let children = ta(&dir, &["list", "subtask_of=epic", "--sort", "id"]);
+    let children = ta(&dir, &["list", "part_of=epic", "--sort", "id"]);
     assert!(
         lists_task(&children, "c1")
             && lists_task(&children, "c2")
             && !lists_task(&children, "other"),
-        "subtask_of finds the children: {children}"
+        "part_of finds the children: {children}"
     );
-    let blockers = ta(&dir, &["list", "blocks=c2"]);
+    let blockers = ta(&dir, &["list", "feeds=c2"]);
     assert!(
         lists_task(&blockers, "c1") && !lists_task(&blockers, "epic"),
-        "blocks resolves what c2 depends on: {blockers}"
+        "feeds resolves what c2 needs: {blockers}"
     );
 
-    // Symmetric relates_to matches from both sides of the stored edge.
-    assert!(lists_task(&ta(&dir, &["list", "relates_to=other"]), "c1"));
-    assert!(lists_task(&ta(&dir, &["list", "relates_to=c1"]), "other"));
+    // Symmetric `related` matches from both sides of the stored edge.
+    assert!(lists_task(&ta(&dir, &["list", "related=other"]), "c1"));
+    assert!(lists_task(&ta(&dir, &["list", "related=c1"]), "other"));
 
     // Regex operators compose with edge fields.
-    let re = ta(&dir, &["list", "subtask_of=~^ep"]);
+    let re = ta(&dir, &["list", "part_of=~^ep"]);
     assert!(lists_task(&re, "c1") && lists_task(&re, "c2"), "{re}");
 
     // A computed column used ONLY as a filter is injected: c1 transitively
@@ -142,13 +140,12 @@ fn relationship_names_and_computed_columns_filter() {
 #[test]
 fn comparison_operators_filter_numbers_and_dates() {
     let dir = fresh_dir("cmp-ops");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "a", "status=open", "priority=1"]);
-    ta(&dir, &["create", "b", "status=open", "priority=3"]);
-    ta(&dir, &["create", "c", "status=open", "priority=5"]);
-    ta(&dir, &["dep", "add", "b", "depends_on=a"]); // a unblocks b
-    ta(&dir, &["dep", "add", "c", "depends_on=b"]); // and transitively c
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", "state=open", "priority=1"]);
+    ta(&dir, &["create", "b", "state=open", "priority=3"]);
+    ta(&dir, &["create", "c", "state=open", "priority=5"]);
+    ta(&dir, &["dep", "add", "b", "needs=a"]); // a unblocks b
+    ta(&dir, &["dep", "add", "c", "needs=b"]); // and transitively c
 
     // Numeric comparison (numeric, not lexical: 5 > 3, not "5" vs "3").
     let ge = ta(&dir, &["list", "priority>=3", "--sort", "id"]);
@@ -169,14 +166,12 @@ fn comparison_operators_filter_numbers_and_dates() {
         "unblocks>0 finds tasks that unblock something: {leverage}"
     );
 
-    // Date range over the injected RFC 3339 create_time (lexical = chronological):
-    // a past lower bound keeps everything, a far-future one drops it.
-    assert!(lists_task(
-        &ta(&dir, &["list", "create_time>=2000-01-01"]),
-        "a"
-    ));
+    // Date range over the injected RFC 3339 create-time, here the RENAMED column
+    // `made_at` (lexical = chronological): a past lower bound keeps everything, a
+    // far-future one drops it.
+    assert!(lists_task(&ta(&dir, &["list", "made_at>=2000-01-01"]), "a"));
     assert!(!lists_task(
-        &ta(&dir, &["list", "create_time>=2999-01-01"]),
+        &ta(&dir, &["list", "made_at>=2999-01-01"]),
         "a"
     ));
 
@@ -285,13 +280,12 @@ fn sort_flag_orders_rows_with_reverse_and_configurable_default() {
 #[test]
 fn status_summarizes_counts_blocked_and_ready() {
     let dir = fresh_dir("status");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    // db is done; api depends on the open web, so api is blocked and web is ready.
-    ta(&dir, &["create", "db", "status=closed"]);
-    ta(&dir, &["create", "web", "status=open"]);
-    ta(&dir, &["create", "api", "status=open"]);
-    ta(&dir, &["dep", "add", "api", "depends_on=web"]);
+    init_renamed_open(&dir);
+    // db is done; api needs the open web, so api is blocked and web is ready.
+    ta(&dir, &["create", "db", "state=closed"]);
+    ta(&dir, &["create", "web", "state=open"]);
+    ta(&dir, &["create", "api", "state=open"]);
+    ta(&dir, &["dep", "add", "api", "needs=web"]);
 
     let human = ta(&dir, &["status"]);
     assert!(human.contains("Total"), "total line: {human}");
@@ -385,14 +379,13 @@ fn null_value_unset_is_reflected_in_list_and_search() {
 #[test]
 fn list_unblocks_and_blocked_by_columns() {
     let dir = fresh_dir("unblocks-cols");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     for id in ["a", "b", "c"] {
-        ta(&dir, &["create", id, "status=open"]);
+        ta(&dir, &["create", id, "state=open"]);
     }
-    // Chain c -> b -> a (c depends_on b depends_on a).
-    ta(&dir, &["dep", "add", "b", "depends_on=a"]);
-    ta(&dir, &["dep", "add", "c", "depends_on=b"]);
+    // Chain c -> b -> a (c needs b needs a).
+    ta(&dir, &["dep", "add", "b", "needs=a"]);
+    ta(&dir, &["dep", "add", "c", "needs=b"]);
 
     let line_for = |out: &str, id: &str| -> String {
         out.lines()
@@ -456,7 +449,7 @@ fn list_unblocks_and_blocked_by_columns() {
     );
 
     // Done prerequisites stop counting: closing `a` drops c's blocked_by to 1.
-    ta(&dir, &["update", "a", "status=closed"]);
+    ta(&dir, &["update", "a", "state=closed"]);
     let json = ta(
         &dir,
         &["list", "--columns", "id,blocked_by", "--format", "jsonl"],
@@ -470,14 +463,13 @@ fn list_unblocks_and_blocked_by_columns() {
 #[test]
 fn list_subtasks_column_shows_parent_progress() {
     let dir = fresh_dir("subtask-col");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     for id in ["epic", "a", "b", "solo"] {
-        ta(&dir, &["create", id, "status=open"]);
+        ta(&dir, &["create", id, "state=open"]);
     }
-    ta(&dir, &["dep", "add", "epic", "has_subtask=a"]);
-    ta(&dir, &["dep", "add", "epic", "has_subtask=b"]);
-    ta(&dir, &["update", "a", "status=closed"]); // 1 of 2
+    ta(&dir, &["dep", "add", "epic", "contains=a"]);
+    ta(&dir, &["dep", "add", "epic", "contains=b"]);
+    ta(&dir, &["update", "a", "state=closed"]); // 1 of 2
 
     let json = ta(
         &dir,
