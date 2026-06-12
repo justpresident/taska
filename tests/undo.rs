@@ -1,6 +1,6 @@
 mod common;
-use common::*;
 use common::names::*;
+use common::*;
 
 #[test]
 fn undo_uncommitted_truncates_the_tail() {

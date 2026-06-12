@@ -1,6 +1,6 @@
 mod common;
-use common::*;
 use common::names::*;
+use common::*;
 
 #[test]
 fn output_format_columns_and_json() {
@@ -8,12 +8,25 @@ fn output_format_columns_and_json() {
     init_renamed_open(&dir);
     ta(
         &dir,
-        &["create", "a", "title=Alpha", &format!("{STATUS_FIELD}=todo"), "priority=3"],
+        &[
+            "create",
+            "a",
+            "title=Alpha",
+            &format!("{STATUS_FIELD}=todo"),
+            "priority=3",
+        ],
     );
 
     // Human: uppercase header + the title column value (request title explicitly
     // since the renamed-open default columns are id,state,deps).
-    let human = ta(&dir, &["list", "--columns", &format!("id,{STATUS_FIELD},title,deps")]);
+    let human = ta(
+        &dir,
+        &[
+            "list",
+            "--columns",
+            &format!("id,{STATUS_FIELD},title,deps"),
+        ],
+    );
     assert!(
         human.contains("ID") && human.contains(&STATUS_FIELD.to_uppercase()),
         "header: {human}"
@@ -24,7 +37,10 @@ fn output_format_columns_and_json() {
     // but NOT priority (not a default column).
     let json = ta(&dir, &["list", "--format", "json"]);
     assert!(json.trim_start().starts_with('['), "json array: {json}");
-    assert!(json.contains(&format!(r#""{STATUS_FIELD}":"todo""#)), "state shown: {json}");
+    assert!(
+        json.contains(&format!(r#""{STATUS_FIELD}":"todo""#)),
+        "state shown: {json}"
+    );
     assert!(
         !json.contains("priority"),
         "priority not a default column: {json}"
@@ -171,7 +187,15 @@ fn per_column_max_width_overrides_the_global_default() {
 fn jsonl_output_across_commands_omits_absent_fields() {
     let dir = fresh_dir("jsonl");
     init_renamed_open(&dir);
-    ta(&dir, &["create", "api", &format!("{STATUS_FIELD}=todo"), "priority=3"]);
+    ta(
+        &dir,
+        &[
+            "create",
+            "api",
+            &format!("{STATUS_FIELD}=todo"),
+            "priority=3",
+        ],
+    );
     ta(&dir, &["create", "db", &format!("{STATUS_FIELD}=closed")]);
     ta(&dir, &["dep", "add", "api", &format!("{BLOCKER}=db")]);
 
@@ -214,11 +238,7 @@ fn jsonl_output_across_commands_omits_absent_fields() {
 
     // `status` --format jsonl is the single summary object.
     let st = ta(&dir, &["status", "--format", "jsonl"]);
-    assert_eq!(
-        st.lines().count(),
-        1,
-        "status jsonl is one line: {st}"
-    );
+    assert_eq!(st.lines().count(), 1, "status jsonl is one line: {st}");
     assert!(st.contains(r#""total":2"#), "status: {st}");
 }
 
@@ -387,8 +407,19 @@ fn human_output_is_uncolored_when_not_a_tty() {
 fn layout_flag_and_config_switch_table_and_record() {
     let dir = fresh_dir("layout");
     init_renamed_open(&dir);
-    ta(&dir, &["create", "a", "title=Alpha", &format!("{STATUS_FIELD}=todo")]);
-    ta(&dir, &["create", "b", "title=Beta", &format!("{STATUS_FIELD}=todo")]);
+    ta(
+        &dir,
+        &[
+            "create",
+            "a",
+            "title=Alpha",
+            &format!("{STATUS_FIELD}=todo"),
+        ],
+    );
+    ta(
+        &dir,
+        &["create", "b", "title=Beta", &format!("{STATUS_FIELD}=todo")],
+    );
 
     // `list` defaults to the aligned table (uppercase headers, no record labels).
     let table = ta(&dir, &["list"]);
@@ -479,7 +510,13 @@ fn deps_column_groups_every_relationship_type() {
     }
     ta(
         &dir,
-        &["dep", "add", "api", &format!("{BLOCKER}=db"), &format!("{BLOCKER}=web")],
+        &[
+            "dep",
+            "add",
+            "api",
+            &format!("{BLOCKER}=db"),
+            &format!("{BLOCKER}=web"),
+        ],
     );
     ta(&dir, &["dep", "add", "api", &format!("{INFO}=infra")]);
 
@@ -508,7 +545,9 @@ fn deps_column_groups_every_relationship_type() {
     // json/jsonl carry the typed map itself; an edge-free task is `{}`.
     let json = ta(&dir, &["list", "--format", "jsonl"]);
     assert!(
-        json.contains(&format!(r#""deps":{{"{BLOCKER}":["db","web"],"{INFO}":["infra"]}}"#)),
+        json.contains(&format!(
+            r#""deps":{{"{BLOCKER}":["db","web"],"{INFO}":["infra"]}}"#
+        )),
         "typed map in jsonl: {json}"
     );
     assert!(json.contains(r#""deps":{}"#), "edge-free task: {json}");

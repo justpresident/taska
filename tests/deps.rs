@@ -1,6 +1,6 @@
 mod common;
-use common::*;
 use common::names::*;
+use common::*;
 
 #[test]
 fn dep_remove_makes_a_blocked_task_ready() {
@@ -70,7 +70,16 @@ fn dep_command_adds_and_removes_typed_edges() {
     ta(&dir, &["create", "c"]);
 
     // Both the needs and the typed related edge land in the deps map.
-    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b"), &format!("{INFO}=c")]);
+    ta(
+        &dir,
+        &[
+            "dep",
+            "add",
+            "a",
+            &format!("{BLOCKER}=b"),
+            &format!("{INFO}=c"),
+        ],
+    );
     let json = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(
         json.contains(&format!(r#""deps":{{"{BLOCKER}":["b"],"{INFO}":["c"]}}"#)),
@@ -86,7 +95,8 @@ fn dep_command_adds_and_removes_typed_edges() {
     // Remove the needs edge; the info edge stays in the map.
     ta(&dir, &["dep", "remove", "a", &format!("{BLOCKER}=b")]);
     assert!(
-        ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(r#""deps":{{"{INFO}":["c"]}}"#)),
+        ta(&dir, &["show", "a", "--format", "json"])
+            .contains(&format!(r#""deps":{{"{INFO}":["c"]}}"#)),
         "needs edge removed, related kept"
     );
 
@@ -109,7 +119,16 @@ fn show_lists_forward_inverse_and_symmetric_relationships() {
     ta(&dir, &["create", "c"]);
 
     // `a needs b` (inverse `feeds`) and `a related c` (self-inverse).
-    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b"), &format!("{INFO}=c")]);
+    ta(
+        &dir,
+        &[
+            "dep",
+            "add",
+            "a",
+            &format!("{BLOCKER}=b"),
+            &format!("{INFO}=c"),
+        ],
+    );
 
     // `a`'s forward edges live in the deps map, grouped by type.
     assert!(
@@ -139,7 +158,9 @@ fn dep_remove_by_inverse_name_drops_the_forward_edge() {
     ta(&dir, &["create", "b"]);
 
     ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b")]);
-    assert!(ta(&dir, &["show", "b", "--format", "json"]).contains(&format!(r#""{BLOCKER_INV}":["a"]"#)));
+    assert!(
+        ta(&dir, &["show", "b", "--format", "json"]).contains(&format!(r#""{BLOCKER_INV}":["a"]"#))
+    );
 
     // Remove the relationship from b's side using the inverse name `feeds`.
     ta(&dir, &["dep", "remove", "b", &format!("{BLOCKER_INV}=a")]);
@@ -159,7 +180,16 @@ fn dep_tree_nests_dependencies_and_collapses_shared_nodes() {
         ta(&dir, &["create", id]);
     }
     // a -> {b, c}; both b and c -> d (a shared/diamond node); d -> e.
-    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b"), &format!("{BLOCKER}=c")]);
+    ta(
+        &dir,
+        &[
+            "dep",
+            "add",
+            "a",
+            &format!("{BLOCKER}=b"),
+            &format!("{BLOCKER}=c"),
+        ],
+    );
     ta(&dir, &["dep", "add", "b", &format!("{BLOCKER}=d")]);
     ta(&dir, &["dep", "add", "c", &format!("{BLOCKER}=d")]);
     ta(&dir, &["dep", "add", "d", &format!("{BLOCKER}=e")]);
@@ -286,10 +316,7 @@ fn informational_relationship_does_not_gate_readiness() {
 
     // An informational edge must not block: both are ready.
     let ready = ta(&dir, &["list", "--ready"]);
-    assert!(
-        lists_task(&ready, "x"),
-        "x ready despite related: {ready}"
-    );
+    assert!(lists_task(&ready, "x"), "x ready despite related: {ready}");
     assert!(lists_task(&ready, "y"), "y ready: {ready}");
 }
 
@@ -317,7 +344,10 @@ fn dep_plan_lists_remaining_prerequisites_in_order() {
     assert!(plan.contains("3 task(s) remaining"), "count: {plan}");
 
     // A done prerequisite drops out of the plan as satisfied.
-    ta(&dir, &["update", "build", &format!("{STATUS_FIELD}=closed")]);
+    ta(
+        &dir,
+        &["update", "build", &format!("{STATUS_FIELD}=closed")],
+    );
     let plan = ta(&dir, &["dep", "plan", "ship"]);
     assert!(!plan.contains("build"), "done prereq dropped: {plan}");
     assert!(plan.contains("2 task(s) remaining"), "count: {plan}");
@@ -386,7 +416,10 @@ fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
     // Add from the parent side, and from the child side via the inverse - both
     // land as `contains` edges on the parent.
     ta(&dir, &["dep", "add", "epic", &format!("{HIER}=build-form")]);
-    ta(&dir, &["dep", "add", "wire-auth", &format!("{HIER_INV}=epic")]);
+    ta(
+        &dir,
+        &["dep", "add", "wire-auth", &format!("{HIER_INV}=epic")],
+    );
 
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
@@ -401,7 +434,8 @@ fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
         "epic shows its subtasks: {e}"
     );
     assert!(
-        ta(&dir, &["show", "build-form", "--format", "json"]).contains(&format!(r#""{HIER_INV}":["epic"]"#)),
+        ta(&dir, &["show", "build-form", "--format", "json"])
+            .contains(&format!(r#""{HIER_INV}":["epic"]"#)),
         "child mirrors the parent"
     );
 
@@ -417,8 +451,14 @@ fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
     );
 
     // Close both subtasks -> the parent becomes ready.
-    ta(&dir, &["update", "build-form", &format!("{STATUS_FIELD}=closed")]);
-    ta(&dir, &["update", "wire-auth", &format!("{STATUS_FIELD}=closed")]);
+    ta(
+        &dir,
+        &["update", "build-form", &format!("{STATUS_FIELD}=closed")],
+    );
+    ta(
+        &dir,
+        &["update", "wire-auth", &format!("{STATUS_FIELD}=closed")],
+    );
     assert!(
         lists_task(&ta(&dir, &["list", "--ready"]), "epic"),
         "epic ready once its subtasks are done"
@@ -475,23 +515,59 @@ fn dep_tree_marks_subtasks_and_rolls_up_progress() {
 fn dep_tree_exact_by_default_titles_done_marks_and_open_prune() {
     let dir = fresh_dir("tree-output");
     init_renamed_open(&dir);
-    ta(&dir, &["create", "epic", "title=Epic goal", &format!("{STATUS_FIELD}=open")]);
     ta(
         &dir,
-        &["create", "open-sub", "title=Still open", &format!("{STATUS_FIELD}=open")],
+        &[
+            "create",
+            "epic",
+            "title=Epic goal",
+            &format!("{STATUS_FIELD}=open"),
+        ],
     );
     ta(
         &dir,
-        &["create", "done-sub", "title=Finished", &format!("{STATUS_FIELD}=open")],
+        &[
+            "create",
+            "open-sub",
+            "title=Still open",
+            &format!("{STATUS_FIELD}=open"),
+        ],
     );
-    ta(&dir, &["create", "done-mid", &format!("{STATUS_FIELD}=open")]);
-    ta(&dir, &["create", "deep-open", &format!("{STATUS_FIELD}=open")]);
+    ta(
+        &dir,
+        &[
+            "create",
+            "done-sub",
+            "title=Finished",
+            &format!("{STATUS_FIELD}=open"),
+        ],
+    );
+    ta(
+        &dir,
+        &["create", "done-mid", &format!("{STATUS_FIELD}=open")],
+    );
+    ta(
+        &dir,
+        &["create", "deep-open", &format!("{STATUS_FIELD}=open")],
+    );
     ta(&dir, &["dep", "add", "epic", &format!("{HIER}=open-sub")]);
     ta(&dir, &["dep", "add", "epic", &format!("{HIER}=done-sub")]);
-    ta(&dir, &["dep", "add", "epic", &format!("{BLOCKER}=done-mid")]);
-    ta(&dir, &["dep", "add", "done-mid", &format!("{BLOCKER}=deep-open")]); // done node leads to open work
-    ta(&dir, &["update", "done-sub", &format!("{STATUS_FIELD}=closed")]);
-    ta(&dir, &["update", "done-mid", &format!("{STATUS_FIELD}=closed")]);
+    ta(
+        &dir,
+        &["dep", "add", "epic", &format!("{BLOCKER}=done-mid")],
+    );
+    ta(
+        &dir,
+        &["dep", "add", "done-mid", &format!("{BLOCKER}=deep-open")],
+    ); // done node leads to open work
+    ta(
+        &dir,
+        &["update", "done-sub", &format!("{STATUS_FIELD}=closed")],
+    );
+    ta(
+        &dir,
+        &["update", "done-mid", &format!("{STATUS_FIELD}=closed")],
+    );
 
     // Default: the exact graph - done tasks marked with a check mark,
     // and a done mid-chain node is kept (never spliced), with its open descendant beneath it.
@@ -560,7 +636,8 @@ fn show_surfaces_typed_relationships_forward_and_inverse() {
 
     // The child shows the inverse-mirrored edge (part_of), in json too.
     assert!(
-        ta(&dir, &["show", "child", "--format", "json"]).contains(&format!(r#""{HIER_INV}":["epic"]"#)),
+        ta(&dir, &["show", "child", "--format", "json"])
+            .contains(&format!(r#""{HIER_INV}":["epic"]"#)),
         "child mirrors part_of"
     );
 
@@ -568,7 +645,8 @@ fn show_surfaces_typed_relationships_forward_and_inverse() {
     // field; its inverse `feeds` surfaces on the depended-upon task.
     let aj = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(
-        aj.contains(&format!(r#""deps":{{"{BLOCKER}":["b"]}}"#)) && aj.matches(BLOCKER).count() == 1,
+        aj.contains(&format!(r#""deps":{{"{BLOCKER}":["b"]}}"#))
+            && aj.matches(BLOCKER).count() == 1,
         "needs only inside deps: {aj}"
     );
     assert!(
@@ -608,7 +686,11 @@ fn dep_add_enforces_single_blocker_and_single_parent() {
         String::from_utf8_lossy(&out.stderr)
     );
     // Same constraint when added from the child side via the inverse.
-    let out = run(ta_bin(), &dir, &["dep", "add", "c", &format!("{HIER_INV}=e2")]);
+    let out = run(
+        ta_bin(),
+        &dir,
+        &["dep", "add", "c", &format!("{HIER_INV}=e2")],
+    );
     assert!(!out.status.success(), "inverse second-parent also rejected");
 
     // Re-adding the exact same edge is idempotent, not a conflict.

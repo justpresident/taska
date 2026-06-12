@@ -1,6 +1,6 @@
 mod common;
-use common::*;
 use common::names::*;
+use common::*;
 
 #[test]
 fn init_creates_config_and_registers_merge_driver() {
@@ -239,7 +239,15 @@ fn crud_search_and_ready_workflow() {
     init_renamed_open(&dir);
 
     ta(&dir, &["create", "db", &format!("{STATUS_FIELD}=closed")]);
-    ta(&dir, &["create", "api", &format!("{STATUS_FIELD}=open"), "priority=3"]);
+    ta(
+        &dir,
+        &[
+            "create",
+            "api",
+            &format!("{STATUS_FIELD}=open"),
+            "priority=3",
+        ],
+    );
     ta(&dir, &["dep", "add", "api", &format!("{BLOCKER}=db")]);
 
     // The human table lists ids; `--full --format json` exposes every field -
@@ -297,7 +305,13 @@ fn show_displays_full_task_and_rejects_unknown_id() {
     init_renamed_open(&dir);
     ta(
         &dir,
-        &["create", "a", "title=Alpha", &format!("{STATUS_FIELD}=open"), "priority=3"],
+        &[
+            "create",
+            "a",
+            "title=Alpha",
+            &format!("{STATUS_FIELD}=open"),
+            "priority=3",
+        ],
     );
     ta(&dir, &["create", "dep"]);
     ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=dep")]);
@@ -340,7 +354,14 @@ fn show_displays_full_task_and_rejects_unknown_id() {
     // An explicit --columns still restricts.
     let cols = ta(
         &dir,
-        &["show", "a", "--columns", &format!("id,{STATUS_FIELD}"), "--format", "json"],
+        &[
+            "show",
+            "a",
+            "--columns",
+            &format!("id,{STATUS_FIELD}"),
+            "--format",
+            "json",
+        ],
     );
     assert!(
         cols.contains(&format!(r#""{STATUS_FIELD}":"open""#)) && !cols.contains("priority"),
@@ -400,11 +421,17 @@ fn create_stamps_configurable_default_status() {
 fn null_value_unsets_a_field() {
     let dir = fresh_dir("null-unset");
     init_renamed_open(&dir);
-    ta(&dir, &["create", "x", "owner=bob", &format!("{STATUS_FIELD}=open")]);
+    ta(
+        &dir,
+        &["create", "x", "owner=bob", &format!("{STATUS_FIELD}=open")],
+    );
     // Setting a field to null removes it (the field-unset convention).
     ta(&dir, &["update", "x", "owner=null"]);
     let json = ta(&dir, &["show", "x", "--format", "json"]);
-    assert!(json.contains(&format!("\"{STATUS_FIELD}\":\"open\"")), "state kept: {json}");
+    assert!(
+        json.contains(&format!("\"{STATUS_FIELD}\":\"open\"")),
+        "state kept: {json}"
+    );
     assert!(!json.contains("owner"), "owner unset by null: {json}");
 }
 
@@ -492,11 +519,17 @@ fn update_mixes_set_and_append_in_one_command() {
     // One command: set `state` (=) and append to `log` (+=).
     ta(
         &dir,
-        &["update", "t", &format!("{STATUS_FIELD}=closed"), "log+=did the thing"],
+        &[
+            "update",
+            "t",
+            &format!("{STATUS_FIELD}=closed"),
+            "log+=did the thing",
+        ],
     );
     let json = ta(&dir, &["show", "t", "--format", "json"]);
     assert!(
-        json.contains(&format!(r#""{STATUS_FIELD}":"closed""#)) && json.contains(r#""log":"did the thing""#),
+        json.contains(&format!(r#""{STATUS_FIELD}":"closed""#))
+            && json.contains(r#""log":"did the thing""#),
         "set and append in one update: {json}"
     );
     // A further append accumulates onto it.

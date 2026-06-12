@@ -1,6 +1,6 @@
 mod common;
-use common::*;
 use common::names::*;
+use common::*;
 
 #[test]
 fn list_supports_regex_negation_and_combined_criteria() {
@@ -29,12 +29,21 @@ fn list_supports_regex_negation_and_combined_criteria() {
     );
     ta(
         &dir,
-        &["create", "web", &format!("{STATUS_FIELD}=open"), "priority=2", "title=Web UI"],
+        &[
+            "create",
+            "web",
+            &format!("{STATUS_FIELD}=open"),
+            "priority=2",
+            "title=Web UI",
+        ],
     );
     ta(&dir, &["dep", "add", "web", &format!("{BLOCKER}=api")]);
 
     // Multiple criteria are AND-combined.
-    let both = ta(&dir, &["list", &format!("{STATUS_FIELD}=open"), "priority=3"]);
+    let both = ta(
+        &dir,
+        &["list", &format!("{STATUS_FIELD}=open"), "priority=3"],
+    );
     assert!(
         lists_task(&both, "api") && !lists_task(&both, "web"),
         "AND: {both}"
@@ -62,10 +71,7 @@ fn list_supports_regex_negation_and_combined_criteria() {
         lists_task(&ta(&dir, &["list", "id=~^a"]), "api"),
         "id=~ regex"
     );
-    let nre = ta(&dir, &[
-        "list",
-        &format!("{STATUS_FIELD}!~^op"),
-    ]);
+    let nre = ta(&dir, &["list", &format!("{STATUS_FIELD}!~^op")]);
     assert!(
         lists_task(&nre, "db") && !lists_task(&nre, "api"),
         "!~ negated regex: {nre}"
@@ -92,7 +98,16 @@ fn relationship_names_and_computed_columns_filter() {
     for id in ["epic", "c1", "c2", "other"] {
         ta(&dir, &["create", id, &format!("{STATUS_FIELD}=open")]);
     }
-    ta(&dir, &["dep", "add", "epic", &format!("{HIER}=c1"), &format!("{HIER}=c2")]);
+    ta(
+        &dir,
+        &[
+            "dep",
+            "add",
+            "epic",
+            &format!("{HIER}=c1"),
+            &format!("{HIER}=c2"),
+        ],
+    );
     ta(&dir, &["dep", "add", "c2", &format!("{BLOCKER}=c1")]);
     ta(&dir, &["dep", "add", "c1", &format!("{INFO}=other")]);
 
@@ -119,8 +134,14 @@ fn relationship_names_and_computed_columns_filter() {
     );
 
     // Symmetric `related` matches from both sides of the stored edge.
-    assert!(lists_task(&ta(&dir, &["list", &format!("{INFO}=other")]), "c1"));
-    assert!(lists_task(&ta(&dir, &["list", &format!("{INFO}=c1")]), "other"));
+    assert!(lists_task(
+        &ta(&dir, &["list", &format!("{INFO}=other")]),
+        "c1"
+    ));
+    assert!(lists_task(
+        &ta(&dir, &["list", &format!("{INFO}=c1")]),
+        "other"
+    ));
 
     // Regex operators compose with edge fields.
     let re = ta(&dir, &["list", &format!("{HIER_INV}=~^ep")]);
@@ -145,9 +166,18 @@ fn relationship_names_and_computed_columns_filter() {
 fn comparison_operators_filter_numbers_and_dates() {
     let dir = fresh_dir("cmp-ops");
     init_renamed_open(&dir);
-    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open"), "priority=1"]);
-    ta(&dir, &["create", "b", &format!("{STATUS_FIELD}=open"), "priority=3"]);
-    ta(&dir, &["create", "c", &format!("{STATUS_FIELD}=open"), "priority=5"]);
+    ta(
+        &dir,
+        &["create", "a", &format!("{STATUS_FIELD}=open"), "priority=1"],
+    );
+    ta(
+        &dir,
+        &["create", "b", &format!("{STATUS_FIELD}=open"), "priority=3"],
+    );
+    ta(
+        &dir,
+        &["create", "c", &format!("{STATUS_FIELD}=open"), "priority=5"],
+    );
     ta(&dir, &["dep", "add", "b", &format!("{BLOCKER}=a")]); // a unblocks b
     ta(&dir, &["dep", "add", "c", &format!("{BLOCKER}=b")]); // and transitively c
 
@@ -173,7 +203,10 @@ fn comparison_operators_filter_numbers_and_dates() {
     // Date range over the injected RFC 3339 create-time, here the RENAMED column
     // `made_at` (lexical = chronological): a past lower bound keeps everything, a
     // far-future one drops it.
-    assert!(lists_task(&ta(&dir, &["list", &format!("{CREATE_TIME}>=2000-01-01")]), "a"));
+    assert!(lists_task(
+        &ta(&dir, &["list", &format!("{CREATE_TIME}>=2000-01-01")]),
+        "a"
+    ));
     assert!(!lists_task(
         &ta(&dir, &["list", &format!("{CREATE_TIME}>=2999-01-01")]),
         "a"

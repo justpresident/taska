@@ -1,6 +1,6 @@
 mod common;
-use common::*;
 use common::names::*;
+use common::*;
 
 #[test]
 fn orphaned_events_warn_on_read_and_resolve_drops_them() {

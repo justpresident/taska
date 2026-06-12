@@ -3,8 +3,8 @@
 //! file as `$1` and rewrites it, exactly as a real editor's save would.
 
 mod common;
-use common::*;
 use common::names::*;
+use common::*;
 
 use std::os::unix::fs::PermissionsExt;
 
@@ -58,7 +58,10 @@ fn show_json(dir: &Path, id: &str) -> String {
 fn edit_changes_a_field() {
     let dir = fresh_dir("edit_changes_a_field");
     init_renamed_open(&dir);
-    ta(&dir, &["create", "t1", "title=A", &format!("{STATUS_FIELD}=todo")]);
+    ta(
+        &dir,
+        &["create", "t1", "title=A", &format!("{STATUS_FIELD}=todo")],
+    );
     // Portable in-place edit (no `sed -i`, which differs GNU vs BSD).
     let ed = editor_script(
         &dir,
@@ -102,7 +105,10 @@ fn edit_unsets_a_deleted_field() {
 fn edit_json_format() {
     let dir = fresh_dir("edit_json_format");
     init_renamed_open(&dir);
-    ta(&dir, &["create", "t3", "title=A", &format!("{STATUS_FIELD}=todo")]);
+    ta(
+        &dir,
+        &["create", "t3", "title=A", &format!("{STATUS_FIELD}=todo")],
+    );
     let ed = editor_script(
         &dir,
         "ed.sh",
@@ -132,7 +138,10 @@ fn edit_no_change_is_a_noop() {
 fn edit_reedits_after_syntax_error() {
     let dir = fresh_dir("edit_reedits_after_syntax_error");
     init_renamed_open(&dir);
-    ta(&dir, &["create", "t5", "title=A", &format!("{STATUS_FIELD}=todo")]);
+    ta(
+        &dir,
+        &["create", "t5", "title=A", &format!("{STATUS_FIELD}=todo")],
+    );
     let counter = dir.join("count");
     // First save is broken TOML; after the user answers `y`, the second save is
     // valid - exercising the re-edit loop on the SAME file.
@@ -219,7 +228,10 @@ fn edit_reedits_after_schema_violation() {
 fn edit_discard_leaves_task_unchanged() {
     let dir = fresh_dir("edit_discard_leaves_task_unchanged");
     init_renamed_open(&dir);
-    ta(&dir, &["create", "t6", "title=A", &format!("{STATUS_FIELD}=todo")]);
+    ta(
+        &dir,
+        &["create", "t6", "title=A", &format!("{STATUS_FIELD}=todo")],
+    );
     // Always-broken save; answering `n` discards.
     let ed = editor_script(
         &dir,
