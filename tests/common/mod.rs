@@ -94,6 +94,74 @@ pub fn init_repo(dir: &Path) {
     git(dir, &["config", "user.name", "Taska Test"]);
 }
 
+/// The non-default config tokens the [`init_renamed`] store uses. A test
+/// exercising configurable surfaces should drive EVERYTHING through these names;
+/// if production code hardcodes a default (`status`/`depends_on`/`type`/
+/// `create_time`/...), a command against this store breaks and the test fails.
+/// (A few tests stay on the defaults to cover default initialization itself.)
+pub mod names {
+    pub const STATUS_FIELD: &str = "state"; // default: status
+    pub const DEFAULT_STATUS: &str = "backlog"; // default: todo
+    pub const MID_STATUS: &str = "building"; // a non-default, non-done status
+    pub const DONE_STATUS: &str = "shipped"; // default: closed
+    pub const TYPE_FIELD: &str = "kind"; // default: type
+    pub const TASK_TYPE: &str = "story"; // a declared type name
+    pub const TITLE: &str = "headline"; // a required string field
+    pub const NOTES: &str = "body"; // a required string field
+    pub const BLOCKER: &str = "needs"; // default: depends_on
+    pub const BLOCKER_INV: &str = "feeds"; // default: blocks
+    pub const HIER: &str = "contains"; // default: has_subtask
+    pub const HIER_INV: &str = "part_of"; // default: subtask_of
+    pub const INFO: &str = "related"; // default: relates_to (symmetric)
+    pub const CREATE_TIME: &str = "made_at"; // default: create_time
+    pub const UPDATE_TIME: &str = "touched_at"; // default: update_time
+    pub const CLOSE_TIME: &str = "shipped_at"; // default: close_time
+}
+
+/// A `config.toml` that renames every configurable thing to a distinctive
+/// non-default token (see [`names`]). Scalar keys precede sub-tables per section
+/// (TOML ordering), and the schema is valid (one blocker relationship, no inverse
+/// collisions).
+const RENAMED_CONFIG: &str = r#"
+[workflow]
+status_field = "state"
+default_status = "backlog"
+done_status = "shipped"
+type_field = "kind"
+untyped_tasks = "deny"
+
+[timestamps]
+create_time = "made_at"
+update_time = "touched_at"
+close_time = "shipped_at"
+
+[display]
+columns = ["id", "headline", "state", "deps"]
+max_width = 40
+sort = "id"
+
+[relationships]
+needs    = { kind = "blocker", inverse = "feeds" }
+contains = { kind = "hierarchy", inverse = "part_of" }
+related  = { kind = "info", inverse = "related" }
+dup      = { kind = "info" }
+
+[task_types.story]
+closed = true
+fields = { headline = { type = "string", required = true }, body = { type = "string", required = true }, state = { type = "enum", values = ["backlog", "building", "shipped"], required = true }, rank = { type = "enum", values = ["lo", "hi"] } }
+"#;
+
+/// Provision a store whose config renames EVERY configurable thing to a
+/// distinctive non-default token (see [`names`]): git-init the repo, write the
+/// renamed `.taska/config.toml`, then `ta init`. Non-init tests use this so a
+/// stray hardcoded default in the code fails them.
+pub fn init_renamed(dir: &Path) {
+    init_repo(dir);
+    fs::create_dir_all(dir.join(".taska")).unwrap();
+    fs::write(dir.join(".taska/config.toml"), RENAMED_CONFIG).unwrap();
+    ta(dir, &["init"]);
+}
+
 pub fn rows(path: &Path) -> usize {
     fs::read_to_string(path)
         .unwrap()
