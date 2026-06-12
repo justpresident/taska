@@ -127,7 +127,7 @@ const TREE_TITLE_MAX: usize = 50;
 /// `ta dep tree` - ASCII tree of the blocker graph (the `depends_on` field plus
 /// any `blocker`- or `hierarchy`-typed relationship), children nested under their
 /// dependents. Shows the exact graph by default - done tasks are dimmed and marked
-/// `[x]`, never spliced out - so the structure is faithful; `--open` prunes only
+/// with a check mark, never spliced out - so the structure is faithful; `--open` prunes only
 /// fully-resolved branches (those with no open task). Roots default to tasks
 /// nothing depends on, ordered by `--sort`/`[display].sort` (`--reverse` flips).
 /// Subtask edges are tagged `[subtask]` with a `[subtasks d/t]` parent rollup;
@@ -188,7 +188,7 @@ fn dep_tree(
 /// reached this node reads first - then the id and each requested column's value
 /// (truncated), then the `[subtasks d/t]` rollup. The id/columns are colored by
 /// the shared [`RowStyle`], identical to a `list` row (id cyan, the status column
-/// green); a done node greys whole (dim) and is prefixed `[x]`. The connectors and
+/// green); a done node greys whole (dim) and is prefixed with a check mark. The connectors and
 /// position markers (`(cycle)`/`(missing)`/`...`) are added by the caller.
 fn node_label(node: &Node, color: bool, style: RowStyle) -> String {
     let done = node.done;
@@ -206,7 +206,9 @@ fn node_label(node: &Node, color: bool, style: RowStyle) -> String {
         }
     });
     if done {
-        s.push_str(&crate::format::sgr("[x] ", "2", color));
+        // A check mark (U+2713) prefixes a done node; written as an escape so the
+        // source stays ASCII while the output shows the glyph.
+        s.push_str(&crate::format::sgr("\u{2713} ", "2", color));
     }
     s.push_str(&paint(&node.id, ID_KEY));
     for (col, v) in &node.cells {

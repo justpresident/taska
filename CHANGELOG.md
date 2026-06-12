@@ -109,7 +109,7 @@ consistent machine output, and speeds up graph traversal.
   name are all rejected; setting a field to its current value - or re-adding an
   edge that exists - writes nothing instead of bloating the log.
 - **`ta dep tree` rework:** a shortened title per node, color on a TTY (done
-  tasks dimmed + [x]), the exact graph by default with `--open` to prune resolved
+  tasks dimmed + a check mark), the exact graph by default with `--open` to prune resolved
   branches, and `--sort`/`--reverse` for sibling order.
 - **Theme-safe color** for human output (`id` cyan, `status` green, headers and
   `deps` bold) via the terminal's 16-color palette; auto-disabled off a TTY and

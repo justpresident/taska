@@ -505,16 +505,16 @@ fn dep_tree_exact_by_default_titles_done_marks_and_open_prune() {
     ta(&dir, &["update", "done-sub", "status=closed"]);
     ta(&dir, &["update", "done-mid", "status=closed"]);
 
-    // Default: the exact graph - titles shown, done tasks marked `[x]`, and a done
-    // mid-chain node is kept (never spliced), with its open descendant beneath it.
+    // Default: the exact graph - titles shown, done tasks marked with a check mark,
+    // and a done mid-chain node is kept (never spliced), with its open descendant beneath it.
     let tree = ta(&dir, &["dep", "tree", "epic"]);
     assert!(tree.contains("Epic goal"), "title shown: {tree}");
     assert!(
-        tree.contains("[x] done-sub"),
+        tree.contains("\u{2713} done-sub"),
         "done subtask check-marked: {tree}"
     );
     assert!(
-        tree.contains("[x] done-mid"),
+        tree.contains("\u{2713} done-mid"),
         "done mid-chain kept + marked: {tree}"
     );
     assert!(
