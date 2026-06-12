@@ -261,16 +261,9 @@ pub fn vet_events<S: BuildHasher>(
             }
             OpType::Append => {
                 require_existing(state, id)?;
-                // Drafts are canonical by the time they reach the gate, so the
-                // single-valued check looks for the storage keys (status and
-                // the task-type discriminator), not the display names.
-                if let Some(bad) = draft
-                    .payload
-                    .keys()
-                    .find(|k| *k == STATUS_KEY || *k == TASK_TYPE_KEY)
-                {
+                if let Some(display) = single_valued_target(&draft.payload, config) {
                     return Err(format!(
-                        "can't append (`+=`) to `{bad}`: it holds a single value, not a log"
+                        "can't append (`+=`) to `{display}`: it holds a single value, not a log"
                     )
                     .into());
                 }
@@ -282,7 +275,7 @@ pub fn vet_events<S: BuildHasher>(
             }
             OpType::Add | OpType::Remove => {
                 let task = require_existing(state, id)?;
-                if vet_accumulate(draft, task, &mut preview)? {
+                if vet_accumulate(draft, task, &mut preview, config)? {
                     out.push(draft.clone());
                 }
             }
@@ -324,19 +317,34 @@ pub fn vet_events<S: BuildHasher>(
 /// semantics, and report whether anything changed - an accumulate that changes
 /// nothing (inserting a present set element, removing an absent one, adding 0)
 /// is dropped rather than logged.
+/// If `payload` touches a single-valued canonical field (the status or task-type
+/// key), the CONFIGURED display name of that field - so `+=`/`-=` on it can be
+/// rejected naming the field as the user typed it, not the canonical storage key.
+/// Drafts are canonical by the gate, so the detection keys off the storage names.
+fn single_valued_target(payload: &Map<String, Value>, config: &Config) -> Option<String> {
+    payload
+        .keys()
+        .find(|k| *k == STATUS_KEY || *k == TASK_TYPE_KEY)
+        .map(|bad| {
+            if *bad == TASK_TYPE_KEY {
+                config.workflow.type_field.clone()
+            } else {
+                config.workflow.status_field.clone()
+            }
+        })
+}
+
 fn vet_accumulate(
     draft: &MutationEvent,
     task: &TaskState,
     preview: &mut HashMap<String, Option<Map<String, Value>>>,
+    config: &Config,
 ) -> Result<bool, DynError> {
-    if let Some(bad) = draft
-        .payload
-        .keys()
-        .find(|k| *k == STATUS_KEY || *k == TASK_TYPE_KEY)
-    {
-        return Err(
-            format!("can't accumulate (`+=`/`-=`) into `{bad}`: it holds a single value").into(),
-        );
+    if let Some(display) = single_valued_target(&draft.payload, config) {
+        return Err(format!(
+            "can't accumulate (`+=`/`-=`) into `{display}`: it holds a single value"
+        )
+        .into());
     }
     let id = draft.task_id.as_str();
     let mut fields = preview_entry(preview, id, Some(task));

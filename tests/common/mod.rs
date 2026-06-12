@@ -120,7 +120,7 @@ pub mod names {
     pub const CREATE_TIME: &str = "made_at"; // default: create_time
     pub const UPDATE_TIME: &str = "touched_at"; // default: update_time
     pub const CLOSE_TIME: &str = "shipped_at"; // default: close_time
-    // --- VALUES (the schema'd `init_renamed` config) ---
+                                               // --- VALUES (the schema'd `init_renamed` config) ---
     pub const DEFAULT_STATUS: &str = "backlog"; // default: todo
     pub const MID_STATUS: &str = "building"; // a non-default, non-done status
     pub const DONE_STATUS: &str = "shipped"; // default: closed

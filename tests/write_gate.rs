@@ -1,11 +1,11 @@
 mod common;
+use common::names::*;
 use common::*;
 
 #[test]
 fn reserved_field_keys_are_rejected() {
     let dir = fresh_dir("reserved");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
 
     let log = dir.join(".taska/mutations.jsonl");
     // Each reserved envelope key must be refused up front (non-zero exit) and
@@ -37,8 +37,7 @@ fn reserved_field_keys_are_rejected() {
 #[test]
 fn append_refuses_to_mint_over_an_unparseable_log_line() {
     let dir = fresh_dir("append-corrupt-log");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(&dir, &["create", "a", "title=A"]); // seq 1
 
     let log = dir.join(".taska").join("mutations.jsonl");
@@ -69,21 +68,22 @@ fn append_refuses_to_mint_over_an_unparseable_log_line() {
 #[test]
 fn write_gate_rejects_invalid_and_skips_noops() {
     let dir = fresh_dir("write-gate");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     let log = dir.join(".taska/mutations.jsonl");
-    ta(&dir, &["create", "a", "status=open"]);
-    ta(&dir, &["create", "b", "status=open"]);
+    let open = || format!("{STATUS_FIELD}=open");
+    let closed = || format!("{STATUS_FIELD}=closed");
+    ta(&dir, &["create", "a", &open()]);
+    ta(&dir, &["create", "b", &open()]);
 
     // Duplicate create -> error, nothing written.
     let n = rows(&log);
-    let dup = run(ta_bin(), &dir, &["create", "a", "status=open"]);
+    let dup = run(ta_bin(), &dir, &["create", "a", &open()]);
     assert!(!dup.status.success(), "duplicate create must fail");
     assert!(String::from_utf8_lossy(&dup.stderr).contains("already exists"));
     assert_eq!(rows(&log), n, "duplicate create wrote nothing");
 
     // Mutating a non-existent task -> error.
-    let ghost = run(ta_bin(), &dir, &["update", "nope", "status=closed"]);
+    let ghost = run(ta_bin(), &dir, &["update", "nope", &closed()]);
     assert!(
         !ghost.status.success(),
         "update of a missing task must fail"
@@ -92,34 +92,42 @@ fn write_gate_rejects_invalid_and_skips_noops() {
 
     // No-op update (same value) writes nothing; a real change writes one event.
     let n = rows(&log);
-    let noop = ta(&dir, &["update", "a", "status=open"]);
+    let noop = ta(&dir, &["update", "a", &open()]);
     assert!(noop.contains("no changes"), "got: {noop}");
     assert_eq!(rows(&log), n, "a no-op update writes nothing");
-    ta(&dir, &["update", "a", "status=closed"]);
+    ta(&dir, &["update", "a", &closed()]);
     assert_eq!(rows(&log), n + 1, "a real change writes one event");
 
     // Multi-field update drops the unchanged field, keeps the changed one.
     let n = rows(&log);
-    ta(&dir, &["update", "a", "status=closed", "owner=alice"]);
+    ta(&dir, &["update", "a", &closed(), "owner=alice"]);
     assert_eq!(rows(&log), n + 1, "only the changed field is written");
     assert!(ta(&dir, &["show", "a", "--format", "json"]).contains("\"owner\":\"alice\""));
 
     // Self-reference -> error.
-    let selfref = run(ta_bin(), &dir, &["dep", "add", "a", "depends_on=a"]);
+    let selfref = run(
+        ta_bin(),
+        &dir,
+        &["dep", "add", "a", &format!("{BLOCKER}=a")],
+    );
     assert!(!selfref.status.success(), "self-reference must fail");
     assert!(String::from_utf8_lossy(&selfref.stderr).contains("itself"));
 
     // dep add is idempotent: the same edge a second time is a no-op.
     let n = rows(&log);
-    ta(&dir, &["dep", "add", "b", "depends_on=a"]);
+    ta(&dir, &["dep", "add", "b", &format!("{BLOCKER}=a")]);
     assert_eq!(rows(&log), n + 1, "first edge writes");
-    assert!(ta(&dir, &["dep", "add", "b", "depends_on=a"]).contains("no changes"));
+    assert!(ta(&dir, &["dep", "add", "b", &format!("{BLOCKER}=a")]).contains("no changes"));
     assert_eq!(rows(&log), n + 1, "a duplicate edge writes nothing");
 
     // `+=` is rejected on the single-valued status field, fine on free text.
-    let bad = run(ta_bin(), &dir, &["update", "b", "status+=x"]);
+    let bad = run(
+        ta_bin(),
+        &dir,
+        &["update", "b", &format!("{STATUS_FIELD}+=x")],
+    );
     assert!(!bad.status.success(), "+= on status must fail");
-    assert!(String::from_utf8_lossy(&bad.stderr).contains("status"));
+    assert!(String::from_utf8_lossy(&bad.stderr).contains(STATUS_FIELD));
     ta(&dir, &["update", "b", "notes+=hello"]);
 }
 
@@ -129,12 +137,15 @@ fn write_gate_rejects_invalid_and_skips_noops() {
 #[test]
 fn gate_rejects_dangling_targets_reserved_fields_and_missing_delete() {
     let dir = fresh_dir("gate-more");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "a", "status=open"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
 
     // A dependency on a non-existent task is rejected (no dangling edge).
-    let dangling = run(ta_bin(), &dir, &["dep", "add", "a", "depends_on=ghost"]);
+    let dangling = run(
+        ta_bin(),
+        &dir,
+        &["dep", "add", "a", &format!("{BLOCKER}=ghost")],
+    );
     assert!(
         !dangling.status.success(),
         "dep on a missing task must fail"
@@ -142,17 +153,19 @@ fn gate_rejects_dangling_targets_reserved_fields_and_missing_delete() {
     assert!(String::from_utf8_lossy(&dangling.stderr).contains("ghost"));
 
     // Reserved/computed field names can't be set - they'd be silently shadowed.
-    // `create_time` is a timestamp column, `unblocks` a graph column, `blocks` a
-    // relationship inverse, `deps`/`id` structural.
+    // The structural/computed ones (`deps`/`dep`/`id`/`unblocks`) are fixed, but
+    // the timestamp column and the relationship inverse are CONFIGURED names, so
+    // the renamed `made_at`/`feeds` must be reserved (not the defaults) - guarding
+    // that the reserved check reads config, never hardcodes `create_time`/`blocks`.
     for field in [
-        "deps=x",
-        "dep=x",
-        "id=x",
-        "create_time=x",
-        "unblocks=x",
-        "blocks=x",
+        "deps=x".to_string(),
+        "dep=x".to_string(),
+        "id=x".to_string(),
+        format!("{CREATE_TIME}=x"),
+        "unblocks=x".to_string(),
+        format!("{BLOCKER_INV}=x"),
     ] {
-        let out = run(ta_bin(), &dir, &["update", "a", field]);
+        let out = run(ta_bin(), &dir, &["update", "a", &field]);
         assert!(!out.status.success(), "setting `{field}` must fail");
         assert!(
             String::from_utf8_lossy(&out.stderr).contains("reserved or computed"),
