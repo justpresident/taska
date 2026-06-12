@@ -4,6 +4,7 @@
 
 mod common;
 use common::*;
+use common::names::*;
 
 use std::os::unix::fs::PermissionsExt;
 
@@ -55,8 +56,9 @@ fn show_json(dir: &Path, id: &str) -> String {
 
 #[test]
 fn edit_changes_a_field() {
-    let dir = setup("edit_changes_a_field");
-    ta(&dir, &["create", "t1", "title=A", "status=todo"]);
+    let dir = fresh_dir("edit_changes_a_field");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "t1", "title=A", &format!("{STATUS_FIELD}=todo")]);
     // Portable in-place edit (no `sed -i`, which differs GNU vs BSD).
     let ed = editor_script(
         &dir,
@@ -72,7 +74,7 @@ fn edit_changes_a_field() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("Updated task `t1`"));
     assert!(
         show_json(&dir, "t1").contains("\"in_progress\""),
-        "status not applied"
+        "state not applied"
     );
 }
 
@@ -98,8 +100,9 @@ fn edit_unsets_a_deleted_field() {
 
 #[test]
 fn edit_json_format() {
-    let dir = setup("edit_json_format");
-    ta(&dir, &["create", "t3", "title=A", "status=todo"]);
+    let dir = fresh_dir("edit_json_format");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "t3", "title=A", &format!("{STATUS_FIELD}=todo")]);
     let ed = editor_script(
         &dir,
         "ed.sh",
@@ -127,17 +130,18 @@ fn edit_no_change_is_a_noop() {
 
 #[test]
 fn edit_reedits_after_syntax_error() {
-    let dir = setup("edit_reedits_after_syntax_error");
-    ta(&dir, &["create", "t5", "title=A", "status=todo"]);
+    let dir = fresh_dir("edit_reedits_after_syntax_error");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "t5", "title=A", &format!("{STATUS_FIELD}=todo")]);
     let counter = dir.join("count");
     // First save is broken TOML; after the user answers `y`, the second save is
     // valid - exercising the re-edit loop on the SAME file.
     let ed = editor_script(
         &dir,
         "ed.sh",
-        "#!/bin/sh\nn=$(cat \"$COUNTER\" 2>/dev/null || echo 0)\nn=$((n+1))\necho \"$n\" > \"$COUNTER\"\n\
+        &format!("#!/bin/sh\nn=$(cat \"$COUNTER\" 2>/dev/null || echo 0)\nn=$((n+1))\necho \"$n\" > \"$COUNTER\"\n\
          if [ \"$n\" -eq 1 ]; then\n  printf 'not = = valid toml\\n' > \"$1\"\nelse\n  \
-         printf 'status = \"in_progress\"\\ntitle = \"A\"\\n' > \"$1\"\nfi\n",
+         printf '{STATUS_FIELD} = \"in_progress\"\\ntitle = \"A\"\\n' > \"$1\"\nfi\n"),
     );
     let out = run_edit(
         &dir,
@@ -213,8 +217,9 @@ fn edit_reedits_after_schema_violation() {
 
 #[test]
 fn edit_discard_leaves_task_unchanged() {
-    let dir = setup("edit_discard_leaves_task_unchanged");
-    ta(&dir, &["create", "t6", "title=A", "status=todo"]);
+    let dir = fresh_dir("edit_discard_leaves_task_unchanged");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "t6", "title=A", &format!("{STATUS_FIELD}=todo")]);
     // Always-broken save; answering `n` discards.
     let ed = editor_script(
         &dir,

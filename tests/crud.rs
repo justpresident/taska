@@ -1,5 +1,6 @@
 mod common;
 use common::*;
+use common::names::*;
 
 #[test]
 fn init_creates_config_and_registers_merge_driver() {
@@ -235,12 +236,11 @@ fn init_from_subdirectory_creates_a_new_store_at_the_scm_root() {
 #[test]
 fn crud_search_and_ready_workflow() {
     let dir = fresh_dir("crud");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
 
-    ta(&dir, &["create", "db", "status=closed"]);
-    ta(&dir, &["create", "api", "status=open", "priority=3"]);
-    ta(&dir, &["dep", "add", "api", "depends_on=db"]);
+    ta(&dir, &["create", "db", &format!("{STATUS_FIELD}=closed")]);
+    ta(&dir, &["create", "api", &format!("{STATUS_FIELD}=open"), "priority=3"]);
+    ta(&dir, &["dep", "add", "api", &format!("{BLOCKER}=db")]);
 
     // The human table lists ids; `--full --format json` exposes every field -
     // priority coerced to a JSON number, and deps as the typed map.
@@ -251,11 +251,11 @@ fn crud_search_and_ready_workflow() {
     let json = ta(&dir, &["list", "--full", "--format", "json"]);
     assert!(json.contains(r#""priority":3"#), "json: {json}");
     assert!(
-        json.contains(r#""deps":{"depends_on":["db"]}"#),
+        json.contains(&format!(r#""deps":{{"{BLOCKER}":["db"]}}"#)),
         "json: {json}"
     );
 
-    let search = ta(&dir, &["list", "status=open"]);
+    let search = ta(&dir, &["list", &format!("{STATUS_FIELD}=open")]);
     assert!(lists_task(&search, "api"), "search: {search}");
     assert!(!lists_task(&search, "db"), "db is done, not open: {search}");
 
@@ -264,7 +264,7 @@ fn crud_search_and_ready_workflow() {
     assert!(lists_task(&ready, "api"), "ready: {ready}");
 
     // Once api is done too, nothing is ready.
-    ta(&dir, &["update", "api", "status=closed"]);
+    ta(&dir, &["update", "api", &format!("{STATUS_FIELD}=closed")]);
     assert_eq!(ta(&dir, &["list", "--ready"]).trim(), "(nothing ready)");
 
     ta(&dir, &["delete", "db"]);
@@ -274,9 +274,8 @@ fn crud_search_and_ready_workflow() {
 #[test]
 fn update_with_no_fields_fails_and_appends_nothing() {
     let dir = fresh_dir("empty-update");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "api", "status=open"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "api", &format!("{STATUS_FIELD}=open")]);
 
     let log = dir.join(".taska").join("mutations.jsonl");
     let before = rows(&log);
@@ -295,14 +294,13 @@ fn update_with_no_fields_fails_and_appends_nothing() {
 #[test]
 fn show_displays_full_task_and_rejects_unknown_id() {
     let dir = fresh_dir("show");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(
         &dir,
-        &["create", "a", "title=Alpha", "status=open", "priority=3"],
+        &["create", "a", "title=Alpha", &format!("{STATUS_FIELD}=open"), "priority=3"],
     );
     ta(&dir, &["create", "dep"]);
-    ta(&dir, &["dep", "add", "a", "depends_on=dep"]);
+    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=dep")]);
 
     // `show`'s human output is a vertical record: one `field: value` line each,
     // every field (even non-default columns like priority), plus deps.
@@ -335,17 +333,17 @@ fn show_displays_full_task_and_rejects_unknown_id() {
         "priority in show json: {json}"
     );
     assert!(
-        json.contains(r#""status":"open""#),
-        "status in show json: {json}"
+        json.contains(&format!(r#""{STATUS_FIELD}":"open""#)),
+        "state in show json: {json}"
     );
 
     // An explicit --columns still restricts.
     let cols = ta(
         &dir,
-        &["show", "a", "--columns", "id,status", "--format", "json"],
+        &["show", "a", "--columns", &format!("id,{STATUS_FIELD}"), "--format", "json"],
     );
     assert!(
-        cols.contains(r#""status":"open""#) && !cols.contains("priority"),
+        cols.contains(&format!(r#""{STATUS_FIELD}":"open""#)) && !cols.contains("priority"),
         "explicit columns restrict show: {cols}"
     );
 
@@ -401,13 +399,12 @@ fn create_stamps_configurable_default_status() {
 #[test]
 fn null_value_unsets_a_field() {
     let dir = fresh_dir("null-unset");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "x", "owner=bob", "status=open"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "x", "owner=bob", &format!("{STATUS_FIELD}=open")]);
     // Setting a field to null removes it (the field-unset convention).
     ta(&dir, &["update", "x", "owner=null"]);
     let json = ta(&dir, &["show", "x", "--format", "json"]);
-    assert!(json.contains("\"status\":\"open\""), "status kept: {json}");
+    assert!(json.contains(&format!("\"{STATUS_FIELD}\":\"open\"")), "state kept: {json}");
     assert!(!json.contains("owner"), "owner unset by null: {json}");
 }
 
@@ -490,17 +487,16 @@ fn append_op_accumulates_a_text_log() {
 #[test]
 fn update_mixes_set_and_append_in_one_command() {
     let dir = fresh_dir("update-mixed");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "t", "status=open"]);
-    // One command: set `status` (=) and append to `log` (+=).
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "t", &format!("{STATUS_FIELD}=open")]);
+    // One command: set `state` (=) and append to `log` (+=).
     ta(
         &dir,
-        &["update", "t", "status=closed", "log+=did the thing"],
+        &["update", "t", &format!("{STATUS_FIELD}=closed"), "log+=did the thing"],
     );
     let json = ta(&dir, &["show", "t", "--format", "json"]);
     assert!(
-        json.contains(r#""status":"closed""#) && json.contains(r#""log":"did the thing""#),
+        json.contains(&format!(r#""{STATUS_FIELD}":"closed""#)) && json.contains(r#""log":"did the thing""#),
         "set and append in one update: {json}"
     );
     // A further append accumulates onto it.

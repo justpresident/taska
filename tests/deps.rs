@@ -1,17 +1,17 @@
 mod common;
 use common::*;
+use common::names::*;
 
 #[test]
 fn dep_remove_makes_a_blocked_task_ready() {
     let dir = fresh_dir("dep-remove-ready");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
 
-    // `api` depends on `db`, and `db` is still open, so `api` is blocked: only
+    // `api` needs `db`, and `db` is still open, so `api` is blocked: only
     // `db` itself is ready.
-    ta(&dir, &["create", "db", "status=open"]);
-    ta(&dir, &["create", "api", "status=open"]);
-    ta(&dir, &["dep", "add", "api", "depends_on=db"]);
+    ta(&dir, &["create", "db", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["create", "api", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["dep", "add", "api", &format!("{BLOCKER}=db")]);
     let before = ta(&dir, &["list", "--ready"]);
     assert!(lists_task(&before, "db"), "db ready: {before}");
     assert!(
@@ -20,7 +20,7 @@ fn dep_remove_makes_a_blocked_task_ready() {
     );
 
     // Removing the dependency lifts the block, so `api` becomes ready too.
-    let msg = ta(&dir, &["dep", "remove", "api", "depends_on=db"]);
+    let msg = ta(&dir, &["dep", "remove", "api", &format!("{BLOCKER}=db")]);
     assert!(
         msg.contains("Removed 1 edge(s)"),
         "dep remove should confirm: {msg}"
@@ -39,15 +39,14 @@ fn dep_remove_makes_a_blocked_task_ready() {
 #[test]
 fn dependency_cycle_is_reported_by_ready() {
     let dir = fresh_dir("cycle");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
 
     // a -> b and b -> a form a cycle. `ready` runs the topological sort, so it
     // must refuse and name the cycle (it can't order a circular graph).
-    ta(&dir, &["create", "a", "status=open"]);
-    ta(&dir, &["create", "b", "status=open"]);
-    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
-    ta(&dir, &["dep", "add", "b", "depends_on=a"]);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["create", "b", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b")]);
+    ta(&dir, &["dep", "add", "b", &format!("{BLOCKER}=a")]);
 
     let out = run(ta_bin(), &dir, &["list", "--ready"]);
     assert!(
@@ -65,31 +64,30 @@ fn dependency_cycle_is_reported_by_ready() {
 #[test]
 fn dep_command_adds_and_removes_typed_edges() {
     let dir = fresh_dir("dep-cmd");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
     ta(&dir, &["create", "c"]);
 
-    // Both the depends_on and the typed relates_to edge land in the deps map.
-    ta(&dir, &["dep", "add", "a", "depends_on=b", "relates_to=c"]);
+    // Both the needs and the typed related edge land in the deps map.
+    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b"), &format!("{INFO}=c")]);
     let json = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(
-        json.contains(r#""deps":{"depends_on":["b"],"relates_to":["c"]}"#),
+        json.contains(&format!(r#""deps":{{"{BLOCKER}":["b"],"{INFO}":["c"]}}"#)),
         "typed edges show in deps: {json}"
     );
-    // The relates_to edge is recorded as a typed AddEdge event.
+    // The related edge is recorded as a typed AddEdge event.
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        log.contains(r#""rel":"relates_to""#) && log.contains(r#""target":"c""#),
-        "typed relates_to edge in the log: {log}"
+        log.contains(&format!(r#""rel":"{INFO}""#)) && log.contains(r#""target":"c""#),
+        "typed related edge in the log: {log}"
     );
 
-    // Remove the depends_on edge; the info edge stays in the map.
-    ta(&dir, &["dep", "remove", "a", "depends_on=b"]);
+    // Remove the needs edge; the info edge stays in the map.
+    ta(&dir, &["dep", "remove", "a", &format!("{BLOCKER}=b")]);
     assert!(
-        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":{"relates_to":["c"]}"#),
-        "depends_on edge removed, relates_to kept"
+        ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(r#""deps":{{"{INFO}":["c"]}}"#)),
+        "needs edge removed, related kept"
     );
 
     // An undeclared relationship type is rejected with a helpful error.
@@ -105,69 +103,66 @@ fn dep_command_adds_and_removes_typed_edges() {
 #[test]
 fn show_lists_forward_inverse_and_symmetric_relationships() {
     let dir = fresh_dir("show-rels-mirror");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
     ta(&dir, &["create", "c"]);
 
-    // `a depends_on b` (inverse `blocks`) and `a relates_to c` (self-inverse).
-    ta(&dir, &["dep", "add", "a", "depends_on=b", "relates_to=c"]);
+    // `a needs b` (inverse `feeds`) and `a related c` (self-inverse).
+    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b"), &format!("{INFO}=c")]);
 
     // `a`'s forward edges live in the deps map, grouped by type.
     assert!(
         ta(&dir, &["show", "a", "--format", "json"])
-            .contains(r#""deps":{"depends_on":["b"],"relates_to":["c"]}"#),
+            .contains(&format!(r#""deps":{{"{BLOCKER}":["b"],"{INFO}":["c"]}}"#)),
         "a forward edges in deps"
     );
 
-    // `b` never named `a`, but the inverse of `depends_on` surfaces as `blocks`.
+    // `b` never named `a`, but the inverse of `needs` surfaces as `feeds`.
     assert!(
-        ta(&dir, &["show", "b", "--format", "json"]).contains(r#""blocks":["a"]"#),
-        "b inverse blocks"
+        ta(&dir, &["show", "b", "--format", "json"]).contains(&format!(r#""{BLOCKER_INV}":["a"]"#)),
+        "b inverse feeds"
     );
 
-    // `relates_to` is self-inverse, so `c` shows the symmetric edge back to `a`.
+    // `related` is self-inverse, so `c` shows the symmetric edge back to `a`.
     assert!(
-        ta(&dir, &["show", "c", "--format", "json"]).contains(r#""relates_to":["a"]"#),
-        "c symmetric relates_to"
+        ta(&dir, &["show", "c", "--format", "json"]).contains(&format!(r#""{INFO}":["a"]"#)),
+        "c symmetric related"
     );
 }
 
 #[test]
 fn dep_remove_by_inverse_name_drops_the_forward_edge() {
     let dir = fresh_dir("dep-remove-inverse");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
 
-    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
-    assert!(ta(&dir, &["show", "b", "--format", "json"]).contains(r#""blocks":["a"]"#));
+    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b")]);
+    assert!(ta(&dir, &["show", "b", "--format", "json"]).contains(&format!(r#""{BLOCKER_INV}":["a"]"#)));
 
-    // Remove the relationship from b's side using the inverse name `blocks`.
-    ta(&dir, &["dep", "remove", "b", "blocks=a"]);
+    // Remove the relationship from b's side using the inverse name `feeds`.
+    ta(&dir, &["dep", "remove", "b", &format!("{BLOCKER_INV}=a")]);
     assert!(
         ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":{}"#),
-        "inverse removal dropped a's depends_on edge"
+        "inverse removal dropped a's needs edge"
     );
     let b = ta(&dir, &["show", "b", "--format", "json"]);
-    assert!(!b.contains("blocks"), "inverse edge gone from b: {b}");
+    assert!(!b.contains(BLOCKER_INV), "inverse edge gone from b: {b}");
 }
 
 #[test]
 fn dep_tree_nests_dependencies_and_collapses_shared_nodes() {
     let dir = fresh_dir("dep-tree");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     for id in ["a", "b", "c", "d", "e"] {
         ta(&dir, &["create", id]);
     }
     // a -> {b, c}; both b and c -> d (a shared/diamond node); d -> e.
-    ta(&dir, &["dep", "add", "a", "depends_on=b", "depends_on=c"]);
-    ta(&dir, &["dep", "add", "b", "depends_on=d"]);
-    ta(&dir, &["dep", "add", "c", "depends_on=d"]);
-    ta(&dir, &["dep", "add", "d", "depends_on=e"]);
+    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b"), &format!("{BLOCKER}=c")]);
+    ta(&dir, &["dep", "add", "b", &format!("{BLOCKER}=d")]);
+    ta(&dir, &["dep", "add", "c", &format!("{BLOCKER}=d")]);
+    ta(&dir, &["dep", "add", "d", &format!("{BLOCKER}=e")]);
 
     let tree = ta(&dir, &["dep", "tree", "a"]);
     assert!(tree.contains("|- b"), "first child branch: {tree}");
@@ -181,8 +176,7 @@ fn dep_tree_nests_dependencies_and_collapses_shared_nodes() {
 #[test]
 fn dep_cycles_reports_circular_dependencies() {
     let dir = fresh_dir("dep-cycles");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
 
@@ -190,8 +184,8 @@ fn dep_cycles_reports_circular_dependencies() {
     assert!(ta(&dir, &["dep", "cycles"]).contains("No dependency cycles"));
 
     // Close a -> b -> a into a cycle.
-    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
-    ta(&dir, &["dep", "add", "b", "depends_on=a"]);
+    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b")]);
+    ta(&dir, &["dep", "add", "b", &format!("{BLOCKER}=a")]);
     let cycles = ta(&dir, &["dep", "cycles"]);
     assert!(
         cycles.contains("a <-> b"),
@@ -284,18 +278,17 @@ fn dep_tree_hides_the_configured_default_blocker_not_literal_depends_on() {
 #[test]
 fn informational_relationship_does_not_gate_readiness() {
     let dir = fresh_dir("info-rel");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    // `relates_to` is type=info in the default config.
-    ta(&dir, &["create", "x", "status=open"]);
-    ta(&dir, &["create", "y", "status=open"]);
-    ta(&dir, &["dep", "add", "x", "relates_to=y"]);
+    init_renamed_open(&dir);
+    // `related` is type=info in the renamed config.
+    ta(&dir, &["create", "x", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["create", "y", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["dep", "add", "x", &format!("{INFO}=y")]);
 
     // An informational edge must not block: both are ready.
     let ready = ta(&dir, &["list", "--ready"]);
     assert!(
         lists_task(&ready, "x"),
-        "x ready despite relates_to: {ready}"
+        "x ready despite related: {ready}"
     );
     assert!(lists_task(&ready, "y"), "y ready: {ready}");
 }
@@ -303,14 +296,13 @@ fn informational_relationship_does_not_gate_readiness() {
 #[test]
 fn dep_plan_lists_remaining_prerequisites_in_order() {
     let dir = fresh_dir("dep-plan");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     for id in ["build", "test", "ship"] {
-        ta(&dir, &["create", id, "status=open"]);
+        ta(&dir, &["create", id, &format!("{STATUS_FIELD}=open")]);
     }
-    // ship depends_on test depends_on build.
-    ta(&dir, &["dep", "add", "ship", "depends_on=test"]);
-    ta(&dir, &["dep", "add", "test", "depends_on=build"]);
+    // ship needs test needs build.
+    ta(&dir, &["dep", "add", "ship", &format!("{BLOCKER}=test")]);
+    ta(&dir, &["dep", "add", "test", &format!("{BLOCKER}=build")]);
 
     let plan = ta(&dir, &["dep", "plan", "ship"]);
     let (pb, pt, ps) = (
@@ -325,14 +317,14 @@ fn dep_plan_lists_remaining_prerequisites_in_order() {
     assert!(plan.contains("3 task(s) remaining"), "count: {plan}");
 
     // A done prerequisite drops out of the plan as satisfied.
-    ta(&dir, &["update", "build", "status=closed"]);
+    ta(&dir, &["update", "build", &format!("{STATUS_FIELD}=closed")]);
     let plan = ta(&dir, &["dep", "plan", "ship"]);
     assert!(!plan.contains("build"), "done prereq dropped: {plan}");
     assert!(plan.contains("2 task(s) remaining"), "count: {plan}");
 
     // With everything done there's nothing left to do.
-    ta(&dir, &["update", "test", "status=closed"]);
-    ta(&dir, &["update", "ship", "status=closed"]);
+    ta(&dir, &["update", "test", &format!("{STATUS_FIELD}=closed")]);
+    ta(&dir, &["update", "ship", &format!("{STATUS_FIELD}=closed")]);
     assert!(
         ta(&dir, &["dep", "plan", "ship"]).contains("Nothing to do"),
         "all done -> nothing to do"
@@ -346,16 +338,15 @@ fn dep_plan_lists_remaining_prerequisites_in_order() {
 #[test]
 fn dep_plan_critical_shows_the_longest_chain() {
     let dir = fresh_dir("dep-plan-critical");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     for id in ["ship", "a1", "a2", "a3", "c1"] {
-        ta(&dir, &["create", id, "status=open"]);
+        ta(&dir, &["create", id, &format!("{STATUS_FIELD}=open")]);
     }
     // ship has a long branch (a3 -> a2 -> a1 -> ship) and a short one (c1 -> ship).
-    ta(&dir, &["dep", "add", "ship", "depends_on=a1"]);
-    ta(&dir, &["dep", "add", "a1", "depends_on=a2"]);
-    ta(&dir, &["dep", "add", "a2", "depends_on=a3"]);
-    ta(&dir, &["dep", "add", "ship", "depends_on=c1"]);
+    ta(&dir, &["dep", "add", "ship", &format!("{BLOCKER}=a1")]);
+    ta(&dir, &["dep", "add", "a1", &format!("{BLOCKER}=a2")]);
+    ta(&dir, &["dep", "add", "a2", &format!("{BLOCKER}=a3")]);
+    ta(&dir, &["dep", "add", "ship", &format!("{BLOCKER}=c1")]);
 
     // The full plan lists all five remaining tasks.
     let plan = ta(&dir, &["dep", "plan", "ship"]);
@@ -388,30 +379,29 @@ fn dep_plan_critical_shows_the_longest_chain() {
 #[test]
 fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
     let dir = fresh_dir("subtask");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     for id in ["epic", "build-form", "wire-auth"] {
-        ta(&dir, &["create", id, "status=open"]);
+        ta(&dir, &["create", id, &format!("{STATUS_FIELD}=open")]);
     }
     // Add from the parent side, and from the child side via the inverse - both
-    // land as `has_subtask` edges on the parent.
-    ta(&dir, &["dep", "add", "epic", "has_subtask=build-form"]);
-    ta(&dir, &["dep", "add", "wire-auth", "subtask_of=epic"]);
+    // land as `contains` edges on the parent.
+    ta(&dir, &["dep", "add", "epic", &format!("{HIER}=build-form")]);
+    ta(&dir, &["dep", "add", "wire-auth", &format!("{HIER_INV}=epic")]);
 
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        log.contains(r#""rel":"has_subtask""#) && log.contains(r#""target":"wire-auth""#),
-        "inverse add stored as has_subtask on epic: {log}"
+        log.contains(&format!(r#""rel":"{HIER}""#)) && log.contains(r#""target":"wire-auth""#),
+        "inverse add stored as contains on epic: {log}"
     );
 
-    // show surfaces both directions: parent -> has_subtask, child -> subtask_of.
+    // show surfaces both directions: parent -> contains, child -> part_of.
     let e = ta(&dir, &["show", "epic", "--format", "json"]);
     assert!(
-        e.contains(r#""has_subtask":["build-form","wire-auth"]"#),
+        e.contains(&format!(r#""{HIER}":["build-form","wire-auth"]"#)),
         "epic shows its subtasks: {e}"
     );
     assert!(
-        ta(&dir, &["show", "build-form", "--format", "json"]).contains(r#""subtask_of":["epic"]"#),
+        ta(&dir, &["show", "build-form", "--format", "json"]).contains(&format!(r#""{HIER_INV}":["epic"]"#)),
         "child mirrors the parent"
     );
 
@@ -427,8 +417,8 @@ fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
     );
 
     // Close both subtasks -> the parent becomes ready.
-    ta(&dir, &["update", "build-form", "status=closed"]);
-    ta(&dir, &["update", "wire-auth", "status=closed"]);
+    ta(&dir, &["update", "build-form", &format!("{STATUS_FIELD}=closed")]);
+    ta(&dir, &["update", "wire-auth", &format!("{STATUS_FIELD}=closed")]);
     assert!(
         lists_task(&ta(&dir, &["list", "--ready"]), "epic"),
         "epic ready once its subtasks are done"
@@ -438,15 +428,14 @@ fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
 #[test]
 fn dep_tree_marks_subtasks_and_rolls_up_progress() {
     let dir = fresh_dir("subtask-tree");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     for id in ["epic", "a", "b", "dep1"] {
-        ta(&dir, &["create", id, "status=open"]);
+        ta(&dir, &["create", id, &format!("{STATUS_FIELD}=open")]);
     }
-    ta(&dir, &["dep", "add", "epic", "has_subtask=a"]);
-    ta(&dir, &["dep", "add", "epic", "has_subtask=b"]);
-    ta(&dir, &["dep", "add", "epic", "depends_on=dep1"]);
-    ta(&dir, &["update", "a", "status=closed"]); // 1 of 2 subtasks done
+    ta(&dir, &["dep", "add", "epic", &format!("{HIER}=a")]);
+    ta(&dir, &["dep", "add", "epic", &format!("{HIER}=b")]);
+    ta(&dir, &["dep", "add", "epic", &format!("{BLOCKER}=dep1")]);
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=closed")]); // 1 of 2 subtasks done
 
     let tree = ta(&dir, &["dep", "tree", "epic"]);
     assert!(
@@ -457,7 +446,7 @@ fn dep_tree_marks_subtasks_and_rolls_up_progress() {
         tree.matches("[subtask]").count() == 2,
         "both subtasks tagged: {tree}"
     );
-    // A plain depends_on edge is a dependency, not a subtask - never tagged.
+    // A plain needs edge is a dependency, not a subtask - never tagged.
     assert!(
         tree.contains("dep1") && !tree.contains("dep1 [subtask]"),
         "plain dependency untagged: {tree}"
@@ -485,30 +474,29 @@ fn dep_tree_marks_subtasks_and_rolls_up_progress() {
 #[test]
 fn dep_tree_exact_by_default_titles_done_marks_and_open_prune() {
     let dir = fresh_dir("tree-output");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "epic", "title=Epic goal", "status=open"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "epic", "title=Epic goal", &format!("{STATUS_FIELD}=open")]);
     ta(
         &dir,
-        &["create", "open-sub", "title=Still open", "status=open"],
+        &["create", "open-sub", "title=Still open", &format!("{STATUS_FIELD}=open")],
     );
     ta(
         &dir,
-        &["create", "done-sub", "title=Finished", "status=open"],
+        &["create", "done-sub", "title=Finished", &format!("{STATUS_FIELD}=open")],
     );
-    ta(&dir, &["create", "done-mid", "status=open"]);
-    ta(&dir, &["create", "deep-open", "status=open"]);
-    ta(&dir, &["dep", "add", "epic", "has_subtask=open-sub"]);
-    ta(&dir, &["dep", "add", "epic", "has_subtask=done-sub"]);
-    ta(&dir, &["dep", "add", "epic", "depends_on=done-mid"]);
-    ta(&dir, &["dep", "add", "done-mid", "depends_on=deep-open"]); // done node leads to open work
-    ta(&dir, &["update", "done-sub", "status=closed"]);
-    ta(&dir, &["update", "done-mid", "status=closed"]);
+    ta(&dir, &["create", "done-mid", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["create", "deep-open", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["dep", "add", "epic", &format!("{HIER}=open-sub")]);
+    ta(&dir, &["dep", "add", "epic", &format!("{HIER}=done-sub")]);
+    ta(&dir, &["dep", "add", "epic", &format!("{BLOCKER}=done-mid")]);
+    ta(&dir, &["dep", "add", "done-mid", &format!("{BLOCKER}=deep-open")]); // done node leads to open work
+    ta(&dir, &["update", "done-sub", &format!("{STATUS_FIELD}=closed")]);
+    ta(&dir, &["update", "done-mid", &format!("{STATUS_FIELD}=closed")]);
 
-    // Default: the exact graph - titles shown, done tasks marked with a check mark,
+    // Default: the exact graph - done tasks marked with a check mark,
     // and a done mid-chain node is kept (never spliced), with its open descendant beneath it.
     let tree = ta(&dir, &["dep", "tree", "epic"]);
-    assert!(tree.contains("Epic goal"), "title shown: {tree}");
+    assert!(tree.contains("epic"), "root task shown: {tree}");
     assert!(
         tree.contains("\u{2713} done-sub"),
         "done subtask check-marked: {tree}"
@@ -551,57 +539,55 @@ fn dep_tree_exact_by_default_titles_done_marks_and_open_prune() {
 #[test]
 fn show_surfaces_typed_relationships_forward_and_inverse() {
     let dir = fresh_dir("show-rels");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     for id in ["epic", "child", "other", "a", "b"] {
-        ta(&dir, &["create", id, "status=open"]);
+        ta(&dir, &["create", id, &format!("{STATUS_FIELD}=open")]);
     }
-    ta(&dir, &["dep", "add", "epic", "has_subtask=child"]);
-    ta(&dir, &["dep", "add", "epic", "relates_to=other"]);
-    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
+    ta(&dir, &["dep", "add", "epic", &format!("{HIER}=child")]);
+    ta(&dir, &["dep", "add", "epic", &format!("{INFO}=other")]);
+    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b")]);
 
     // The parent's record shows its typed relationships, grouped by type.
     let epic = ta(&dir, &["show", "epic"]);
     assert!(
-        epic.contains("has_subtask:") && epic.contains("child"),
+        epic.contains(&format!("{HIER}:")) && epic.contains("child"),
         "{epic}"
     );
     assert!(
-        epic.contains("relates_to:") && epic.contains("other"),
+        epic.contains(&format!("{INFO}:")) && epic.contains("other"),
         "{epic}"
     );
 
-    // The child shows the inverse-mirrored edge (subtask_of), in json too.
+    // The child shows the inverse-mirrored edge (part_of), in json too.
     assert!(
-        ta(&dir, &["show", "child", "--format", "json"]).contains(r#""subtask_of":["epic"]"#),
-        "child mirrors subtask_of"
+        ta(&dir, &["show", "child", "--format", "json"]).contains(&format!(r#""{HIER_INV}":["epic"]"#)),
+        "child mirrors part_of"
     );
 
-    // depends_on lives in the deps map - never duplicated as a top-level
-    // field; its inverse `blocks` surfaces on the depended-upon task.
+    // needs lives in the deps map - never duplicated as a top-level
+    // field; its inverse `feeds` surfaces on the depended-upon task.
     let aj = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(
-        aj.contains(r#""deps":{"depends_on":["b"]}"#) && aj.matches("depends_on").count() == 1,
-        "depends_on only inside deps: {aj}"
+        aj.contains(&format!(r#""deps":{{"{BLOCKER}":["b"]}}"#)) && aj.matches(BLOCKER).count() == 1,
+        "needs only inside deps: {aj}"
     );
     assert!(
-        ta(&dir, &["show", "b", "--format", "json"]).contains(r#""blocks":["a"]"#),
-        "inverse blocks surfaced on b"
+        ta(&dir, &["show", "b", "--format", "json"]).contains(&format!(r#""{BLOCKER_INV}":["a"]"#)),
+        "inverse feeds surfaced on b"
     );
 }
 
 #[test]
 fn dep_add_enforces_single_blocker_and_single_parent() {
     let dir = fresh_dir("subtask-constraints");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     for id in ["a", "b", "e1", "e2", "c"] {
         ta(&dir, &["create", id]);
     }
 
     // At most one blocking relationship between two tasks.
-    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
-    let out = run(ta_bin(), &dir, &["dep", "add", "a", "has_subtask=b"]);
+    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b")]);
+    let out = run(ta_bin(), &dir, &["dep", "add", "a", &format!("{HIER}=b")]);
     assert!(
         !out.status.success(),
         "second blocking edge must be rejected"
@@ -613,8 +599,8 @@ fn dep_add_enforces_single_blocker_and_single_parent() {
     );
 
     // A task may have only one parent.
-    ta(&dir, &["dep", "add", "e1", "has_subtask=c"]);
-    let out = run(ta_bin(), &dir, &["dep", "add", "e2", "has_subtask=c"]);
+    ta(&dir, &["dep", "add", "e1", &format!("{HIER}=c")]);
+    let out = run(ta_bin(), &dir, &["dep", "add", "e2", &format!("{HIER}=c")]);
     assert!(!out.status.success(), "second parent must be rejected");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("only one parent"),
@@ -622,12 +608,12 @@ fn dep_add_enforces_single_blocker_and_single_parent() {
         String::from_utf8_lossy(&out.stderr)
     );
     // Same constraint when added from the child side via the inverse.
-    let out = run(ta_bin(), &dir, &["dep", "add", "c", "subtask_of=e2"]);
+    let out = run(ta_bin(), &dir, &["dep", "add", "c", &format!("{HIER_INV}=e2")]);
     assert!(!out.status.success(), "inverse second-parent also rejected");
 
     // Re-adding the exact same edge is idempotent, not a conflict.
     assert!(
-        run(ta_bin(), &dir, &["dep", "add", "e1", "has_subtask=c"])
+        run(ta_bin(), &dir, &["dep", "add", "e1", &format!("{HIER}=c")])
             .status
             .success(),
         "idempotent re-add allowed"

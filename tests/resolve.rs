@@ -1,16 +1,16 @@
 mod common;
 use common::*;
+use common::names::*;
 
 #[test]
 fn orphaned_events_warn_on_read_and_resolve_drops_them() {
     let dir = fresh_dir("orphan");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
 
     // Create then delete `a`, then plant an Update event for the (now gone) `a` -
     // an orphan that applies to nothing at replay. (The gate rejects `ta update a`
     // on a missing task, so we write the orphan directly, as a merge/revert would.)
-    ta(&dir, &["create", "a", "status=open"]);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
     ta(&dir, &["delete", "a"]);
     let log = dir.join(".taska").join("mutations.jsonl");
     append_orphan_update(&log, "a");
@@ -56,8 +56,7 @@ fn orphaned_events_warn_on_read_and_resolve_drops_them() {
 #[test]
 fn resolve_orphans_requires_confirmation() {
     let dir = fresh_dir("resolve-confirm");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(&dir, &["create", "a"]);
     ta(&dir, &["delete", "a"]);
     let log = dir.join(".taska/mutations.jsonl");

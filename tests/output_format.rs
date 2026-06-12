@@ -1,29 +1,30 @@
 mod common;
 use common::*;
+use common::names::*;
 
 #[test]
 fn output_format_columns_and_json() {
     let dir = fresh_dir("output");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(
         &dir,
-        &["create", "a", "title=Alpha", "status=open", "priority=3"],
+        &["create", "a", "title=Alpha", &format!("{STATUS_FIELD}=todo"), "priority=3"],
     );
 
-    // Human: uppercase header + the title column value.
-    let human = ta(&dir, &["list"]);
+    // Human: uppercase header + the title column value (request title explicitly
+    // since the renamed-open default columns are id,state,deps).
+    let human = ta(&dir, &["list", "--columns", &format!("id,{STATUS_FIELD},title,deps")]);
     assert!(
-        human.contains("ID") && human.contains("STATUS"),
+        human.contains("ID") && human.contains(&STATUS_FIELD.to_uppercase()),
         "header: {human}"
     );
     assert!(human.contains("Alpha"), "title column: {human}");
 
-    // Default json: the default columns (id,title,status,deps) as an array,
+    // Default json: the default columns (id,state,deps) as an array,
     // but NOT priority (not a default column).
     let json = ta(&dir, &["list", "--format", "json"]);
     assert!(json.trim_start().starts_with('['), "json array: {json}");
-    assert!(json.contains(r#""status":"open""#), "status shown: {json}");
+    assert!(json.contains(&format!(r#""{STATUS_FIELD}":"todo""#)), "state shown: {json}");
     assert!(
         !json.contains("priority"),
         "priority not a default column: {json}"
@@ -39,7 +40,7 @@ fn output_format_columns_and_json() {
         &["list", "--columns", "id,priority", "--format", "json"],
     );
     assert!(
-        cols.contains(r#""priority":3"#) && !cols.contains("status"),
+        cols.contains(r#""priority":3"#) && !cols.contains(STATUS_FIELD),
         "columns select + restrict: {cols}"
     );
 }
@@ -169,17 +170,17 @@ fn per_column_max_width_overrides_the_global_default() {
 #[test]
 fn jsonl_output_across_commands_omits_absent_fields() {
     let dir = fresh_dir("jsonl");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "api", "status=open", "priority=3"]);
-    ta(&dir, &["create", "db", "status=closed"]);
-    ta(&dir, &["dep", "add", "api", "depends_on=db"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "api", &format!("{STATUS_FIELD}=todo"), "priority=3"]);
+    ta(&dir, &["create", "db", &format!("{STATUS_FIELD}=closed")]);
+    ta(&dir, &["dep", "add", "api", &format!("{BLOCKER}=db")]);
 
     // list/search/ready/show all speak jsonl: one bare object per line, no array
     // wrapper, and never a null for an absent field.
+    let filter_todo = format!("{STATUS_FIELD}=todo");
     for args in [
         vec!["list", "--full", "--format", "jsonl"],
-        vec!["list", "status=open", "--format", "jsonl"],
+        vec!["list", &filter_todo, "--format", "jsonl"],
         vec!["list", "--ready", "--format", "jsonl"],
         vec!["show", "api", "--format", "jsonl"],
     ] {
@@ -211,14 +212,14 @@ fn jsonl_output_across_commands_omits_absent_fields() {
         "api: {api}"
     );
 
-    // status --format jsonl is the single summary object.
-    let status = ta(&dir, &["status", "--format", "jsonl"]);
+    // `status` --format jsonl is the single summary object.
+    let st = ta(&dir, &["status", "--format", "jsonl"]);
     assert_eq!(
-        status.lines().count(),
+        st.lines().count(),
         1,
-        "status jsonl is one line: {status}"
+        "status jsonl is one line: {st}"
     );
-    assert!(status.contains(r#""total":2"#), "status: {status}");
+    assert!(st.contains(r#""total":2"#), "status: {st}");
 }
 
 #[test]
@@ -275,8 +276,7 @@ fn config_columns_and_max_width_are_honored() {
 #[test]
 fn empty_results_render_placeholders_and_empty_json_array() {
     let dir = fresh_dir("empty-results");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
 
     // With no tasks at all, list/ready print their human placeholders and `[]`
     // for json.
@@ -289,10 +289,11 @@ fn empty_results_render_placeholders_and_empty_json_array() {
     );
 
     // A search that matches nothing has its own placeholder and empty array.
-    ta(&dir, &["create", "a", "status=open"]);
-    assert_eq!(ta(&dir, &["list", "status=closed"]).trim(), "(no matches)");
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=todo")]);
+    let filter_closed = format!("{STATUS_FIELD}=closed");
+    assert_eq!(ta(&dir, &["list", &filter_closed]).trim(), "(no matches)");
     assert_eq!(
-        ta(&dir, &["list", "status=closed", "--format", "json"]).trim(),
+        ta(&dir, &["list", &filter_closed, "--format", "json"]).trim(),
         "[]"
     );
 }
@@ -300,11 +301,10 @@ fn empty_results_render_placeholders_and_empty_json_array() {
 #[test]
 fn output_commands_are_format_and_color_consistent() {
     let dir = fresh_dir("output-consistency");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "a", "status=open"]);
-    ta(&dir, &["create", "b", "status=open"]);
-    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=todo")]);
+    ta(&dir, &["create", "b", &format!("{STATUS_FIELD}=todo")]);
+    ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b")]);
 
     // Every command on the shared output pipeline must honor `--format` and color
     // identically: human is escape-free off-TTY, json/jsonl parse and never color.
@@ -360,9 +360,8 @@ fn output_commands_are_format_and_color_consistent() {
 #[test]
 fn human_output_is_uncolored_when_not_a_tty() {
     let dir = fresh_dir("no-color-pipe");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "a", "status=open"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=todo")]);
 
     // The test harness captures stdout (a pipe, not a TTY), so color auto-disables
     // - no ANSI escape bytes leak into output that might be piped or grepped.
@@ -387,15 +386,14 @@ fn human_output_is_uncolored_when_not_a_tty() {
 #[test]
 fn layout_flag_and_config_switch_table_and_record() {
     let dir = fresh_dir("layout");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "a", "title=Alpha", "status=open"]);
-    ta(&dir, &["create", "b", "title=Beta", "status=open"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", "title=Alpha", &format!("{STATUS_FIELD}=todo")]);
+    ta(&dir, &["create", "b", "title=Beta", &format!("{STATUS_FIELD}=todo")]);
 
     // `list` defaults to the aligned table (uppercase headers, no record labels).
     let table = ta(&dir, &["list"]);
     assert!(
-        table.contains("ID") && table.contains("STATUS"),
+        table.contains("ID") && table.contains(&STATUS_FIELD.to_uppercase()),
         "table header: {table}"
     );
     assert!(!table.contains("id:"), "not records: {table}");
@@ -407,7 +405,7 @@ fn layout_flag_and_config_switch_table_and_record() {
         "record labels: {recs}"
     );
     assert!(
-        !recs.contains("STATUS"),
+        !recs.contains(&STATUS_FIELD.to_uppercase()),
         "no table header in records: {recs}"
     );
 
@@ -475,22 +473,21 @@ fn output_to_a_closed_pipe_does_not_panic() {
 #[test]
 fn deps_column_groups_every_relationship_type() {
     let dir = fresh_dir("deps-groups");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     for id in ["api", "db", "web", "infra"] {
-        ta(&dir, &["create", id, "status=open"]);
+        ta(&dir, &["create", id, &format!("{STATUS_FIELD}=todo")]);
     }
     ta(
         &dir,
-        &["dep", "add", "api", "depends_on=db", "depends_on=web"],
+        &["dep", "add", "api", &format!("{BLOCKER}=db"), &format!("{BLOCKER}=web")],
     );
-    ta(&dir, &["dep", "add", "api", "relates_to=infra"]);
+    ta(&dir, &["dep", "add", "api", &format!("{INFO}=infra")]);
 
     // The human table cell shows EVERY edge as labeled type groups joined by
     // `;` - gating and informational types alike (styling is TTY-only).
     let table = ta(&dir, &["list", "--full"]);
     assert!(
-        table.contains("depends_on: db, web; relates_to: infra"),
+        table.contains(&format!("{BLOCKER}: db, web; {INFO}: infra")),
         "grouped cell: {table}"
     );
 
@@ -499,19 +496,19 @@ fn deps_column_groups_every_relationship_type() {
     let rec = ta(&dir, &["show", "api"]);
     assert!(
         rec.lines()
-            .any(|l| l.starts_with("deps:") && l.ends_with("depends_on: db, web")),
+            .any(|l| l.starts_with("deps:") && l.ends_with(&format!("{BLOCKER}: db, web"))),
         "first group on the label line: {rec}"
     );
     assert!(
         rec.lines()
-            .any(|l| l.starts_with(' ') && l.trim() == "relates_to: infra"),
+            .any(|l| l.starts_with(' ') && l.trim() == format!("{INFO}: infra")),
         "next group indented: {rec}"
     );
 
     // json/jsonl carry the typed map itself; an edge-free task is `{}`.
     let json = ta(&dir, &["list", "--format", "jsonl"]);
     assert!(
-        json.contains(r#""deps":{"depends_on":["db","web"],"relates_to":["infra"]}"#),
+        json.contains(&format!(r#""deps":{{"{BLOCKER}":["db","web"],"{INFO}":["infra"]}}"#)),
         "typed map in jsonl: {json}"
     );
     assert!(json.contains(r#""deps":{}"#), "edge-free task: {json}");

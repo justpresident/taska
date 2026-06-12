@@ -1,11 +1,11 @@
 mod common;
 use common::*;
+use common::names::*;
 
 #[test]
 fn undo_uncommitted_truncates_the_tail() {
     let dir = fresh_dir("undo-uncommitted");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
 
@@ -24,8 +24,7 @@ fn undo_uncommitted_truncates_the_tail() {
 #[test]
 fn undo_count_removes_the_last_n() {
     let dir = fresh_dir("undo-count");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
     ta(&dir, &["create", "c"]);
@@ -45,11 +44,10 @@ fn undo_count_removes_the_last_n() {
 #[test]
 fn undo_committed_appends_a_compensating_event() {
     let dir = fresh_dir("undo-committed");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "a", "status=open"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
     // Commit the create AND the update so the undone event is already committed.
-    ta(&dir, &["update", "a", "status=closed"]);
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=closed")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
@@ -66,20 +64,19 @@ fn undo_committed_appends_a_compensating_event() {
         "committed undo appends a compensating event (log grows)"
     );
 
-    // status reverts to its prior committed value.
+    // state reverts to its prior committed value.
     let json = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(
-        json.contains(r#""status":"open""#),
-        "status reverted to open: {json}"
+        json.contains(&format!(r#""{STATUS_FIELD}":"open""#)),
+        "state reverted to open: {json}"
     );
 }
 
 #[test]
 fn undo_committed_unsets_a_newly_added_field() {
     let dir = fresh_dir("undo-committed-unset");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "a", "status=open"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
     // Commit the create AND the field-add so the undone event is committed and
     // the compensating (append-only) path runs rather than truncation.
     ta(&dir, &["update", "a", "owner=bob"]);
@@ -97,18 +94,17 @@ fn undo_committed_unsets_a_newly_added_field() {
     let json = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(!json.contains("owner"), "owner unset after undo: {json}");
     assert!(
-        json.contains(r#""status":"open""#),
-        "status preserved: {json}"
+        json.contains(&format!(r#""{STATUS_FIELD}":"open""#)),
+        "state preserved: {json}"
     );
 }
 
 #[test]
 fn undo_remove_truncates_committed_and_warns() {
     let dir = fresh_dir("undo-remove");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "a", "status=open"]);
-    ta(&dir, &["update", "a", "status=closed"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=closed")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
@@ -129,10 +125,10 @@ fn undo_remove_truncates_committed_and_warns() {
         "--remove on a committed event warns loudly: {stderr}"
     );
 
-    // The earlier (still-committed) create remains; status reverts.
+    // The earlier (still-committed) create remains; state reverts.
     let json = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(
-        json.contains(r#""status":"open""#),
+        json.contains(&format!(r#""{STATUS_FIELD}":"open""#)),
         "the update was removed, leaving the create: {json}"
     );
 }
@@ -140,8 +136,7 @@ fn undo_remove_truncates_committed_and_warns() {
 #[test]
 fn undo_with_empty_log_is_a_noop() {
     let dir = fresh_dir("undo-empty");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     let out = ta(&dir, &["undo", "--force"]);
     assert!(out.contains("Nothing to undo"), "got: {out}");
 }
@@ -149,12 +144,11 @@ fn undo_with_empty_log_is_a_noop() {
 #[test]
 fn undo_committed_compensates_typed_edges() {
     let dir = fresh_dir("undo-typed-edges");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "a", "status=open"]);
-    ta(&dir, &["create", "b", "status=open"]);
-    // Commit everything up to and including a typed (non-depends_on) edge.
-    ta(&dir, &["dep", "add", "a", "relates_to=b"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["create", "b", &format!("{STATUS_FIELD}=open")]);
+    // Commit everything up to and including a typed (non-needs) edge.
+    ta(&dir, &["dep", "add", "a", &format!("{INFO}=b")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
@@ -176,19 +170,20 @@ fn undo_committed_compensates_typed_edges() {
     let last = tail.lines().last().unwrap();
     assert!(
         last.contains(r#""op":"RemoveEdge""#)
-            && last.contains(r#""rel":"relates_to""#)
+            && last.contains(&format!(r#""rel":"{INFO}""#))
             && last.contains(r#""target":"b""#),
         "compensation is a TYPED RemoveEdge: {last}"
     );
 
     // Now the inverse: commit a typed REMOVE, undo it, and the edge returns.
-    ta(&dir, &["dep", "add", "a", "relates_to=b"]);
-    ta(&dir, &["dep", "remove", "a", "relates_to=b"]);
+    ta(&dir, &["dep", "add", "a", &format!("{INFO}=b")]);
+    ta(&dir, &["dep", "remove", "a", &format!("{INFO}=b")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "removed"]);
     ta(&dir, &["undo", "--force"]);
     assert!(
-        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":{"relates_to":["b"]}"#),
+        ta(&dir, &["show", "a", "--format", "json"])
+            .contains(&format!(r#""deps":{{"{INFO}":["b"]}}"#)),
         "undoing a committed typed remove restores the edge"
     );
 }

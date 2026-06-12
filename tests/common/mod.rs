@@ -94,28 +94,39 @@ pub fn init_repo(dir: &Path) {
     git(dir, &["config", "user.name", "Taska Test"]);
 }
 
-/// The non-default config tokens the [`init_renamed`] store uses. A test
-/// exercising configurable surfaces should drive EVERYTHING through these names;
-/// if production code hardcodes a default (`status`/`depends_on`/`type`/
-/// `create_time`/...), a command against this store breaks and the test fails.
-/// (A few tests stay on the defaults to cover default initialization itself.)
+/// The non-default config tokens the renamed stores use. A converted test drives
+/// every configurable thing through THESE constants (never a hardcoded `"state"`/
+/// `"needs"`/...), so the renamed tokens live in one place; if production code
+/// hardcodes a default (`status`/`depends_on`/`type`/`create_time`/...), a command
+/// breaks and the test fails. (A few tests stay on the defaults to cover default
+/// initialization itself.)
+///
+/// The NAME constants (field/relationship/inverse/timestamp names) hold for BOTH
+/// [`init_renamed`] and [`init_renamed_open`]. The VALUE constants
+/// (`DEFAULT_STATUS`/`MID_STATUS`/`DONE_STATUS`/`TASK_TYPE`/`TITLE`/`NOTES`)
+/// describe the schema'd [`init_renamed`] config; the schema-less
+/// [`init_renamed_open`] leaves status VALUES free (todo/closed), so tests on it
+/// use the name constants with literal status values.
 pub mod names {
+    // --- NAMES (apply to both renamed configs) ---
     pub const STATUS_FIELD: &str = "state"; // default: status
-    pub const DEFAULT_STATUS: &str = "backlog"; // default: todo
-    pub const MID_STATUS: &str = "building"; // a non-default, non-done status
-    pub const DONE_STATUS: &str = "shipped"; // default: closed
     pub const TYPE_FIELD: &str = "kind"; // default: type
-    pub const TASK_TYPE: &str = "story"; // a declared type name
-    pub const TITLE: &str = "headline"; // a required string field
-    pub const NOTES: &str = "body"; // a required string field
     pub const BLOCKER: &str = "needs"; // default: depends_on
     pub const BLOCKER_INV: &str = "feeds"; // default: blocks
     pub const HIER: &str = "contains"; // default: has_subtask
     pub const HIER_INV: &str = "part_of"; // default: subtask_of
     pub const INFO: &str = "related"; // default: relates_to (symmetric)
+    pub const DUP: &str = "dup"; // default: duplicates (one-way)
     pub const CREATE_TIME: &str = "made_at"; // default: create_time
     pub const UPDATE_TIME: &str = "touched_at"; // default: update_time
     pub const CLOSE_TIME: &str = "shipped_at"; // default: close_time
+    // --- VALUES (the schema'd `init_renamed` config) ---
+    pub const DEFAULT_STATUS: &str = "backlog"; // default: todo
+    pub const MID_STATUS: &str = "building"; // a non-default, non-done status
+    pub const DONE_STATUS: &str = "shipped"; // default: closed
+    pub const TASK_TYPE: &str = "story"; // a declared type name
+    pub const TITLE: &str = "headline"; // a required string field
+    pub const NOTES: &str = "body"; // a required string field
 }
 
 /// A `config.toml` that renames every configurable thing to a distinctive

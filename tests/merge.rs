@@ -1,12 +1,12 @@
 mod common;
+use common::names::*;
 use common::*;
 
 #[test]
 fn git_merge_driver_resolves_divergent_appends() {
     let dir = fresh_dir("merge");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "base", "status=open"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "base", &format!("{STATUS_FIELD}=open")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
@@ -37,19 +37,18 @@ fn git_merge_driver_resolves_divergent_appends() {
 #[test]
 fn surface_conflict_fails_merge_and_resolve_clears_it() {
     let dir = fresh_dir("conflict");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
-    ta(&dir, &["create", "t", "status=open"]);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "t", &format!("{STATUS_FIELD}=open")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
     // Both branches set the SAME field of the SAME task to different values.
     git(&dir, &["branch", "feature"]);
-    ta(&dir, &["update", "t", "status=main"]);
+    ta(&dir, &["update", "t", &format!("{STATUS_FIELD}=main")]);
     git(&dir, &["commit", "-aqm", "main edit"]);
 
     git(&dir, &["checkout", "-q", "feature"]);
-    ta(&dir, &["update", "t", "status=feature"]);
+    ta(&dir, &["update", "t", &format!("{STATUS_FIELD}=feature")]);
     git(&dir, &["commit", "-aqm", "feature edit"]);
 
     // Default policy is `surface`, so the driver must fail the merge.
@@ -197,9 +196,8 @@ fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
 #[test]
 fn clean_disjoint_field_merge_has_no_conflict() {
     let dir = fresh_dir("disjoint-fields");
-    init_repo(&dir);
-    ta(&dir, &["init"]); // default on_conflict = surface
-    ta(&dir, &["create", "t", "status=open"]);
+    init_renamed_open(&dir); // default on_conflict = surface
+    ta(&dir, &["create", "t", &format!("{STATUS_FIELD}=open")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
@@ -376,8 +374,7 @@ fn reverts_converge_regardless_of_merge_direction() {
     // driver unions both sides' removals. We build the identical history twice and
     // merge it both directions, then assert the materialized task sets match.
     fn build(dir: &Path) {
-        init_repo(dir);
-        ta(dir, &["init"]);
+        init_renamed_open(dir);
         ta(dir, &["create", "keep1"]);
         git(dir, &["add", "-A"]);
         git(dir, &["commit", "-qm", "c0 base"]);
@@ -450,8 +447,7 @@ fn revert_to_empty_log_is_handled() {
     // mutations.jsonl. The CLI must treat that degenerate empty / None-watermark
     // state as "no tasks", never erroring.
     let dir = fresh_dir("revert-empty");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
     ta(&dir, &["create", "only"]);
@@ -475,8 +471,7 @@ fn merge_warns_when_one_branch_reverts_a_shared_event() {
     // The merge reconciles (the revert wins) but must WARN that a shared event was
     // reverted on one branch and kept on the other - not silently drop it.
     let dir = fresh_dir("revert-warn");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(&dir, &["create", "base"]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "base"]);
@@ -522,8 +517,7 @@ fn merge_warns_when_one_branch_reverts_a_shared_event() {
 #[test]
 fn concurrent_appends_merge_without_conflict() {
     let dir = fresh_dir("append-merge");
-    init_repo(&dir);
-    ta(&dir, &["init"]);
+    init_renamed_open(&dir);
     ta(&dir, &["create", "log"]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "base"]);

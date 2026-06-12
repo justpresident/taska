@@ -194,8 +194,7 @@ fn low_keep_events_is_rejected_on_the_next_command() {
 #[test]
 fn compact_is_noop_below_threshold() {
     let dir = fresh_dir("compact_noop");
-    init_repo(&dir);
-    ta(&dir, &["init"]); // default keep_events = 5000
+    init_renamed_open(&dir); // default keep_events = 5000
 
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
