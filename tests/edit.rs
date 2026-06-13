@@ -5,6 +5,7 @@
 mod common;
 use common::names::*;
 use common::*;
+use taska::model::STATUS_KEY;
 
 use std::os::unix::fs::PermissionsExt;
 
@@ -215,7 +216,7 @@ fn edit_reedits_after_schema_violation() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("status"),
+        stderr.contains(STATUS_KEY),
         "schema diagnostic names the field: {stderr}"
     );
     assert!(

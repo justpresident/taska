@@ -1,7 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
-use taska::model::{DEPS_KEY, ID_KEY};
+use taska::model::{DEPS_KEY, ID_KEY, STATUS_KEY};
 
 #[test]
 fn output_format_columns_and_json() {
@@ -130,7 +130,7 @@ fn full_view_uses_canonical_column_order_in_both_formats() {
     // JSON --full: the keys appear in that identical order, for one object.
     let json = ta(&dir, &["list", "--full", "--format", "json"]);
     let a_obj = json.lines().find(|l| l.contains("\"a\"")).unwrap();
-    let order: Vec<usize> = [ID_KEY, "status", DEPS_KEY, "alpha", "zeta"]
+    let order: Vec<usize> = [ID_KEY, STATUS_KEY, DEPS_KEY, "alpha", "zeta"]
         .iter()
         .map(|k| a_obj.find(&format!("\"{k}\"")).unwrap())
         .collect();
@@ -141,7 +141,7 @@ fn full_view_uses_canonical_column_order_in_both_formats() {
 
     // `show` shares the same default order.
     let show = ta(&dir, &["show", "a", "--format", "json"]);
-    let sorder: Vec<usize> = [ID_KEY, "status", DEPS_KEY, "alpha", "zeta"]
+    let sorder: Vec<usize> = [ID_KEY, STATUS_KEY, DEPS_KEY, "alpha", "zeta"]
         .iter()
         .map(|k| show.find(&format!("\"{k}\"")).unwrap())
         .collect();
@@ -303,7 +303,7 @@ fn config_columns_and_max_width_are_honored() {
         "json is not truncated: {json}"
     );
     assert!(
-        !json.contains("status"),
+        !json.contains(STATUS_KEY),
         "status not a configured column: {json}"
     );
 }

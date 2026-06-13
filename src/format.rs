@@ -814,8 +814,8 @@ mod tests {
         assert_eq!(cell, format!("{BLOCKER}: db\u{2026}"));
         assert_eq!(w, 10);
         // plain.chars().count() = "needs: db, web; related: x" = 26 chars
-        // "needs: db, web" = 14, "; " = 2, "related: x" = 10 → total 26
-        // cap=20: budget=19; 14 (blocker) + 2 (sep) leaves 3 for info → "rel" + ellipsis
+        // "needs: db, web" = 14, "; " = 2, "related: x" = 10 -> total 26
+        // cap=20: budget=19; 14 (blocker) + 2 (sep) leaves 3 for info -> "rel" + ellipsis
         let (cell, w) = deps_cell(&t, &blockers(), 20, true, false);
         assert_eq!(
             cell,

@@ -16,7 +16,7 @@ fn config_get_set_list_validates_and_preserves_comments() {
     );
     assert_eq!(
         ta(&dir, &["config", "get", "workflow.status_field"]).trim(),
-        "status"
+        STATUS_KEY
     );
 
     // set coerces by TOML grammar and persists the change.

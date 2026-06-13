@@ -1,7 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
-use taska::model::{BLOCKED_BY_KEY, DEPS_KEY, ID_KEY, SUBTASKS_KEY, UNBLOCKS_KEY};
+use taska::model::{BLOCKED_BY_KEY, DEPS_KEY, ID_KEY, STATUS_KEY, SUBTASKS_KEY, UNBLOCKS_KEY};
 
 #[test]
 fn list_supports_regex_negation_and_combined_criteria() {
@@ -422,7 +422,7 @@ fn null_value_unset_is_reflected_in_list_and_search() {
     assert!(!show.contains("owner"), "owner gone from show: {show}");
     assert!(!show.contains("null"), "no null in json: {show}");
     assert!(
-        show.contains(r#""status":"open""#),
+        show.contains(&format!(r#""{STATUS_KEY}":"open""#)),
         "status preserved: {show}"
     );
 }

@@ -1,7 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
-use taska::model::{DEPS_KEY, ID_KEY};
+use taska::model::{DEPS_KEY, ID_KEY, STATUS_KEY};
 
 #[test]
 fn init_creates_config_and_registers_merge_driver() {
@@ -387,14 +387,14 @@ fn create_stamps_configurable_default_status() {
     // A bare create gets the out-of-the-box default status.
     ta(&dir, &["create", "a"]);
     assert!(
-        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""status":"todo""#),
+        ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(r#""{STATUS_KEY}":"todo""#)),
         "bare create defaults status to todo"
     );
 
     // An explicit status still wins over the default.
     ta(&dir, &["create", "b", "status=open"]);
     assert!(
-        ta(&dir, &["show", "b", "--format", "json"]).contains(r#""status":"open""#),
+        ta(&dir, &["show", "b", "--format", "json"]).contains(&format!(r#""{STATUS_KEY}":"open""#)),
         "explicit status overrides the default"
     );
 
@@ -405,7 +405,8 @@ fn create_stamps_configurable_default_status() {
     );
     ta(&dir, &["create", "c"]);
     assert!(
-        ta(&dir, &["show", "c", "--format", "json"]).contains(r#""status":"backlog""#),
+        ta(&dir, &["show", "c", "--format", "json"])
+            .contains(&format!(r#""{STATUS_KEY}":"backlog""#)),
         "configured default status is applied"
     );
 
@@ -413,7 +414,7 @@ fn create_stamps_configurable_default_status() {
     ta(&dir, &["config", "set", "workflow.default_status", ""]);
     ta(&dir, &["create", "d"]);
     assert!(
-        !ta(&dir, &["show", "d", "--format", "json"]).contains("status"),
+        !ta(&dir, &["show", "d", "--format", "json"]).contains(STATUS_KEY),
         "empty default_status leaves the task statusless"
     );
 }

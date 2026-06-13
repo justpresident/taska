@@ -1,7 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
-use taska::model::{DEPS_KEY, REL_KEY, TARGET_KEY};
+use taska::model::{DEPS_KEY, REL_KEY, STATUS_KEY, TARGET_KEY};
 
 #[test]
 fn undo_uncommitted_truncates_the_tail() {
@@ -215,7 +215,7 @@ fn undo_compensates_committed_events_in_a_nested_store() {
         "committed undo must compensate (log grows), never truncate"
     );
     assert!(
-        ta(&sub, &["show", "a", "--format", "json"]).contains(r#""status":"open""#),
+        ta(&sub, &["show", "a", "--format", "json"]).contains(&format!(r#""{STATUS_KEY}":"open""#)),
         "state walked back to the committed prior value"
     );
 }

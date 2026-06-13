@@ -272,7 +272,7 @@ fn ours_policy_keeps_the_branch_merged_into() {
     );
     let json = ta(&dir, &["list", "--format", "json"]);
     assert!(
-        json.contains(r#""status":"main""#),
+        json.contains(&format!(r#""{STATUS_KEY}":"main""#)),
         "ours (main) should win: {json}"
     );
 }
@@ -310,7 +310,7 @@ fn latest_policy_keeps_the_newest_write() {
     );
     let json = ta(&dir, &["list", "--format", "json"]);
     assert!(
-        json.contains(r#""status":"feature""#),
+        json.contains(&format!(r#""{STATUS_KEY}":"feature""#)),
         "latest (the newer feature write) should win: {json}"
     );
 }
@@ -581,7 +581,8 @@ fn nested_store_merge_honors_the_configured_conflict_policy() {
         String::from_utf8_lossy(&merge.stderr)
     );
     assert!(
-        ta(&sub, &["show", "t", "--format", "json"]).contains(r#""status":"feature""#),
+        ta(&sub, &["show", "t", "--format", "json"])
+            .contains(&format!(r#""{STATUS_KEY}":"feature""#)),
         "theirs won, proving the driver read the nested config"
     );
 }

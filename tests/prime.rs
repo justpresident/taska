@@ -6,6 +6,7 @@
 
 mod common;
 use common::*;
+use taska::model::STATUS_KEY;
 
 /// The primer names this store's status field, lists its relationships, and
 /// frames the core commands in that vocabulary.
@@ -64,7 +65,7 @@ fn prime_json_carries_the_facts() {
 
     let json = ta(&dir, &["prime", "--format", "json"]);
     let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
-    assert_eq!(v["status_field"], "status");
+    assert_eq!(v["status_field"], STATUS_KEY);
     assert_eq!(v["done_status"], "closed");
     assert!(
         v["relationships"].is_array(),
