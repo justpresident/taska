@@ -254,7 +254,7 @@ fn render_list(
 ) -> String {
     tasks
         .iter()
-        .map(|t| render_record(t, columns, color, blockers, style))
+        .map(|t| render_list_record(t, columns, color, blockers, style))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -475,7 +475,7 @@ fn render_table(
 /// This is `show`'s human view: a single task across the aligned table
 /// degenerates into one unreadable row, especially for long fields like `notes`;
 /// the record reads like `git show`. JSON/JSONL output is unaffected.
-pub(crate) fn render_record(
+pub(crate) fn render_list_record(
     task: &TaskState,
     columns: &[String],
     color: bool,
@@ -842,7 +842,7 @@ mod tests {
     fn record_view_puts_one_deps_type_group_per_line() {
         let t = mixed_edges_task();
         let cols = vec![ID_KEY.to_string(), DEPS_KEY.to_string()];
-        let out = render_record(&t, &cols, false, &blockers(), style());
+        let out = render_list_record(&t, &cols, false, &blockers(), style());
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(
             lines[1],
@@ -855,7 +855,7 @@ mod tests {
             "next group continues indented: {out}"
         );
         // Colored: bold gating group on the label line, plain info continuation.
-        let colored = render_record(&t, &cols, true, &blockers(), style());
+        let colored = render_list_record(&t, &cols, true, &blockers(), style());
         assert!(
             colored.contains(&format!("\x1b[1m{BLOCKER}: db, web\x1b[0m")),
             "bold group: {colored:?}"
@@ -940,8 +940,8 @@ mod tests {
         assert!(!plain.contains('\x1b'), "no escapes when off: {plain:?}");
 
         // The record view colors too, and stays clean when off.
-        assert!(render_record(&t, &cols, true, &blockers(), style()).contains('\x1b'));
-        assert!(!render_record(&t, &cols, false, &blockers(), style()).contains('\x1b'));
+        assert!(render_list_record(&t, &cols, true, &blockers(), style()).contains('\x1b'));
+        assert!(!render_list_record(&t, &cols, false, &blockers(), style()).contains('\x1b'));
 
         // JSON is never colored, even via the shared render path.
         let json = render(
@@ -993,7 +993,7 @@ mod tests {
             ],
         );
         let cols = vec![STATUS_FIELD.to_string(), "notes".to_string()];
-        let out = render_record(&t, &cols, true, &blockers(), style());
+        let out = render_list_record(&t, &cols, true, &blockers(), style());
         assert!(
             out.contains("\x1b[2mline one\x1b[0m") && out.contains("\x1b[2mline two\x1b[0m"),
             "both notes lines dim: {out:?}"
@@ -1256,7 +1256,7 @@ mod tests {
             ],
         );
         let cols = full_columns(&[&t], &DisplayConfig::default());
-        let out = render_record(&t, &cols, false, &blockers(), style());
+        let out = render_list_record(&t, &cols, false, &blockers(), style());
 
         // One field per line: `id` value is `api`, STATUS_FIELD its own line.
         assert!(
