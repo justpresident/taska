@@ -19,7 +19,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::{Map, Value};
 
 use crate::config::Config;
@@ -32,9 +32,9 @@ use crate::storage::{EventStore, FileStore};
 
 mod commands;
 use commands::{
-    cmd_compact, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_edit, cmd_init, cmd_list,
-    cmd_prime, cmd_repair, cmd_resolve, cmd_show, cmd_status, cmd_undo, cmd_update, ConfigAction,
-    DepAction,
+    cmd_compact, cmd_completions, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_edit,
+    cmd_init, cmd_list, cmd_prime, cmd_repair, cmd_resolve, cmd_show, cmd_status, cmd_undo,
+    cmd_update, ConfigAction, DepAction,
 };
 
 use crate::schema::FieldOps;
@@ -142,6 +142,15 @@ enum Commands {
     Prime {
         #[command(flatten)]
         output: OutputArgs,
+    },
+    /// Print a shell completion script: `ta completions <bash|zsh|fish|...>`
+    ///
+    /// Generated from the live CLI, so it always matches. Install it for your
+    /// shell, e.g. bash:
+    /// `ta completions bash > ~/.local/share/bash-completion/completions/ta`
+    Completions {
+        /// The shell to generate completions for
+        shell: clap_complete::Shell,
     },
     /// Undo the last event(s): `ta undo [--count N] [--remove] [--force]`
     Undo {
@@ -444,6 +453,10 @@ pub fn run() -> Result<(), DynError> {
     match cli.command {
         // Commands that don't operate on an existing store.
         Commands::Init => cmd_init(),
+        Commands::Completions { shell } => {
+            cmd_completions(shell, &mut Cli::command());
+            Ok(())
+        }
         Commands::GitMerge {
             ancestor,
             current,
@@ -627,6 +640,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
         }
         // Resolved before dispatch in `run`.
         Commands::Init
+        | Commands::Completions { .. }
         | Commands::Config { .. }
         | Commands::Resolve { .. }
         | Commands::Repair { .. }

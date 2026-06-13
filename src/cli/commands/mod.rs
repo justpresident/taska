@@ -8,6 +8,7 @@
 //! through the parent [`crate::cli`] module.
 
 pub mod compact;
+pub mod completions;
 pub mod config;
 pub mod create;
 pub mod delete;
@@ -24,6 +25,7 @@ pub mod undo;
 pub mod update;
 
 pub use compact::cmd_compact;
+pub use completions::cmd_completions;
 pub use config::{cmd_config, ConfigAction};
 pub use create::cmd_create;
 pub use delete::cmd_delete;
