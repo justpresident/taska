@@ -191,8 +191,8 @@ fn dep_tree(
 /// requested column's value (truncated), then the `[subtasks d/t]` rollup. The
 /// id/columns are colored by the shared [`RowStyle`], identical to a `list` row
 /// (id cyan, the status column green); a done node greys whole (dim). The
-/// connectors and position markers (`(cycle)`/`(missing)`/`(see above)`) are
-/// added by the caller.
+/// connectors and position markers (`(cycle)`/`(missing)`/`(shown elsewhere)`)
+/// are added by the caller.
 fn node_label(node: &Node, color: bool, style: RowStyle) -> String {
     let done = node.done;
     let paint = |text: &str, col: &str| crate::format::paint_cell(text, col, done, style, color);
@@ -286,9 +286,10 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool, style: Ro
         match &kid.kids {
             Kids::Missing => out.push_str(" (missing)"),
             Kids::Cycle => out.push_str(" (cycle)"),
-            // The node is shown here but its subtree is expanded at its first
-            // occurrence, which - by DFS order - is earlier in the output.
-            Kids::Collapsed => out.push_str(" (see above)"),
+            // The node is shown here but its subtree is expanded at the node's
+            // other (canonical-first) occurrence - which, with `--reverse`, may be
+            // below rather than above, so the marker stays direction-neutral.
+            Kids::Collapsed => out.push_str(" (shown elsewhere)"),
             Kids::Children(_) => {}
         }
         out.push('\n');

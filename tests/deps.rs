@@ -218,7 +218,7 @@ fn dep_tree_nests_dependencies_and_collapses_shared_nodes() {
     // d (with its e subtree) is reached again under c, but was already expanded
     // under b - the second occurrence collapses rather than reprinting.
     assert!(
-        tree.contains("(see above)"),
+        tree.contains("(shown elsewhere)"),
         "shared node collapsed: {tree}"
     );
 }
@@ -636,6 +636,50 @@ fn dep_tree_exact_by_default_titles_done_marks_and_open_prune() {
     assert!(
         desc.find("open-sub").unwrap() < desc.find("done-mid").unwrap(),
         "reversed id: {desc}"
+    );
+}
+
+#[test]
+fn reverse_flips_sibling_order_without_deepening_the_tree() {
+    // `r` has subtasks `x` and `y` (x older); x needs d; y -> z -> x. Canonically
+    // the older subtask `x` expands shallow (x -> d) and the `y -> z -> x`
+    // reference collapses. `--reverse` must keep that shape - flipping only sibling
+    // order - and NOT expand `y -> z -> x -> d` into a deeper chain (the bug).
+    let dir = fresh_dir("tree-reverse-shape");
+    init_renamed_open(&dir);
+    for id in ["d", "x", "z", "y", "r"] {
+        ta(&dir, &["create", id, &format!("{STATUS_FIELD}=open")]);
+    }
+    ta(&dir, &["dep", "add", "r", &format!("{HIER}=x")]);
+    ta(&dir, &["dep", "add", "r", &format!("{HIER}=y")]);
+    ta(&dir, &["dep", "add", "x", &format!("{BLOCKER}=d")]);
+    ta(&dir, &["dep", "add", "z", &format!("{BLOCKER}=x")]);
+    ta(&dir, &["dep", "add", "y", &format!("{BLOCKER}=z")]);
+
+    // Max indent depth: count each line's leading run of connector/space chars.
+    let depth = |tree: &str| {
+        tree.lines()
+            .map(|l| {
+                l.chars()
+                    .take_while(|c| {
+                        c.is_whitespace()
+                            || matches!(c, '\u{2502}' | '\u{251c}' | '\u{2514}' | '\u{2500}')
+                    })
+                    .count()
+            })
+            .max()
+            .unwrap_or(0)
+    };
+    let fwd = ta(&dir, &["dep", "tree", "r"]);
+    let rev = ta(&dir, &["dep", "tree", "r", "--reverse"]);
+    assert!(
+        rev.contains("(shown elsewhere)"),
+        "x's reference under z still collapses: {rev}"
+    );
+    assert_eq!(
+        depth(&fwd),
+        depth(&rev),
+        "--reverse must not deepen the tree:\nFWD:\n{fwd}\nREV:\n{rev}"
     );
 }
 

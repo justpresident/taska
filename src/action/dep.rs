@@ -454,7 +454,9 @@ pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, D
         }
         query.roots.to_vec()
     };
-    sort_ids(&mut roots, &state, query.sort, query.reverse);
+    // Sort roots canonically (NOT reversed) so the build's expand/collapse choice
+    // is identical regardless of `--reverse`; the display flip is a post-pass below.
+    sort_ids(&mut roots, &state, query.sort, false);
     if query.open {
         roots.retain(|r| open_subtrees.contains(r));
     }
@@ -473,7 +475,6 @@ pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, D
         done_status: &wf.done_status,
         default_blocker: store.config().relationships.default_blocker(),
         sort: query.sort,
-        reverse: query.reverse,
         open: query.open,
         open_subtrees: &open_subtrees,
         columns: query.columns,
@@ -481,13 +482,18 @@ pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, D
     // Build the forest once; `build` marks a node expanded/on-path itself, so
     // roots start from empty state.
     let mut expanded: HashSet<String> = HashSet::new();
-    let forest: Vec<Node> = roots
+    let mut forest: Vec<Node> = roots
         .iter()
         .map(|root| {
             let mut path = Vec::new();
             build(&ctx, root, None, &mut path, &mut expanded)
         })
         .collect();
+    // `--reverse` flips DISPLAY order only - the tree's shape (which shared node is
+    // expanded vs collapsed) was fixed canonically above, so it never deepens.
+    if query.reverse {
+        reverse_display(&mut forest);
+    }
     Ok(TreeOutcome {
         forest,
         warnings: session.warnings,
@@ -508,7 +514,6 @@ struct TreeCtx<'a> {
     default_blocker: Option<&'a str>,
     /// The column siblings are ordered by (via [`task_cmp`]).
     sort: &'a str,
-    reverse: bool,
     open: bool,
     /// Tasks whose blocker-subtree contains at least one open task.
     open_subtrees: &'a HashSet<String>,
@@ -571,11 +576,11 @@ fn build(
     } else {
         expanded.insert(id.to_string());
         path.push(id.to_string());
+        // Children are ordered canonically (never reversed here) so the
+        // expand/collapse decision is stable; `--reverse` flips only the display
+        // order, applied as a post-pass in `tree` once the shape is fixed.
         let mut children = graph::blocker_edges(task, ctx.blockers);
         children.sort_by(|a, b| child_cmp(ctx, a.0, b.0));
-        if ctx.reverse {
-            children.reverse();
-        }
         if ctx.open {
             children.retain(|(c, _)| ctx.open_subtrees.contains(*c));
         }
@@ -593,6 +598,18 @@ fn build(
         edge,
         rollup,
         kids,
+    }
+}
+
+/// Reverse sibling DISPLAY order - the forest and, recursively, each node's
+/// children - without touching the expand/collapse decision (`build` made that in
+/// canonical order). So `--reverse` flips the view, never the tree's shape.
+fn reverse_display(nodes: &mut [Node]) {
+    nodes.reverse();
+    for node in nodes {
+        if let Kids::Children(kids) = &mut node.kids {
+            reverse_display(kids);
+        }
     }
 }
 
