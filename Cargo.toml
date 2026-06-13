@@ -50,6 +50,10 @@ clap = { version = "4.4", features = ["derive"] }
 # `ta completions <shell>` scripts + dynamic (store-aware) completion of task ids,
 # columns, and filter fields. The dynamic engine is behind `unstable-dynamic`.
 clap_complete = { version = "4.5", features = ["unstable-dynamic"] }
+# `ta self-update`: download the latest GitHub-release `.tar.gz` and replace the
+# running binary in place. ureq + rustls is the light, OpenSSL-free HTTP backend;
+# compression-flate2 (pulls archive-tar) unpacks the release `.tar.gz` assets.
+self_update = { version = "0.44", default-features = false, features = ["ureq", "rustls", "compression-flate2"] }
 
 # Unix-only: reset SIGPIPE to default in `main` so `ta ... | head` terminates
 # cleanly instead of panicking in the print macros (which ignore SIGPIPE).

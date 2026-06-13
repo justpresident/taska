@@ -35,8 +35,8 @@ pub(crate) mod complete;
 use clap_complete::engine::{ArgValueCandidates, ArgValueCompleter};
 use commands::{
     cmd_compact, cmd_completions, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_edit,
-    cmd_init, cmd_list, cmd_prime, cmd_repair, cmd_resolve, cmd_show, cmd_status, cmd_undo,
-    cmd_update, ConfigAction, DepAction, InstallScope,
+    cmd_init, cmd_list, cmd_prime, cmd_repair, cmd_resolve, cmd_self_update, cmd_show, cmd_status,
+    cmd_undo, cmd_update, ConfigAction, DepAction, InstallScope,
 };
 
 use crate::schema::FieldOps;
@@ -171,6 +171,20 @@ enum Commands {
         #[allow(clippy::option_option)] // clap idiom: absent / `--install` / `--install x`
         #[arg(long, num_args = 0..=1, value_name = "user|system")]
         install: Option<Option<InstallScope>>,
+    },
+    /// Update `ta` itself to the latest released version
+    ///
+    /// Downloads this platform's prebuilt binary from the latest GitHub release
+    /// and replaces the running executable in place (the one resolved via
+    /// `current_exe`, so an update can't land on a copy you don't run). Platforms
+    /// without a prebuilt binary are pointed at `cargo install taska`.
+    SelfUpdate {
+        /// Only report the current and latest versions; install nothing.
+        #[arg(long)]
+        check: bool,
+        /// Reinstall even when already on the latest version.
+        #[arg(long)]
+        force: bool,
     },
     /// Undo the last event(s): `ta undo [--count N] [--remove] [--force]`
     Undo {
@@ -477,6 +491,7 @@ pub fn run() -> Result<(), DynError> {
         // Commands that don't operate on an existing store.
         Commands::Init => cmd_init(),
         Commands::Completions { shell, install } => cmd_completions(shell, install),
+        Commands::SelfUpdate { check, force } => cmd_self_update(check, force),
         Commands::GitMerge {
             ancestor,
             current,
@@ -661,6 +676,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
         // Resolved before dispatch in `run`.
         Commands::Init
         | Commands::Completions { .. }
+        | Commands::SelfUpdate { .. }
         | Commands::Config { .. }
         | Commands::Resolve { .. }
         | Commands::Repair { .. }
