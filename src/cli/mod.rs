@@ -152,13 +152,18 @@ enum Commands {
         #[command(flatten)]
         output: OutputArgs,
     },
-    /// Print the dynamic completion setup: `ta completions <bash|zsh|fish|...>`
+    /// Print a shell completion setup script for `ta`
     ///
-    /// SOURCE it into your shell rc to complete subcommands, flags, AND live task
-    /// ids / filter fields / column names from the store. E.g. bash:
-    /// `echo 'source <(ta completions bash)' >> ~/.bashrc`
+    /// Source the output into your shell's startup file and TAB-completion works
+    /// for `ta`. Completion is DYNAMIC and store-aware: besides subcommands and
+    /// flags it completes task ids, `list` filter fields, and column names, read
+    /// live from the `.taska` store in the current directory - so it always
+    /// matches your data and config.
+    #[command(
+        after_help = "Install it by sourcing the output from your shell's startup file:\n\n  bash   echo 'source <(ta completions bash)' >> ~/.bashrc\n  zsh    echo 'source <(ta completions zsh)'  >> ~/.zshrc\n  fish   echo 'ta completions fish | source'  >> ~/.config/fish/config.fish\n\nThen restart your shell. The completion is dynamic and store-aware - it also\ncompletes task ids, `list` filter fields, and column names from the current store."
+    )]
     Completions {
-        /// The shell to generate completions for
+        /// The shell to generate the completion script for
         shell: clap_complete::Shell,
     },
     /// Undo the last event(s): `ta undo [--count N] [--remove] [--force]`
