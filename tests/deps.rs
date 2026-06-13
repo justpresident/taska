@@ -501,13 +501,13 @@ fn dep_tree_marks_subtasks_and_rolls_up_progress() {
         "parent rolls up child completion: {tree}"
     );
     assert!(
-        tree.matches("[subtask]").count() == 2,
-        "both subtasks tagged: {tree}"
+        tree.contains("[\u{2713}] a") && tree.contains("[ ] b"),
+        "subtasks render as done/open checkboxes: {tree}"
     );
-    // A plain needs edge is a dependency, not a subtask - never tagged.
+    // A plain needs edge is a dependency, not a subtask - no checkbox.
     assert!(
-        tree.contains("dep1") && !tree.contains("dep1 [subtask]"),
-        "plain dependency untagged: {tree}"
+        tree.contains("dep1") && !tree.contains("[ ] dep1"),
+        "plain dependency gets no subtask checkbox: {tree}"
     );
 
     // The same structure is available as nested json.
@@ -595,8 +595,8 @@ fn dep_tree_exact_by_default_titles_done_marks_and_open_prune() {
     let tree = ta(&dir, &["dep", "tree", "epic"]);
     assert!(tree.contains("epic"), "root task shown: {tree}");
     assert!(
-        tree.contains("\u{2713} done-sub"),
-        "done subtask check-marked: {tree}"
+        tree.contains("[\u{2713}] done-sub"),
+        "done subtask shown as a filled checkbox: {tree}"
     );
     assert!(
         tree.contains("\u{2713} done-mid"),

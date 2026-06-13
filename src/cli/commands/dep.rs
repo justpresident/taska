@@ -183,33 +183,41 @@ fn dep_tree(
     Ok(())
 }
 
-/// The label for one node. The edge tag (`[subtask]` magenta, `[type]` plain,
-/// nothing for the default blocker / a root) LEADS - so the relationship that
-/// reached this node reads first - then the id and each requested column's value
-/// (truncated), then the `[subtasks d/t]` rollup. The id/columns are colored by
-/// the shared [`RowStyle`], identical to a `list` row (id cyan, the status column
-/// green); a done node greys whole (dim) and is prefixed with a check mark. The connectors and
-/// position markers (`(cycle)`/`(missing)`/`...`) are added by the caller.
+/// The label for one node. A subtask edge LEADS with a done-state checkbox
+/// (`[x]` done / `[ ]` open, magenta when open); every other edge leads with its
+/// `[type]` tag (nothing for the default blocker / a root) and a done node is
+/// then prefixed with a check mark. After the prefix come the id and each
+/// requested column's value (truncated), then the `[subtasks d/t]` rollup. The
+/// id/columns are colored by the shared [`RowStyle`], identical to a `list` row
+/// (id cyan, the status column green); a done node greys whole (dim). The
+/// connectors and position markers (`(cycle)`/`(missing)`/`...`) are added by the
+/// caller.
 fn node_label(node: &Node, color: bool, style: RowStyle) -> String {
     let done = node.done;
     let paint = |text: &str, col: &str| crate::format::paint_cell(text, col, done, style, color);
-    // The edge tag leads, with a trailing space before the id: `[subtask]`
-    // magenta when open, any tag dim on a done node, other types plain.
-    let mut s = node.edge.as_deref().map_or(String::new(), |e| {
-        let tag = format!("[{e}] ");
+    // A subtask edge renders as a checkbox encoding its done state - filled
+    // (U+2713) when done, empty when open - dim when done, else magenta so pending
+    // subtasks stand out. Every OTHER edge keeps its `[type]` tag (dim when done,
+    // else plain), and a done node is then prefixed with the check mark.
+    let mut s = if node.edge.as_deref() == Some("subtask") {
+        let checkbox = if done { "[\u{2713}] " } else { "[ ] " };
+        crate::format::sgr(checkbox, if done { "2" } else { "35" }, color)
+    } else {
+        let mut prefix = node.edge.as_deref().map_or(String::new(), |e| {
+            let tag = format!("[{e}] ");
+            if done {
+                crate::format::sgr(&tag, "2", color)
+            } else {
+                tag
+            }
+        });
         if done {
-            crate::format::sgr(&tag, "2", color)
-        } else if e == "subtask" {
-            crate::format::sgr(&tag, "35", color)
-        } else {
-            tag
+            // A check mark (U+2713) prefixes a done node; written as an escape so
+            // the source stays ASCII while the output shows the glyph.
+            prefix.push_str(&crate::format::sgr("\u{2713} ", "2", color));
         }
-    });
-    if done {
-        // A check mark (U+2713) prefixes a done node; written as an escape so the
-        // source stays ASCII while the output shows the glyph.
-        s.push_str(&crate::format::sgr("\u{2713} ", "2", color));
-    }
+        prefix
+    };
     s.push_str(&paint(&node.id, ID_KEY));
     for (col, v) in &node.cells {
         s.push_str("  ");
