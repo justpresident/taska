@@ -34,7 +34,7 @@ pub enum DepAction {
         #[arg(required = true)]
         edges: Vec<String>,
     },
-    /// ASCII dependency tree: `ta dep tree [<task> ...]` (roots default to tasks
+    /// Dependency tree: `ta dep tree [<task> ...]` (roots default to tasks
     /// nothing depends on)
     Tree {
         /// Root tasks (default: every task nothing depends on)
@@ -124,14 +124,15 @@ fn dep_write(
 /// A shortened title is truncated to this many characters in the tree.
 const TREE_TITLE_MAX: usize = 50;
 
-/// `ta dep tree` - ASCII tree of the blocker graph (the `depends_on` field plus
-/// any `blocker`- or `hierarchy`-typed relationship), children nested under their
-/// dependents. Shows the exact graph by default - done tasks are dimmed and marked
-/// with a check mark, never spliced out - so the structure is faithful; `--open` prunes only
-/// fully-resolved branches (those with no open task). Roots default to tasks
-/// nothing depends on, ordered by `--sort`/`[display].sort` (`--reverse` flips).
-/// Subtask edges are tagged `[subtask]` with a `[subtasks d/t]` parent rollup;
-/// other non-`depends_on` blocker edges are labelled with their type.
+/// `ta dep tree` - box-drawing tree of the blocker graph (the `depends_on` field
+/// plus any `blocker`- or `hierarchy`-typed relationship), children nested under
+/// their dependents. Shows the exact graph by default - done tasks are dimmed and
+/// marked with a check mark, never spliced out - so the structure is faithful;
+/// `--open` prunes only fully-resolved branches (those with no open task). Roots
+/// default to tasks nothing depends on, ordered by `--sort`/`[display].sort`
+/// (`--reverse` flips). Subtask edges show a `[x]`/`[ ]` done-state checkbox with
+/// a `[subtasks d/t]` parent rollup; other non-`depends_on` blocker edges are
+/// labelled with their type.
 fn dep_tree(
     store: &impl EventStore,
     tasks: &[String],
@@ -190,8 +191,8 @@ fn dep_tree(
 /// requested column's value (truncated), then the `[subtasks d/t]` rollup. The
 /// id/columns are colored by the shared [`RowStyle`], identical to a `list` row
 /// (id cyan, the status column green); a done node greys whole (dim). The
-/// connectors and position markers (`(cycle)`/`(missing)`/`...`) are added by the
-/// caller.
+/// connectors and position markers (`(cycle)`/`(missing)`/`(see above)`) are
+/// added by the caller.
 fn node_label(node: &Node, color: bool, style: RowStyle) -> String {
     let done = node.done;
     let paint = |text: &str, col: &str| crate::format::paint_cell(text, col, done, style, color);
@@ -263,10 +264,19 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool, style: Ro
     let Kids::Children(kids) = &node.kids else {
         return;
     };
+    // A subtask parent leads with a `[x]` checkbox, so its check mark sits one
+    // column right of where a plain node's body starts. Indent its children by
+    // that column, so a connector descends from under the check mark, not the `[`.
+    let anchor = if node.edge.as_deref() == Some("subtask") {
+        " "
+    } else {
+        ""
+    };
     let n = kids.len();
     for (i, kid) in kids.iter().enumerate() {
         let last = i + 1 == n;
         out.push_str(prefix);
+        out.push_str(anchor);
         out.push_str(if last {
             "\u{2514}\u{2500} "
         } else {
@@ -276,11 +286,16 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool, style: Ro
         match &kid.kids {
             Kids::Missing => out.push_str(" (missing)"),
             Kids::Cycle => out.push_str(" (cycle)"),
-            Kids::Collapsed => out.push_str(" ..."),
+            // The node is shown here but its subtree is expanded at its first
+            // occurrence, which - by DFS order - is earlier in the output.
+            Kids::Collapsed => out.push_str(" (see above)"),
             Kids::Children(_) => {}
         }
         out.push('\n');
-        let child_prefix = format!("{prefix}{}", if last { "   " } else { "\u{2502}  " });
+        let child_prefix = format!(
+            "{prefix}{anchor}{}",
+            if last { "   " } else { "\u{2502}  " }
+        );
         push_kids(kid, &child_prefix, out, color, style);
     }
 }

@@ -217,7 +217,10 @@ fn dep_tree_nests_dependencies_and_collapses_shared_nodes() {
     );
     // d (with its e subtree) is reached again under c, but was already expanded
     // under b - the second occurrence collapses rather than reprinting.
-    assert!(tree.contains("..."), "shared node collapsed: {tree}");
+    assert!(
+        tree.contains("(see above)"),
+        "shared node collapsed: {tree}"
+    );
 }
 
 #[test]
