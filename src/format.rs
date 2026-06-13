@@ -79,13 +79,15 @@ pub(crate) fn paint_cell(
 }
 
 /// The SGR code for one deps-cell type group: a relationship type that gates
-/// readiness (the blocker/hierarchy kinds) renders bold, an informational one
-/// dim - so what blocks vs what's just related is visible at a glance.
-const fn group_sgr(gates: bool) -> &'static str {
+/// readiness (the blocker/hierarchy kinds) renders bold so what blocks stands
+/// out; an informational one renders plain (`None`). Info is deliberately NOT
+/// dimmed - dim is reserved for a done/inactive task's whole row, so a dim info
+/// edge on an active task would read as if the task itself were done.
+const fn group_sgr(gates: bool) -> Option<&'static str> {
     if gates {
-        "1" // bold
+        Some("1") // bold
     } else {
-        "2" // dim
+        None // plain
     }
 }
 
@@ -285,11 +287,11 @@ fn deps_cell(
     let groups = deps_groups(task);
     let style = |rel: &str, text: &str| {
         let code = if done {
-            "2"
+            Some("2")
         } else {
             group_sgr(blockers.contains(rel))
         };
-        sgr(text, code, color)
+        code.map_or_else(|| text.to_string(), |c| sgr(text, c, color))
     };
     let total = groups.iter().map(|(_, t)| t.chars().count()).sum::<usize>()
         + groups.len().saturating_sub(1) * 2;
@@ -499,11 +501,11 @@ pub(crate) fn render_record(
                 .into_iter()
                 .map(|(rel, text)| {
                     let code = if done {
-                        "2"
+                        Some("2")
                     } else {
                         group_sgr(blockers.contains(&rel))
                     };
-                    sgr(&text, code, color)
+                    code.map_or_else(|| text.clone(), |c| sgr(&text, c, color))
                 })
                 .collect()
         } else {
@@ -798,12 +800,10 @@ mod tests {
         assert_eq!(cell, plain);
         assert_eq!(w, plain.chars().count());
 
-        // Colored: the gating group is bold, the info group dim, width unchanged.
+        // Colored: the gating group is bold, the info group plain (NOT dim - dim
+        // is reserved for a done row), width unchanged.
         let (cell, w) = deps_cell(&t, &blockers(), 0, true, false);
-        assert_eq!(
-            cell,
-            format!("\x1b[1m{BLOCKER}: db, web\x1b[0m; \x1b[2m{INFO}: x\x1b[0m")
-        );
+        assert_eq!(cell, format!("\x1b[1m{BLOCKER}: db, web\x1b[0m; {INFO}: x"));
         assert_eq!(w, plain.chars().count(), "width counts only visible chars");
 
         // Truncation cuts on the PLAIN text (`truncate` semantics: cap-1 + an
@@ -819,7 +819,7 @@ mod tests {
         let (cell, w) = deps_cell(&t, &blockers(), 20, true, false);
         assert_eq!(
             cell,
-            format!("\x1b[1m{BLOCKER}: db, web\x1b[0m; \x1b[2mrel\x1b[0m\u{2026}")
+            format!("\x1b[1m{BLOCKER}: db, web\x1b[0m; rel\u{2026}")
         );
         assert_eq!(w, 20);
 
@@ -854,15 +854,15 @@ mod tests {
             &format!("{INFO}: x"),
             "next group continues indented: {out}"
         );
-        // Colored: bold gating group on the label line, dim info continuation.
+        // Colored: bold gating group on the label line, plain info continuation.
         let colored = render_record(&t, &cols, true, &blockers(), style());
         assert!(
             colored.contains(&format!("\x1b[1m{BLOCKER}: db, web\x1b[0m")),
             "bold group: {colored:?}"
         );
         assert!(
-            colored.contains(&format!("\x1b[2m{INFO}: x\x1b[0m")),
-            "dim group: {colored:?}"
+            colored.contains(&format!("{INFO}: x")) && !colored.contains(&format!("\x1b[2m{INFO}")),
+            "plain info group, not dimmed: {colored:?}"
         );
     }
 
@@ -919,7 +919,7 @@ mod tests {
         let caps = [0, 0, 0];
 
         // color=true: id cyan (36), STATUS_FIELD green (32), headers + gating deps
-        // groups bold (1), info groups dim (2), reset.
+        // groups bold (1), info groups plain (no dim), reset.
         let colored = render_human(&[&t], &cols, &caps, true, &blockers(), style());
         assert!(colored.contains("\x1b[36m"), "id cyan: {colored:?}");
         assert!(colored.contains("\x1b[32m"), "status green: {colored:?}");
@@ -928,8 +928,8 @@ mod tests {
             "gating deps group bold: {colored:?}"
         );
         assert!(
-            colored.contains(&format!("\x1b[2m{INFO}: x\x1b[0m")),
-            "info deps group dim: {colored:?}"
+            colored.contains(&format!("{INFO}: x")) && !colored.contains(&format!("\x1b[2m{INFO}")),
+            "info deps group plain, not dimmed: {colored:?}"
         );
         assert!(colored.contains("\x1b[0m"), "reset: {colored:?}");
         // The values themselves survive (color only wraps, never replaces).
