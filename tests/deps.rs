@@ -203,9 +203,18 @@ fn dep_tree_nests_dependencies_and_collapses_shared_nodes() {
     ta(&dir, &["dep", "add", "d", &format!("{BLOCKER}=e")]);
 
     let tree = ta(&dir, &["dep", "tree", "a"]);
-    assert!(tree.contains("|- b"), "first child branch: {tree}");
-    assert!(tree.contains("`- c"), "last child branch: {tree}");
-    assert!(tree.contains("`- e"), "e nested under d: {tree}");
+    assert!(
+        tree.contains("\u{251C}\u{2500} b"),
+        "first child branch: {tree}"
+    );
+    assert!(
+        tree.contains("\u{2514}\u{2500} c"),
+        "last child branch: {tree}"
+    );
+    assert!(
+        tree.contains("\u{2514}\u{2500} e"),
+        "e nested under d: {tree}"
+    );
     // d (with its e subtree) is reached again under c, but was already expanded
     // under b - the second occurrence collapses rather than reprinting.
     assert!(tree.contains("..."), "shared node collapsed: {tree}");

@@ -239,7 +239,8 @@ fn render_cell(v: &Value) -> String {
     }
 }
 
-/// Render the forest to the ASCII tree with box-drawing connectors.
+/// Render the forest to a tree with Unicode box-drawing connectors (written as
+/// `\u` escapes so the source stays ASCII while the output shows the glyphs).
 fn render_human_forest(forest: &[Node], color: bool, style: RowStyle) -> String {
     let mut out = String::new();
     for node in forest {
@@ -258,7 +259,11 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool, style: Ro
     for (i, kid) in kids.iter().enumerate() {
         let last = i + 1 == n;
         out.push_str(prefix);
-        out.push_str(if last { "`- " } else { "|- " });
+        out.push_str(if last {
+            "\u{2514}\u{2500} "
+        } else {
+            "\u{251C}\u{2500} "
+        });
         out.push_str(&node_label(kid, color, style));
         match &kid.kids {
             Kids::Missing => out.push_str(" (missing)"),
@@ -267,7 +272,7 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool, style: Ro
             Kids::Children(_) => {}
         }
         out.push('\n');
-        let child_prefix = format!("{prefix}{}", if last { "   " } else { "|  " });
+        let child_prefix = format!("{prefix}{}", if last { "   " } else { "\u{2502}  " });
         push_kids(kid, &child_prefix, out, color, style);
     }
 }
