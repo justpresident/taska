@@ -13,7 +13,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DynError;
-use crate::model::{TaskState, DEPS_KEY, ID_KEY};
+use crate::model::{TaskState, DEPS_KEY, ID_KEY, STATUS_KEY};
 
 /// Smallest `keep_events` we accept in production.
 ///
@@ -324,7 +324,7 @@ impl UntypedTasks {
 impl Default for WorkflowConfig {
     fn default() -> Self {
         Self {
-            status_field: "status".to_string(),
+            status_field: STATUS_KEY.to_string(),
             done_status: "closed".to_string(),
             default_status: "todo".to_string(),
             type_field: "type".to_string(),
@@ -422,7 +422,7 @@ pub struct DisplayConfig {
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
-            columns: [ID_KEY, "title", "status", DEPS_KEY]
+            columns: [ID_KEY, "title", STATUS_KEY, DEPS_KEY]
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect(),
@@ -1606,7 +1606,7 @@ max_items = 2
     fn partial_config_keeps_other_defaults() {
         let parsed: Config = toml::from_str("[workflow]\ndone_status = \"closed\"\n").unwrap();
         assert_eq!(parsed.workflow.done_status, "closed");
-        assert_eq!(parsed.workflow.status_field, "status"); // untouched default
+        assert_eq!(parsed.workflow.status_field, STATUS_KEY); // untouched default
         assert_eq!(parsed.compaction, CompactionConfig::default()); // whole section defaulted
         assert_eq!(parsed.merge, MergeConfig::default()); // whole section defaulted
     }

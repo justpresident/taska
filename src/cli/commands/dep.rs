@@ -10,7 +10,7 @@ use crate::action::dep::{Kids, Node};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::{OutputArgs, RowStyle};
-use crate::model::{OpType, DEPS_KEY, ID_KEY, SUBTASKS_KEY};
+use crate::model::{OpType, DEPS_KEY, ID_KEY, STATUS_KEY, SUBTASKS_KEY};
 use crate::storage::EventStore;
 
 /// `ta dep` subcommands. Edges are `type=target` tokens; `type` must be declared
@@ -367,7 +367,7 @@ fn dep_plan(
     let value = Value::Array(
         steps
             .iter()
-            .map(|s| serde_json::json!({ "id": &s.id, "status": &s.status }))
+            .map(|s| serde_json::json!({ ID_KEY: &s.id, STATUS_KEY: &s.status }))
             .collect(),
     );
     let human = if steps.is_empty() {

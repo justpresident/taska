@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::config::Config;
 use crate::error::DynError;
-use crate::model::{MutationEvent, TaskState};
+use crate::model::{MutationEvent, TaskState, REL_KEY, TARGET_KEY};
 
 /// Turns the current store state (`baseline`, `log`) into the events to append.
 ///
@@ -192,7 +192,7 @@ fn legacy_log_marker(value: &Value) -> Option<String> {
     match op {
         "AddDep" | "RemoveDep" => Some(format!("a log event uses the pre-1.0 op `{op}`")),
         "AddEdge" | "RemoveEdge" => {
-            let typed = value.get("target").is_some() && value.get("rel").is_some();
+            let typed = value.get(TARGET_KEY).is_some() && value.get(REL_KEY).is_some();
             (!typed).then(|| {
                 "a log edge event lacks its `target`/`rel` keys (pre-1.0 untyped edge)".to_string()
             })
