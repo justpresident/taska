@@ -253,6 +253,7 @@ fn render_guide(f: &PrimeFacts) -> String {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
+    use crate::model::ID_KEY;
     use crate::test_support::names::*;
     use crate::test_support::{store_renamed, store_with_schema};
 
@@ -309,7 +310,8 @@ mod tests {
             "schema framed as dynamic: {g}"
         );
         assert!(
-            g.contains("config-driven") && g.contains(&format!("id, {TITLE}, {STATUS_FIELD}")),
+            g.contains("config-driven")
+                && g.contains(&format!("{ID_KEY}, {TITLE}, {STATUS_FIELD}")),
             "names the configured columns: {g}"
         );
         // The task-filing discipline is spelled out: rich notes, open questions,
