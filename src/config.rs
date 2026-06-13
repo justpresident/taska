@@ -1312,6 +1312,7 @@ impl Config {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
+    use crate::model::TASK_TYPE_KEY;
 
     #[test]
     fn template_parses_to_defaults() {
@@ -1509,15 +1510,18 @@ max_items = 2
             "used by both",
         );
         check(
-            "[workflow]\ntype_field = \"status\"\n",
+            &format!("[workflow]\ntype_field = \"{STATUS_KEY}\"\n"),
             "status storage key",
         );
         check(
-            "[workflow]\nstatus_field = \"task_type\"\n",
+            &format!("[workflow]\nstatus_field = \"{TASK_TYPE_KEY}\"\n"),
             "task-type storage key",
         );
         check("[workflow]\nstatus_field = \"\"\n", "must not be empty");
-        check("[workflow]\ntype_field = \"deps\"\n", "reserved");
+        check(
+            &format!("[workflow]\ntype_field = \"{DEPS_KEY}\"\n"),
+            "reserved",
+        );
         check("[workflow]\ntype_field = \"blocks\"\n", "relationship");
     }
 
@@ -1532,13 +1536,16 @@ max_items = 2
         // `deps` built-in; a timestamp clobbering the status; a relationship
         // named after the canonical task-type key; duplicate timestamp names;
         // two relationships sharing one inverse.
-        check("[relationships.deps]\nkind = \"info\"\n", "reserved");
         check(
-            "[relationships.depends_on]\nkind = \"blocker\"\ninverse = \"deps\"\n",
+            &format!("[relationships.{DEPS_KEY}]\nkind = \"info\"\n"),
             "reserved",
         );
         check(
-            "[timestamps]\ncreate_time = \"status\"\n",
+            &format!("[relationships.depends_on]\nkind = \"blocker\"\ninverse = \"{DEPS_KEY}\"\n"),
+            "reserved",
+        );
+        check(
+            &format!("[timestamps]\ncreate_time = \"{STATUS_KEY}\"\n"),
             "status storage key",
         );
         check(

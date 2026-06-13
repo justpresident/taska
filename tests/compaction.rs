@@ -1,12 +1,16 @@
 mod common;
 use common::*;
+use taska::model::STATUS_KEY;
 
 #[test]
 fn auto_timestamps_lifecycle_search_and_compaction() {
     let dir = fresh_dir("timestamps");
     init_repo(&dir);
     ta(&dir, &["init"]);
-    ta(&dir, &["create", "api", "status=open", "title=API"]);
+    ta(
+        &dir,
+        &["create", "api", &format!("{STATUS_KEY}=open"), "title=API"],
+    );
 
     // create_time + update_time are materialized; close_time only once done.
     let open = ta(&dir, &["show", "api", "--format", "json"]);
@@ -19,14 +23,14 @@ fn auto_timestamps_lifecycle_search_and_compaction() {
         "open task has no close_time: {open}"
     );
 
-    ta(&dir, &["update", "api", "status=closed"]);
+    ta(&dir, &["update", "api", &format!("{STATUS_KEY}=closed")]);
     assert!(
         ta(&dir, &["show", "api", "--format", "json"]).contains("close_time"),
         "closing sets close_time"
     );
 
     // Reopening clears close_time (the user's 'cleared on reopen' choice).
-    ta(&dir, &["update", "api", "status=open"]);
+    ta(&dir, &["update", "api", &format!("{STATUS_KEY}=open")]);
     assert!(
         !ta(&dir, &["show", "api", "--format", "json"]).contains("close_time"),
         "reopen clears close_time"

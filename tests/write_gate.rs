@@ -1,6 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
+use taska::model::{DEPS_KEY, DEP_KEY, ID_KEY, UNBLOCKS_KEY};
 
 #[test]
 fn reserved_field_keys_are_rejected() {
@@ -158,11 +159,11 @@ fn gate_rejects_dangling_targets_reserved_fields_and_missing_delete() {
     // the renamed `made_at`/`feeds` must be reserved (not the defaults) - guarding
     // that the reserved check reads config, never hardcodes `create_time`/`blocks`.
     for field in [
-        "deps=x".to_string(),
-        "dep=x".to_string(),
-        "id=x".to_string(),
+        format!("{DEPS_KEY}=x"),
+        format!("{DEP_KEY}=x"),
+        format!("{ID_KEY}=x"),
         format!("{CREATE_TIME}=x"),
-        "unblocks=x".to_string(),
+        format!("{UNBLOCKS_KEY}=x"),
         format!("{BLOCKER_INV}=x"),
     ] {
         let out = run(ta_bin(), &dir, &["update", "a", &field]);
@@ -174,7 +175,7 @@ fn gate_rejects_dangling_targets_reserved_fields_and_missing_delete() {
         );
     }
     assert!(
-        !run(ta_bin(), &dir, &["create", "z", "deps=x"])
+        !run(ta_bin(), &dir, &["create", "z", &format!("{DEPS_KEY}=x")])
             .status
             .success(),
         "create with a reserved field must fail"

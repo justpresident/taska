@@ -85,6 +85,7 @@ fn describe(task: Option<&TaskState>) -> String {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
+    use crate::model::DEPS_KEY;
     use crate::test_support::names::*;
     use crate::test_support::{task, task_rel};
 
@@ -105,7 +106,9 @@ mod tests {
             "fields: {out}"
         );
         assert!(
-            out.contains(&format!(r#"deps={{"{BLOCKER}":["d1"],"{INFO}":["d2"]}}"#)),
+            out.contains(&format!(
+                r#"{DEPS_KEY}={{"{BLOCKER}":["d1"],"{INFO}":["d2"]}}"#
+            )),
             "typed deps map shown: {out}"
         );
 

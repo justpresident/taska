@@ -49,7 +49,7 @@ fn prime_tailors_to_renamed_workflow_fields() {
         "examples track the rename: {out}"
     );
     assert!(
-        !out.contains("status=closed"),
+        !out.contains(&format!("{STATUS_KEY}=closed")),
         "the old vocabulary is gone: {out}"
     );
 }
@@ -61,7 +61,7 @@ fn prime_json_carries_the_facts() {
     let dir = fresh_dir("prime-json");
     init_repo(&dir);
     ta(&dir, &["init"]);
-    ta(&dir, &["create", "a", "status=todo"]);
+    ta(&dir, &["create", "a", &format!("{STATUS_KEY}=todo")]);
 
     let json = ta(&dir, &["prime", "--format", "json"]);
     let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");

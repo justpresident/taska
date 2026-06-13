@@ -17,7 +17,10 @@ fn init_creates_config_and_registers_merge_driver() {
         "config: {cfg}"
     );
     assert!(cfg.contains("keep_events = 5000"), "config: {cfg}");
-    assert!(cfg.contains("status_field = \"status\""), "config: {cfg}");
+    assert!(
+        cfg.contains(&format!("status_field = \"{STATUS_KEY}\"")),
+        "config: {cfg}"
+    );
 
     let attrs = fs::read_to_string(dir.join(".gitattributes")).unwrap();
     assert!(
@@ -392,7 +395,7 @@ fn create_stamps_configurable_default_status() {
     );
 
     // An explicit status still wins over the default.
-    ta(&dir, &["create", "b", "status=open"]);
+    ta(&dir, &["create", "b", &format!("{STATUS_KEY}=open")]);
     assert!(
         ta(&dir, &["show", "b", "--format", "json"]).contains(&format!(r#""{STATUS_KEY}":"open""#)),
         "explicit status overrides the default"

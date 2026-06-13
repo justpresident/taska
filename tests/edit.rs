@@ -190,7 +190,13 @@ fn edit_reedits_after_schema_violation() {
     fs::write(&cfg, text).unwrap();
     ta(
         &dir,
-        &["create", "t7", "type=task", "title=A", "status=todo"],
+        &[
+            "create",
+            "t7",
+            "type=task",
+            "title=A",
+            &format!("{STATUS_KEY}=todo"),
+        ],
     );
 
     let counter = dir.join("count");

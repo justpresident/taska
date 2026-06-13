@@ -601,7 +601,7 @@ pub(crate) fn confirm(prompt: &str, force: bool) -> Result<bool, DynError> {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::model::{DEPS_KEY, ID_KEY, UNBLOCKS_KEY};
+    use crate::model::{DEPS_KEY, ID_KEY, STATUS_KEY, UNBLOCKS_KEY};
     use crate::test_support::names::*;
 
     #[test]
@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn update_with_a_field_parses() {
-        let parsed = Cli::try_parse_from(["ta", "update", "api", "status=open"]);
+        let parsed = Cli::try_parse_from(["ta", "update", "api", &format!("{STATUS_KEY}=open")]);
         assert!(parsed.is_ok(), "update with a field should parse");
     }
 

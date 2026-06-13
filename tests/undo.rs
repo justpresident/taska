@@ -201,8 +201,8 @@ fn undo_compensates_committed_events_in_a_nested_store() {
     init_repo(&dir); // ...the repo appears ABOVE it
     run(ta_bin(), &sub, &["init"]); // register the drivers in the new repo
 
-    ta(&sub, &["create", "a", "status=open"]);
-    ta(&sub, &["update", "a", "status=closed"]);
+    ta(&sub, &["create", "a", &format!("{STATUS_KEY}=open")]);
+    ta(&sub, &["update", "a", &format!("{STATUS_KEY}=closed")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 

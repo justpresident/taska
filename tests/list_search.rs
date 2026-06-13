@@ -319,7 +319,11 @@ fn sort_flag_orders_rows_with_reverse_and_configurable_default() {
     assert_eq!(ids(&s), ["c", "b", "a"], "search sorted: {s}");
 
     // The default sort column is configurable (no --sort given).
-    fs::write(dir.join(".taska/config.toml"), "[display]\nsort = \"id\"\n").unwrap();
+    fs::write(
+        dir.join(".taska/config.toml"),
+        format!("[display]\nsort = \"{ID_KEY}\"\n"),
+    )
+    .unwrap();
     let by_id = ta(&dir, &["list", "--columns", ID_KEY]);
     assert_eq!(
         ids(&by_id),
@@ -396,10 +400,13 @@ fn null_value_unset_is_reflected_in_list_and_search() {
     ta(&dir, &["init"]);
     fs::write(
         dir.join(".taska/config.toml"),
-        "[display]\ncolumns = [\"id\", \"owner\", \"status\"]\n",
+        format!("[display]\ncolumns = [\"{ID_KEY}\", \"owner\", \"{STATUS_KEY}\"]\n"),
     )
     .unwrap();
-    ta(&dir, &["create", "x", "owner=bob", "status=open"]);
+    ta(
+        &dir,
+        &["create", "x", "owner=bob", &format!("{STATUS_KEY}=open")],
+    );
 
     // The field is searchable before the unset.
     assert!(

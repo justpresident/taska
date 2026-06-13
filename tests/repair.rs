@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use taska::model::TASK_TYPE_KEY;
+use taska::model::{DEPS_KEY, STATUS_KEY, TASK_TYPE_KEY};
 
 /// A PRE-1.0 store (a legacy `AddDep` op / `dep`/`type` edge keys) can no longer
 /// be read OR migrated in v1 - the read shims and the depends_on migration passes
@@ -189,12 +189,20 @@ fn repair_rename_moves_a_column_and_coerces_it() {
 
     // Guards: reserved destinations and the status field are refused (the
     // TYPE field is a legal destination - covered separately).
-    assert!(!run(ta_bin(), &dir, &["repair", "--rename", "deps=sev"])
-        .status
-        .success());
-    assert!(!run(ta_bin(), &dir, &["repair", "--rename", "status=sev"])
-        .status
-        .success());
+    assert!(!run(
+        ta_bin(),
+        &dir,
+        &["repair", "--rename", &format!("{DEPS_KEY}=sev")]
+    )
+    .status
+    .success());
+    assert!(!run(
+        ta_bin(),
+        &dir,
+        &["repair", "--rename", &format!("{STATUS_KEY}=sev")]
+    )
+    .status
+    .success());
 }
 
 /// `--rename type=OLD` adopts a de-facto discriminator column as the task

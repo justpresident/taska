@@ -1,7 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
-use taska::model::{DEPS_KEY, ID_KEY, REL_KEY, SUBTASKS_KEY, TARGET_KEY};
+use taska::model::{DEPS_KEY, ID_KEY, REL_KEY, STATUS_KEY, SUBTASKS_KEY, TARGET_KEY};
 
 #[test]
 fn dep_remove_makes_a_blocked_task_ready() {
@@ -248,8 +248,8 @@ fn custom_blocker_relationship_gates_readiness() {
     text.push_str("\n[relationships.requires]\nkind = \"blocker\"\ninverse = \"required_by\"\n");
     fs::write(&cfg, text).unwrap();
 
-    ta(&dir, &["create", "a", "status=open"]);
-    ta(&dir, &["create", "b", "status=open"]);
+    ta(&dir, &["create", "a", &format!("{STATUS_KEY}=open")]);
+    ta(&dir, &["create", "b", &format!("{STATUS_KEY}=open")]);
     ta(&dir, &["dep", "add", "a", "requires=b"]);
 
     // `requires` is a blocker, so `a` is gated by still-open `b`: only `b` ready.
@@ -275,7 +275,7 @@ fn custom_blocker_relationship_gates_readiness() {
     ta(&dir, &["dep", "remove", "b", "requires=a"]);
 
     // Close `b`, and `a` unblocks.
-    ta(&dir, &["update", "b", "status=closed"]);
+    ta(&dir, &["update", "b", &format!("{STATUS_KEY}=closed")]);
     assert!(
         lists_task(&ta(&dir, &["list", "--ready"]), "a"),
         "a ready after requires-dep done"
@@ -295,7 +295,7 @@ fn dep_tree_hides_the_configured_default_blocker_not_literal_depends_on() {
     fs::write(&cfg, text).unwrap();
 
     for id in ["a", "b", "c"] {
-        ta(&dir, &["create", id, "status=open"]);
+        ta(&dir, &["create", id, &format!("{STATUS_KEY}=open")]);
     }
     ta(&dir, &["dep", "add", "a", "consumes=b"]); // via the (new) default blocker
     ta(&dir, &["dep", "add", "a", "depends_on=c"]); // via a now-non-default blocker

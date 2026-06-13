@@ -100,13 +100,24 @@ fn full_view_uses_canonical_column_order_in_both_formats() {
     // computed timestamp columns so this test sees only the fields under test.
     fs::write(
         dir.join(".taska/config.toml"),
-        "[display]\ncolumns = [\"id\", \"status\", \"deps\"]\nmax_width = 0\n\
-         [timestamps]\ncreate_time = \"\"\nupdate_time = \"\"\nclose_time = \"\"\n",
+        format!(
+            "[display]\ncolumns = [\"{ID_KEY}\", \"{STATUS_KEY}\", \"{DEPS_KEY}\"]\nmax_width = 0\n\
+             [timestamps]\ncreate_time = \"\"\nupdate_time = \"\"\nclose_time = \"\"\n"
+        ),
     )
     .unwrap();
     ta(&dir, &["create", "dep"]);
     // Custom fields supplied out of alphabetical order.
-    ta(&dir, &["create", "a", "zeta=1", "status=open", "alpha=2"]);
+    ta(
+        &dir,
+        &[
+            "create",
+            "a",
+            "zeta=1",
+            &format!("{STATUS_KEY}=open"),
+            "alpha=2",
+        ],
+    );
     ta(&dir, &["dep", "add", "a", "depends_on=dep"]);
 
     // Human --full: configured columns first (id,status,deps), then the extra
@@ -156,8 +167,10 @@ fn per_column_max_width_overrides_the_global_default() {
     // Global cap of 10, but `title` overridden to 80.
     fs::write(
         dir.join(".taska/config.toml"),
-        "[display]\ncolumns = [\"id\", \"title\", \"notes\"]\nmax_width = 10\n\
-         [display.column_max_width]\ntitle = 80\n",
+        format!(
+            "[display]\ncolumns = [\"{ID_KEY}\", \"title\", \"notes\"]\nmax_width = 10\n\
+             [display.column_max_width]\ntitle = 80\n"
+        ),
     )
     .unwrap();
 
@@ -267,7 +280,7 @@ fn config_columns_and_max_width_are_honored() {
     // truncation, with no command-line flags.
     fs::write(
         dir.join(".taska/config.toml"),
-        "[display]\ncolumns = [\"id\", \"note\"]\nmax_width = 8\n",
+        format!("[display]\ncolumns = [\"{ID_KEY}\", \"note\"]\nmax_width = 8\n"),
     )
     .unwrap();
     ta(
@@ -276,7 +289,7 @@ fn config_columns_and_max_width_are_honored() {
             "create",
             "a",
             "note=ThisIsAVeryLongNoteValue",
-            "status=open",
+            &format!("{STATUS_KEY}=open"),
         ],
     );
 

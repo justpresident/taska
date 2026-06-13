@@ -99,16 +99,16 @@ fn theirs_policy_resolves_conflict_without_failing() {
         "[merge]\non_conflict = \"theirs\"\n",
     )
     .unwrap();
-    ta(&dir, &["create", "t", "status=open"]);
+    ta(&dir, &["create", "t", &format!("{STATUS_KEY}=open")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
     git(&dir, &["branch", "feature"]);
-    ta(&dir, &["update", "t", "status=main"]);
+    ta(&dir, &["update", "t", &format!("{STATUS_KEY}=main")]);
     git(&dir, &["commit", "-aqm", "main edit"]);
 
     git(&dir, &["checkout", "-q", "feature"]);
-    ta(&dir, &["update", "t", "status=feature"]);
+    ta(&dir, &["update", "t", &format!("{STATUS_KEY}=feature")]);
     git(&dir, &["commit", "-aqm", "feature edit"]);
 
     git(&dir, &["checkout", "-q", "main"]);
@@ -126,7 +126,7 @@ fn theirs_policy_resolves_conflict_without_failing() {
     // Merging feature INTO main with `theirs` keeps feature's value.
     let list = ta(&dir, &["list", "--format", "json"]);
     assert!(
-        list.contains("\"status\":\"feature\""),
+        list.contains(&format!("\"{STATUS_KEY}\":\"feature\"")),
         "theirs (feature) should win: {list}"
     );
 }
@@ -141,7 +141,7 @@ fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
         "[merge]\non_conflict = \"theirs\"\n",
     )
     .unwrap();
-    ta(&dir, &["create", "X", "status=new"]);
+    ta(&dir, &["create", "X", &format!("{STATUS_KEY}=new")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
@@ -152,7 +152,7 @@ fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
         &[
             "update",
             "X",
-            "status=closed",
+            &format!("{STATUS_KEY}=closed"),
             "owner=alice",
             "scope=project",
         ],
@@ -162,7 +162,13 @@ fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
     git(&dir, &["checkout", "-q", "feature"]);
     ta(
         &dir,
-        &["update", "X", "status=open", "owner=bob", "priority=3"],
+        &[
+            "update",
+            "X",
+            &format!("{STATUS_KEY}=open"),
+            "owner=bob",
+            "priority=3",
+        ],
     );
     git(&dir, &["commit", "-aqm", "feature edit"]);
 
@@ -177,7 +183,7 @@ fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
     let list = ta(&dir, &["list", "--full", "--format", "json"]);
     // Overlapping fields go to theirs (feature); disjoint fields both survive.
     assert!(
-        list.contains("\"status\":\"open\""),
+        list.contains(&format!("\"{STATUS_KEY}\":\"open\"")),
         "status -> theirs: {list}"
     );
     assert!(
@@ -246,16 +252,16 @@ fn ours_policy_keeps_the_branch_merged_into() {
         "[merge]\non_conflict = \"ours\"\n",
     )
     .unwrap();
-    ta(&dir, &["create", "t", "status=open"]);
+    ta(&dir, &["create", "t", &format!("{STATUS_KEY}=open")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
     git(&dir, &["branch", "feature"]);
-    ta(&dir, &["update", "t", "status=main"]);
+    ta(&dir, &["update", "t", &format!("{STATUS_KEY}=main")]);
     git(&dir, &["commit", "-aqm", "main edit"]);
 
     git(&dir, &["checkout", "-q", "feature"]);
-    ta(&dir, &["update", "t", "status=feature"]);
+    ta(&dir, &["update", "t", &format!("{STATUS_KEY}=feature")]);
     git(&dir, &["commit", "-aqm", "feature edit"]);
 
     // Merge feature INTO main: `ours` keeps main's value, with no marker/failure.
@@ -287,18 +293,18 @@ fn latest_policy_keeps_the_newest_write() {
         "[merge]\non_conflict = \"latest\"\n",
     )
     .unwrap();
-    ta(&dir, &["create", "t", "status=open"]);
+    ta(&dir, &["create", "t", &format!("{STATUS_KEY}=open")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
     // Write main's edit FIRST, then feature's: the feature write has the later
     // timestamp, so `latest` must keep it regardless of merge direction.
     git(&dir, &["branch", "feature"]);
-    ta(&dir, &["update", "t", "status=main"]);
+    ta(&dir, &["update", "t", &format!("{STATUS_KEY}=main")]);
     git(&dir, &["commit", "-aqm", "main edit"]);
 
     git(&dir, &["checkout", "-q", "feature"]);
-    ta(&dir, &["update", "t", "status=feature"]);
+    ta(&dir, &["update", "t", &format!("{STATUS_KEY}=feature")]);
     git(&dir, &["commit", "-aqm", "feature edit"]);
 
     git(&dir, &["checkout", "-q", "main"]);
@@ -561,16 +567,16 @@ fn nested_store_merge_honors_the_configured_conflict_policy() {
     init_repo(&dir); // ...the repo appears ABOVE it
     run(ta_bin(), &sub, &["init"]); // register the drivers in the new repo
     ta(&sub, &["config", "set", "merge.on_conflict", "theirs"]);
-    ta(&sub, &["create", "t", "status=open"]);
+    ta(&sub, &["create", "t", &format!("{STATUS_KEY}=open")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 
     // Both branches set the SAME field to different values: a real conflict.
     git(&dir, &["branch", "feature"]);
-    ta(&sub, &["update", "t", "status=main"]);
+    ta(&sub, &["update", "t", &format!("{STATUS_KEY}=main")]);
     git(&dir, &["commit", "-aqm", "main edit"]);
     git(&dir, &["checkout", "-q", "feature"]);
-    ta(&sub, &["update", "t", "status=feature"]);
+    ta(&sub, &["update", "t", &format!("{STATUS_KEY}=feature")]);
     git(&dir, &["commit", "-aqm", "feature edit"]);
 
     git(&dir, &["checkout", "-q", "main"]);

@@ -162,7 +162,11 @@ fn renamed_status_field_is_display_only_storage_stays_canonical() {
     );
 
     // The canonical spelling is not directly writable while renamed...
-    let out = run(ta_bin(), &dir, &["update", "t1", "status=x"]);
+    let out = run(
+        ta_bin(),
+        &dir,
+        &["update", "t1", &format!("{STATUS_KEY}=x")],
+    );
     assert!(!out.status.success(), "canonical spelling rejected");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("state"),
@@ -211,9 +215,13 @@ fn task_type_schemas_validate_and_the_discriminator_maps_canonically() {
         "canonical key on disk: {log}"
     );
     // Canonical spelling not directly writable; += rejected (single-valued).
-    assert!(!run(ta_bin(), &dir, &["update", "t1", "task_type=feature"])
-        .status
-        .success());
+    assert!(!run(
+        ta_bin(),
+        &dir,
+        &["update", "t1", &format!("{TASK_TYPE_KEY}=feature")]
+    )
+    .status
+    .success());
     assert!(!run(ta_bin(), &dir, &["update", "t1", "type+=x"])
         .status
         .success());
