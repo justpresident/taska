@@ -15,6 +15,7 @@
 //! so they can be exercised against any store.
 
 use std::collections::HashMap;
+use std::io::IsTerminal;
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
@@ -257,8 +258,74 @@ enum Commands {
     },
 }
 
+/// Whether `p` is a regular, executable file.
+#[cfg(unix)]
+fn is_executable_file(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+#[cfg(not(unix))]
+fn is_executable_file(p: &std::path::Path) -> bool {
+    std::fs::metadata(p).is_ok_and(std::fs::Metadata::is_file)
+}
+
+/// Warn (to stderr) when more than one `ta` is on `PATH` - the first shadows the
+/// rest, so e.g. `cargo install taska` can update a copy the user never runs.
+/// Exec-free (we never read versions; we point the user at `<path> --version`)
+/// and TTY-gated, so it never spams scripts, CI, or the merge driver. Purely
+/// advisory: it only *suggests* removing the older copies, never touches them.
+/// The distinct real `ta` binaries reachable via `path` (a `PATH` value), as
+/// `(displayed, canonical)` pairs in PATH order - deduped by canonical target so a
+/// symlink to an already-seen binary isn't double-counted.
+fn shadowed_binaries(path: &std::ffi::OsStr) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
+    let mut found: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+    for dir in std::env::split_paths(path) {
+        let candidate = dir.join("ta");
+        if !is_executable_file(&candidate) {
+            continue;
+        }
+        let target = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+        if found.iter().any(|(_, t)| *t == target) {
+            continue;
+        }
+        found.push((candidate, target));
+    }
+    found
+}
+
+fn warn_shadowed_binaries() {
+    if !std::io::stderr().is_terminal() {
+        return;
+    }
+    let Some(path) = std::env::var_os("PATH") else {
+        return;
+    };
+    let found = shadowed_binaries(&path);
+    if found.len() < 2 {
+        return;
+    }
+    let running = std::env::current_exe()
+        .ok()
+        .and_then(|p| std::fs::canonicalize(p).ok());
+    eprintln!(
+        "warning: {} `ta` binaries are on PATH; the first shadows the rest:",
+        found.len()
+    );
+    for (candidate, target) in &found {
+        let here = if running.as_ref() == Some(target) {
+            "  <- running"
+        } else {
+            ""
+        };
+        eprintln!("  {}{here}", candidate.display());
+    }
+    eprintln!("hint: compare them with `<path> --version`, then remove the older copies so an");
+    eprintln!("      update (e.g. `cargo install taska`) isn't hidden behind a stale binary.");
+}
+
 /// Parse args and dispatch. `main` maps the result to an exit code.
 pub fn run() -> Result<(), DynError> {
+    warn_shadowed_binaries();
     let cli = Cli::parse();
     match cli.command {
         // Commands that don't operate on an existing store.
@@ -603,6 +670,38 @@ mod tests {
     use super::*;
     use crate::model::{DEPS_KEY, ID_KEY, SEQ_KEY, STATUS_KEY, UNBLOCKS_KEY};
     use crate::test_support::names::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn shadowed_binaries_dedups_symlinks_and_skips_non_executables() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let base = std::env::temp_dir().join(format!("taska-shadow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let mk = |name: &str, mode: u32| {
+            let d = base.join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            let f = d.join("ta");
+            std::fs::write(&f, b"#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(mode)).unwrap();
+            (d, f)
+        };
+        let (da, fa) = mk("a", 0o755); // executable
+        let (db, _) = mk("b", 0o755); // a DIFFERENT executable
+        let (dc, fc) = mk("c", 0o755); // will become a symlink to a/ta
+        std::fs::remove_file(&fc).unwrap();
+        symlink(&fa, &fc).unwrap();
+        let (dd, _) = mk("d", 0o644); // present but NOT executable
+
+        let path = std::env::join_paths([&da, &db, &dc, &dd]).unwrap();
+        let shown: Vec<_> = shadowed_binaries(&path)
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        // a + b are distinct; c is a symlink to a (deduped); d is not executable.
+        assert_eq!(shown, vec![da.join("ta"), db.join("ta")], "{shown:?}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn update_without_fields_is_rejected_by_parser() {

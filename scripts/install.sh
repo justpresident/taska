@@ -187,8 +187,14 @@ main() {
   [ -f "$src" ] || src="$(find "$tmp" -type f -name "$BIN" | head -n 1)"
   [ -n "${src:-}" ] && [ -f "$src" ] || die "the archive did not contain the ${BIN} binary"
 
-  local dir
+  # Where to install. Prefer OVERWRITING an existing `ta` already on PATH over
+  # dropping a SECOND copy that PATH order could shadow (the script-vs-cargo footgun).
+  local dir existing
+  existing="$(command -v "${BIN}" 2>/dev/null || true)"
   if [ -n "${TASKA_INSTALL_DIR:-}" ]; then dir="$TASKA_INSTALL_DIR"
+  elif [ -n "$existing" ] && [ -w "$(dirname "$existing")" ]; then
+    dir="$(dirname "$existing")"
+    info "${BIN} is already installed at $existing - updating it in place (no duplicate)."
   elif [ -w /usr/local/bin ]; then dir="/usr/local/bin"
   else dir="${HOME}/.local/bin"; fi
   mkdir -p "$dir" || die "couldn't create ${dir}"
@@ -200,6 +206,13 @@ main() {
 
   ok "Installed ${BIN} to ${dir}/${BIN}"
   ensure_on_path "$dir"
+
+  # A pre-existing copy elsewhere on PATH would shadow this one (or vice versa).
+  if [ -n "$existing" ] && [ "$existing" != "${dir}/${BIN}" ]; then
+    warn "Another ${BIN} is installed at $existing - depending on PATH order one will"
+    warn "shadow the other. Compare with '<path> --version' and remove the older copy so"
+    warn "an update (this script or 'cargo install ${CRATE}') isn't hidden behind a stale binary."
+  fi
 
   printf '\n' >&2
   "${dir}/${BIN}" --version >&2 2>/dev/null || true
