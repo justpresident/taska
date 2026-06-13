@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use clap::{Parser, Subcommand};
@@ -259,26 +260,22 @@ enum Commands {
 }
 
 /// Whether `p` is a regular, executable file.
+/// Whether `p` is a regular, executable file.
 #[cfg(unix)]
-fn is_executable_file(p: &std::path::Path) -> bool {
+fn is_executable_file(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 #[cfg(not(unix))]
-fn is_executable_file(p: &std::path::Path) -> bool {
+fn is_executable_file(p: &Path) -> bool {
     std::fs::metadata(p).is_ok_and(std::fs::Metadata::is_file)
 }
 
-/// Warn (to stderr) when more than one `ta` is on `PATH` - the first shadows the
-/// rest, so e.g. `cargo install taska` can update a copy the user never runs.
-/// Exec-free (we never read versions; we point the user at `<path> --version`)
-/// and TTY-gated, so it never spams scripts, CI, or the merge driver. Purely
-/// advisory: it only *suggests* removing the older copies, never touches them.
 /// The distinct real `ta` binaries reachable via `path` (a `PATH` value), as
 /// `(displayed, canonical)` pairs in PATH order - deduped by canonical target so a
 /// symlink to an already-seen binary isn't double-counted.
-fn shadowed_binaries(path: &std::ffi::OsStr) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
-    let mut found: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+fn shadowed_binaries(path: &std::ffi::OsStr) -> Vec<(PathBuf, PathBuf)> {
+    let mut found: Vec<(PathBuf, PathBuf)> = Vec::new();
     for dir in std::env::split_paths(path) {
         let candidate = dir.join("ta");
         if !is_executable_file(&candidate) {
@@ -293,8 +290,121 @@ fn shadowed_binaries(path: &std::ffi::OsStr) -> Vec<(std::path::PathBuf, std::pa
     found
 }
 
+/// One `ta` on PATH: its displayed path, resolved version (`None` if unreadable),
+/// and whether it's the binary currently executing.
+struct ShadowEntry {
+    display: PathBuf,
+    version: Option<(u64, u64, u64)>,
+    running: bool,
+}
+
+/// Parse `major.minor.patch` from clap's `--version` line (`ta 0.5.0`): the first
+/// whitespace token starting with a digit, pre-release/build metadata dropped.
+fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+    let tok = text
+        .split_whitespace()
+        .find(|t| t.starts_with(|c: char| c.is_ascii_digit()))?;
+    let core = tok.split(['-', '+']).next()?;
+    let mut it = core.split('.');
+    let major = it.next()?.parse().ok()?;
+    let minor = it.next().unwrap_or("0").parse().ok()?;
+    let patch = it.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor, patch))
+}
+
+/// Run `<path> --version` to read a sibling's version. Sets `TASKA_VERSION_PROBE`
+/// so the probed binary skips its OWN shadow check - no recursive probing.
+fn probe_version(path: &Path) -> Option<(u64, u64, u64)> {
+    let out = std::process::Command::new(path)
+        .arg("--version")
+        .env("TASKA_VERSION_PROBE", "1")
+        .output()
+        .ok()?;
+    if out.status.success() {
+        parse_version(&String::from_utf8_lossy(&out.stdout))
+    } else {
+        None
+    }
+}
+
+/// Single-quote a path for a copy-pasteable shell command.
+fn shell_quote(p: &Path) -> String {
+    format!("'{}'", p.to_string_lossy().replace('\'', "'\\''"))
+}
+
+fn fmt_ver((a, b, c): (u64, u64, u64)) -> String {
+    format!("{a}.{b}.{c}")
+}
+
+/// The multi-line advisory: a `version  path` table marking the running and newest
+/// copies, then a concrete `rm` that keeps only the newest. Pure (no I/O) - so the
+/// formatting + keep/remove choice is unit-testable.
+fn shadow_recommendation(entries: &[ShadowEntry]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::new();
+    let _ = writeln!(
+        s,
+        "warning: {} `ta` binaries are on PATH (the first shadows the rest):",
+        entries.len()
+    );
+    let newest = entries.iter().filter_map(|e| e.version).max();
+    for e in entries {
+        let v = e.version.map_or_else(|| "?".to_string(), fmt_ver);
+        let mut tag = String::new();
+        if e.running {
+            tag.push_str(" <- running");
+        }
+        if e.version.is_some() && e.version == newest {
+            tag.push_str(" (newest)");
+        }
+        let _ = writeln!(s, "  {v:<8} {}{tag}", e.display.display());
+    }
+    let Some(newest) = newest else {
+        let _ = write!(
+            s,
+            "hint: couldn't read their versions - compare with `<path> --version` and remove the older copies."
+        );
+        return s;
+    };
+    // Keep one newest copy (prefer the running one); recommend removing the rest.
+    let keep = entries
+        .iter()
+        .position(|e| e.running && e.version == Some(newest))
+        .or_else(|| entries.iter().position(|e| e.version == Some(newest)));
+    let Some(keep) = keep else { return s };
+    let rm: Vec<String> = entries
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != keep)
+        .map(|(_, e)| shell_quote(&e.display))
+        .collect();
+    if rm.is_empty() {
+        return s;
+    }
+    if entries[keep].running {
+        let _ = writeln!(
+            s,
+            "to keep only the newest (already running) and drop the rest, run:"
+        );
+    } else {
+        let _ = writeln!(
+            s,
+            "the running `ta` is NOT the newest ({}); to keep only the newest, run:",
+            fmt_ver(newest)
+        );
+    }
+    let _ = write!(s, "  rm {}", rm.join(" "));
+    s
+}
+
+/// Warn (to stderr) when more than one `ta` is on `PATH` - the first shadows the
+/// rest, so e.g. `cargo install taska` can update a copy the user never runs. We
+/// probe each sibling's `--version` (guarded against recursion) and recommend the
+/// exact `rm` to keep only the newest. TTY-gated, so it never spams scripts, CI,
+/// or the merge driver; purely advisory - it never deletes anything itself.
 fn warn_shadowed_binaries() {
-    if !std::io::stderr().is_terminal() {
+    // Skip when we're a sibling being probed (see `probe_version`) or non-interactive.
+    if std::env::var_os("TASKA_VERSION_PROBE").is_some() || !std::io::stderr().is_terminal() {
         return;
     }
     let Some(path) = std::env::var_os("PATH") else {
@@ -307,20 +417,24 @@ fn warn_shadowed_binaries() {
     let running = std::env::current_exe()
         .ok()
         .and_then(|p| std::fs::canonicalize(p).ok());
-    eprintln!(
-        "warning: {} `ta` binaries are on PATH; the first shadows the rest:",
-        found.len()
-    );
-    for (candidate, target) in &found {
-        let here = if running.as_ref() == Some(target) {
-            "  <- running"
-        } else {
-            ""
-        };
-        eprintln!("  {}{here}", candidate.display());
-    }
-    eprintln!("hint: compare them with `<path> --version`, then remove the older copies so an");
-    eprintln!("      update (e.g. `cargo install taska`) isn't hidden behind a stale binary.");
+    let entries: Vec<ShadowEntry> = found
+        .into_iter()
+        .map(|(display, canonical)| {
+            let is_running = running.as_ref() == Some(&canonical);
+            // Our own version is known; only the OTHERS need an exec probe.
+            let version = if is_running {
+                parse_version(env!("CARGO_PKG_VERSION"))
+            } else {
+                probe_version(&canonical)
+            };
+            ShadowEntry {
+                display,
+                version,
+                running: is_running,
+            }
+        })
+        .collect();
+    eprintln!("{}", shadow_recommendation(&entries));
 }
 
 /// Parse args and dispatch. `main` maps the result to an exit code.
@@ -701,6 +815,36 @@ mod tests {
         assert_eq!(shown, vec![da.join("ta"), db.join("ta")], "{shown:?}");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn parse_version_reads_clap_output() {
+        assert_eq!(parse_version("ta 0.5.0"), Some((0, 5, 0)));
+        assert_eq!(parse_version("ta 1.2.3-rc.1"), Some((1, 2, 3)));
+        assert_eq!(parse_version("0.6\n"), Some((0, 6, 0)));
+        assert_eq!(parse_version("ta unknown"), None);
+    }
+
+    #[test]
+    fn shadow_recommendation_flags_a_stale_running_copy() {
+        let e = |p: &str, v: Option<(u64, u64, u64)>, r: bool| ShadowEntry {
+            display: PathBuf::from(p),
+            version: v,
+            running: r,
+        };
+        // The running 0.5.0 shadows a newer 0.6.0 sibling.
+        let out = shadow_recommendation(&[
+            e("/a/ta", Some((0, 5, 0)), true),
+            e("/b/ta", Some((0, 6, 0)), false),
+        ]);
+        assert!(out.contains("0.5.0") && out.contains("/a/ta") && out.contains("<- running"));
+        assert!(out.contains("0.6.0") && out.contains("(newest)"));
+        assert!(out.contains("NOT the newest"), "{out}");
+        // Recommends removing ONLY the stale one, keeping the newest.
+        assert!(
+            out.contains("rm '/a/ta'") && !out.contains("'/b/ta'"),
+            "{out}"
+        );
     }
 
     #[test]
