@@ -31,6 +31,8 @@ use crate::model::{MutationEvent, TaskState, RESERVED_FIELD_KEYS};
 use crate::storage::{EventStore, FileStore};
 
 mod commands;
+pub(crate) mod complete;
+use clap_complete::engine::{ArgValueCandidates, ArgValueCompleter};
 use commands::{
     cmd_compact, cmd_completions, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_edit,
     cmd_init, cmd_list, cmd_prime, cmd_repair, cmd_resolve, cmd_show, cmd_status, cmd_undo,
@@ -68,6 +70,7 @@ enum Commands {
     /// logged), and `+=`/`-=` are rejected on the single-valued status and
     /// task-type fields.
     Update {
+        #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         id: String,
         /// `key=value` sets a field; `key+=value` appends text (string fields),
         /// adds (declared numeric fields), or inserts elements (declared set<...>
@@ -84,7 +87,10 @@ enum Commands {
         action: DepAction,
     },
     /// Delete a task: `ta delete <id>` (errors if it doesn't exist)
-    Delete { id: String },
+    Delete {
+        #[arg(add = ArgValueCandidates::new(complete::task_ids))]
+        id: String,
+    },
     /// List tasks, optionally filtered: `ta list status=~open priority=3 --open`
     List {
         /// Filter criteria, all of which must match: `field=value` (exact),
@@ -100,6 +106,7 @@ enum Commands {
         /// does - `tags=urgent` (member), `scores>=5` (some score >= 5) - while
         /// `!=`/`!~` hold when NONE does (so also when it's empty/absent). With
         /// none given, lists every task.
+        #[arg(add = ArgValueCompleter::new(complete::criteria))]
         criteria: Vec<String>,
         /// Only tasks that are not done (status is not the configured done value)
         #[arg(long)]
@@ -112,6 +119,7 @@ enum Commands {
     },
     /// Show a single task in full by id: `ta show <id>`
     Show {
+        #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         id: String,
         #[command(flatten)]
         display: DisplayArgs,
@@ -125,6 +133,7 @@ enum Commands {
     /// re-edit the same file. Relationships are managed with `ta dep`, not here.
     #[command(visible_alias = "ed")]
     Edit {
+        #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         id: String,
         /// Edit as pretty-printed JSON instead of TOML.
         #[arg(long, conflicts_with = "toml")]
@@ -143,11 +152,11 @@ enum Commands {
         #[command(flatten)]
         output: OutputArgs,
     },
-    /// Print a shell completion script: `ta completions <bash|zsh|fish|...>`
+    /// Print the dynamic completion setup: `ta completions <bash|zsh|fish|...>`
     ///
-    /// Generated from the live CLI, so it always matches. Install it for your
-    /// shell, e.g. bash:
-    /// `ta completions bash > ~/.local/share/bash-completion/completions/ta`
+    /// SOURCE it into your shell rc to complete subcommands, flags, AND live task
+    /// ids / filter fields / column names from the store. E.g. bash:
+    /// `echo 'source <(ta completions bash)' >> ~/.bashrc`
     Completions {
         /// The shell to generate completions for
         shell: clap_complete::Shell,
@@ -448,15 +457,15 @@ fn warn_shadowed_binaries() {
 
 /// Parse args and dispatch. `main` maps the result to an exit code.
 pub fn run() -> Result<(), DynError> {
+    // Dynamic completion: when the shell asks (COMPLETE env set), emit candidates
+    // and exit BEFORE any other work or output. A normal run returns and proceeds.
+    clap_complete::CompleteEnv::with_factory(Cli::command).complete();
     warn_shadowed_binaries();
     let cli = Cli::parse();
     match cli.command {
         // Commands that don't operate on an existing store.
         Commands::Init => cmd_init(),
-        Commands::Completions { shell } => {
-            cmd_completions(shell, &mut Cli::command());
-            Ok(())
-        }
+        Commands::Completions { shell } => cmd_completions(shell),
         Commands::GitMerge {
             ancestor,
             current,

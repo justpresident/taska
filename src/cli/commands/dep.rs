@@ -4,7 +4,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use clap::Subcommand;
+use clap_complete::engine::{ArgValueCandidates, ArgValueCompleter};
 use serde_json::Value;
+
+use crate::cli::complete;
 
 use crate::action::dep::{Kids, Node};
 use crate::config::RelationshipDef;
@@ -22,29 +25,32 @@ pub enum DepAction {
     /// Both tasks must exist and a task can't reference itself; a duplicate edge
     /// is a no-op. At most one blocker between a pair, and one parent per task.
     Add {
+        #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         task: String,
         /// `type=target` pairs (each `type` must be a declared relationship type)
-        #[arg(required = true)]
+        #[arg(required = true, add = ArgValueCompleter::new(complete::criteria))]
         edges: Vec<String>,
     },
     /// Remove typed edge(s): `ta dep remove <task> depends_on=<other> ...`
     Remove {
+        #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         task: String,
         /// `type=target` pairs to remove
-        #[arg(required = true)]
+        #[arg(required = true, add = ArgValueCompleter::new(complete::criteria))]
         edges: Vec<String>,
     },
     /// Dependency tree: `ta dep tree [<task> ...]` (roots default to tasks
     /// nothing depends on)
     Tree {
         /// Root tasks (default: every task nothing depends on)
+        #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         tasks: Vec<String>,
         /// Prune fully-resolved branches (no open task); done tasks that still
         /// lead to open work stay, so the graph is never spliced
         #[arg(long)]
         open: bool,
         /// Order siblings/roots by this column (default: [display].sort)
-        #[arg(long)]
+        #[arg(long, add = ArgValueCandidates::new(complete::columns))]
         sort: Option<String>,
         /// Reverse the sibling/root order
         #[arg(long)]
@@ -60,7 +66,7 @@ pub enum DepAction {
     /// Ordered remaining prerequisites of a goal: `ta dep plan <goal> ...`
     Plan {
         /// Goal task(s) to plan toward
-        #[arg(required = true)]
+        #[arg(required = true, add = ArgValueCandidates::new(complete::task_ids))]
         goals: Vec<String>,
         /// Show only the critical path: the longest chain of incomplete prerequisites
         #[arg(long)]

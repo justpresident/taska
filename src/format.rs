@@ -10,6 +10,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::io::IsTerminal;
 
 use clap::{Args, ValueEnum};
+use clap_complete::engine::ArgValueCandidates;
 use serde_json::Value;
 
 use crate::config::{DisplayConfig, Layout};
@@ -136,11 +137,11 @@ pub(crate) struct DisplayArgs {
     /// Columns to show, overriding config. Built-ins `id`, `deps`; computed
     /// `create_time`/`update_time`/`close_time`, `unblocks`, `blocked_by`,
     /// `subtasks`; plus any task field. E.g. --columns id,status,unblocks
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(crate::cli::complete::columns))]
     pub(crate) columns: Option<Vec<String>>,
     /// Sort rows by this column: `id`, `deps`, any task field, a timestamp, or a
     /// computed column (`unblocks`/`blocked_by`/`subtasks`). Overrides config
-    #[arg(long)]
+    #[arg(long, add = ArgValueCandidates::new(crate::cli::complete::columns))]
     pub(crate) sort: Option<String>,
     /// Reverse the sort order (descending)
     #[arg(long)]
