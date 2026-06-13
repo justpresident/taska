@@ -426,10 +426,10 @@ mod tests {
             FilterOp::Ne
         ));
 
-        // Built-in id and deps fields.
-        assert!(matches("id=api"));
-        assert!(matches(&format!("{BLOCKER}=db")));
-        assert!(!matches(&format!("{BLOCKER}=missing")));
+        // Built-in id and deps fields (deps aggregates every relationship target).
+        assert!(matches(&format!("{ID_KEY}=api")));
+        assert!(matches(&format!("{DEPS_KEY}=db")));
+        assert!(!matches(&format!("{DEPS_KEY}=missing")));
 
         // A negated criterion also holds when the field is absent entirely.
         assert!(matches("owner!=bob"), "absent field passes !=");

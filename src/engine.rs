@@ -347,6 +347,7 @@ impl Engine {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
+    use crate::model::{REL_KEY, TARGET_KEY};
     use crate::test_support::names::*;
     use serde_json::{json, Value};
 
@@ -428,7 +429,7 @@ mod tests {
             ev(
                 OpType::AddEdge,
                 "b",
-                fields(&[("target", json!("a")), ("rel", json!(BLOCKER))]),
+                fields(&[(TARGET_KEY, json!("a")), (REL_KEY, json!(BLOCKER))]),
             ),
             ev(OpType::Create, "c", serde_json::Map::new()),
             ev(OpType::Delete, "c", serde_json::Map::new()),
@@ -515,28 +516,28 @@ mod tests {
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("b")), ("rel", json!(BLOCKER))]),
+                fields(&[(TARGET_KEY, json!("b")), (REL_KEY, json!(BLOCKER))]),
             ),
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("c")), ("rel", json!(BLOCKER))]),
+                fields(&[(TARGET_KEY, json!("c")), (REL_KEY, json!(BLOCKER))]),
             ),
             // A different type lands under its own key in the relationships map.
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("d")), ("rel", json!(INFO))]),
+                fields(&[(TARGET_KEY, json!("d")), (REL_KEY, json!(INFO))]),
             ),
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("e")), ("rel", json!(INFO))]),
+                fields(&[(TARGET_KEY, json!("e")), (REL_KEY, json!(INFO))]),
             ),
             ev(
                 OpType::RemoveEdge,
                 "a",
-                fields(&[("target", json!("d")), ("rel", json!(INFO))]),
+                fields(&[(TARGET_KEY, json!("d")), (REL_KEY, json!(INFO))]),
             ),
         ];
         let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
@@ -555,12 +556,12 @@ mod tests {
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("d")), ("rel", json!(INFO))]),
+                fields(&[(TARGET_KEY, json!("d")), (REL_KEY, json!(INFO))]),
             ),
             ev(
                 OpType::RemoveEdge,
                 "a",
-                fields(&[("target", json!("d")), ("rel", json!(INFO))]),
+                fields(&[(TARGET_KEY, json!("d")), (REL_KEY, json!(INFO))]),
             ),
         ];
         let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
@@ -585,7 +586,7 @@ mod tests {
             ev(
                 OpType::RemoveEdge,
                 "a",
-                fields(&[("target", json!("x")), ("rel", json!(BLOCKER))]),
+                fields(&[(TARGET_KEY, json!("x")), (REL_KEY, json!(BLOCKER))]),
             ),
         ];
         let state = Engine::materialize_state(baseline, mutations, DONE_STATUS);
@@ -612,7 +613,7 @@ mod tests {
             ev(
                 OpType::AddEdge,
                 "b",
-                fields(&[("target", json!("a")), ("rel", json!(BLOCKER))]),
+                fields(&[(TARGET_KEY, json!("a")), (REL_KEY, json!(BLOCKER))]),
             ),
             ev(OpType::Delete, "b", serde_json::Map::new()),
         ];
@@ -642,12 +643,12 @@ mod tests {
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("b")), ("rel", json!(BLOCKER))]),
+                fields(&[(TARGET_KEY, json!("b")), (REL_KEY, json!(BLOCKER))]),
             ),
             ev(
                 OpType::AddEdge,
                 "a",
-                fields(&[("target", json!("b")), ("rel", json!(BLOCKER))]),
+                fields(&[(TARGET_KEY, json!("b")), (REL_KEY, json!(BLOCKER))]),
             ),
         ];
         let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);

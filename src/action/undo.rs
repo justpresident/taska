@@ -291,9 +291,12 @@ mod tests {
         assert_eq!(b[0].op, OpType::Create);
         assert_eq!(b[0].payload.get("y"), Some(&serde_json::json!(2)));
         assert_eq!(b[1].op, OpType::AddEdge);
-        assert_eq!(b[1].payload.get("target"), Some(&serde_json::json!("dep1")));
         assert_eq!(
-            b[1].payload.get("rel"),
+            b[1].payload.get(TARGET_KEY),
+            Some(&serde_json::json!("dep1"))
+        );
+        assert_eq!(
+            b[1].payload.get(REL_KEY),
             Some(&serde_json::json!(BLOCKER)),
             "compensating dep events carry their type: {b:?}"
         );
@@ -321,12 +324,12 @@ mod tests {
         );
         assert!(
             events.iter().any(|e| e.op == OpType::AddEdge
-                && e.payload.get("target") == Some(&serde_json::json!("y"))),
+                && e.payload.get(TARGET_KEY) == Some(&serde_json::json!("y"))),
             "adds y: {events:?}"
         );
         assert!(
             events.iter().any(|e| e.op == OpType::RemoveEdge
-                && e.payload.get("target") == Some(&serde_json::json!("x"))),
+                && e.payload.get(TARGET_KEY) == Some(&serde_json::json!("x"))),
             "removes x: {events:?}"
         );
     }
@@ -347,8 +350,8 @@ mod tests {
         let pair = |e: &MutationEvent| {
             (
                 e.op.clone(),
-                e.payload.get("rel").cloned(),
-                e.payload.get("target").cloned(),
+                e.payload.get(REL_KEY).cloned(),
+                e.payload.get(TARGET_KEY).cloned(),
             )
         };
         let got: Vec<_> = events.iter().map(pair).collect();

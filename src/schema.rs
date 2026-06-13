@@ -1053,7 +1053,7 @@ required = true
             &[create(
                 "t",
                 &[
-                    ("task_type", serde_json::json!("bug")),
+                    (TASK_TYPE_KEY, serde_json::json!("bug")),
                     ("points", serde_json::json!("abc")),
                     ("extra", serde_json::json!(1)),
                 ],
@@ -1075,7 +1075,7 @@ required = true
         let ok = create(
             "t",
             &[
-                ("task_type", serde_json::json!("bug")),
+                (TASK_TYPE_KEY, serde_json::json!("bug")),
                 ("severity", serde_json::json!("low")),
                 ("tags", serde_json::json!(["a", "b"])),
             ],
@@ -1084,7 +1084,7 @@ required = true
         let dup = create(
             "t",
             &[
-                ("task_type", serde_json::json!("bug")),
+                (TASK_TYPE_KEY, serde_json::json!("bug")),
                 ("severity", serde_json::json!("low")),
                 ("tags", serde_json::json!(["a", "a"])),
             ],
@@ -1112,7 +1112,7 @@ nums = "array<int>"
         let raw: Map<String, Value> =
             std::iter::once(("version".to_string(), serde_json::json!("3.10"))).collect();
         let payload: Map<String, Value> = [
-            ("task_type", serde_json::json!("bug")),
+            (TASK_TYPE_KEY, serde_json::json!("bug")),
             ("version", serde_json::json!(3.1)),
             ("points", serde_json::json!("5")),
             ("flag", serde_json::json!("true")),
@@ -1175,7 +1175,7 @@ flag = "bool"
             "t",
             &[],
             &[
-                ("task_type", serde_json::json!("bug")),
+                (TASK_TYPE_KEY, serde_json::json!("bug")),
                 ("points", serde_json::json!(3)),
                 ("tags", serde_json::json!(["a"])),
             ],
@@ -1266,7 +1266,7 @@ flag = "bool"
             "t",
             &[],
             &[
-                ("task_type", serde_json::json!("bug")),
+                (TASK_TYPE_KEY, serde_json::json!("bug")),
                 ("points", serde_json::json!(3)),
                 ("tags", serde_json::json!(["a"])),
             ],
@@ -1341,14 +1341,14 @@ required = true
             "t",
             &[],
             &[
-                ("task_type", serde_json::json!("bug")),
+                (TASK_TYPE_KEY, serde_json::json!("bug")),
                 ("severity", serde_json::json!("low")),
             ],
         )]);
         let retype = MutationEvent::new(
             OpType::Update,
             "t",
-            std::iter::once(("task_type".to_string(), serde_json::json!("feature"))).collect(),
+            std::iter::once((TASK_TYPE_KEY.to_string(), serde_json::json!("feature"))).collect(),
         );
         let err = vet_events(&[retype], &existing, &config).unwrap_err();
         assert!(
@@ -1359,7 +1359,7 @@ required = true
             OpType::Update,
             "t",
             [
-                ("task_type".to_string(), serde_json::json!("feature")),
+                (TASK_TYPE_KEY.to_string(), serde_json::json!("feature")),
                 ("owner".to_string(), serde_json::json!("bob")),
             ]
             .into_iter()
@@ -1389,7 +1389,7 @@ required = true
             "j",
             &[],
             &[
-                ("task_type", serde_json::json!("job")),
+                (TASK_TYPE_KEY, serde_json::json!("job")),
                 (STATUS_KEY, serde_json::json!("todo")), // canonical storage key
             ],
         )]);

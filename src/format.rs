@@ -671,10 +671,10 @@ mod tests {
         // tail. JSON over the same columns carries the present fields.
         let cfg = DisplayConfig {
             columns: vec![
-                "id".into(),
+                ID_KEY.into(),
                 "title".into(),
                 STATUS_FIELD.into(),
-                "deps".into(),
+                DEPS_KEY.into(),
             ],
             ..DisplayConfig::default()
         };
@@ -689,7 +689,7 @@ mod tests {
         let cols = full_columns(&[&t], &cfg);
         assert_eq!(
             cols,
-            ["id", STATUS_FIELD, "deps", "priority"],
+            [ID_KEY, STATUS_FIELD, DEPS_KEY, "priority"],
             "canonical present-only set: {cols:?}"
         );
         let json = render_json(&[&t], &cols);
@@ -705,7 +705,7 @@ mod tests {
         // Configured columns come first in their exact order; remaining fields
         // follow alphabetically. `deps` keeps its configured slot.
         let cfg = DisplayConfig {
-            columns: vec!["id".into(), STATUS_FIELD.into(), "deps".into()],
+            columns: vec![ID_KEY.into(), STATUS_FIELD.into(), DEPS_KEY.into()],
             max_width: 0,
             column_max_width: BTreeMap::new(),
             sort: String::new(),
@@ -725,7 +725,7 @@ mod tests {
         let cols = full_columns(&[&t], &cfg);
         assert_eq!(
             cols,
-            ["id", STATUS_FIELD, "deps", "alpha", "zeta"],
+            [ID_KEY, STATUS_FIELD, DEPS_KEY, "alpha", "zeta"],
             "configured order then alphabetical extras: {cols:?}"
         );
 
@@ -777,9 +777,9 @@ mod tests {
 
         // Human cells: bare string, deps as labeled type groups, arrays joined,
         // numbers as their text, empty for a missing column.
-        assert_eq!(human_cell(&t, "id"), "api");
+        assert_eq!(human_cell(&t, ID_KEY), "api");
         assert_eq!(
-            human_cell(&t, "deps"),
+            human_cell(&t, DEPS_KEY),
             format!("{BLOCKER}: db, web; {INFO}: infra")
         );
         assert_eq!(human_cell(&t, "tags"), "x, y", "custom arrays join");
@@ -841,7 +841,7 @@ mod tests {
     #[test]
     fn record_view_puts_one_deps_type_group_per_line() {
         let t = mixed_edges_task();
-        let cols = vec!["id".to_string(), "deps".to_string()];
+        let cols = vec![ID_KEY.to_string(), DEPS_KEY.to_string()];
         let out = render_record(&t, &cols, false, &blockers(), style());
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(
@@ -878,7 +878,7 @@ mod tests {
         let d = display(
             OutputFormat::Human,
             false,
-            Some(&["id", STATUS_FIELD, "deps"]),
+            Some(&[ID_KEY, STATUS_FIELD, DEPS_KEY]),
         );
         let out = render(
             &[&t],
@@ -912,9 +912,9 @@ mod tests {
         t.relationships
             .insert(INFO.to_string(), vec!["x".to_string()]);
         let cols = vec![
-            "id".to_string(),
+            ID_KEY.to_string(),
             STATUS_FIELD.to_string(),
-            "deps".to_string(),
+            DEPS_KEY.to_string(),
         ];
         let caps = [0, 0, 0];
 
@@ -946,7 +946,7 @@ mod tests {
         // JSON is never colored, even via the shared render path.
         let json = render(
             &[&t],
-            &display(OutputFormat::Json, false, Some(&["id", STATUS_FIELD])),
+            &display(OutputFormat::Json, false, Some(&[ID_KEY, STATUS_FIELD])),
             &DisplayConfig::default(),
             &blockers(),
             style(),
@@ -960,7 +960,7 @@ mod tests {
         // The shared row style (also used by `dep tree`): an OPEN task keeps its
         // per-column colors; a DONE task greys whole, overriding them. This is the
         // consistency every task-rendering command inherits.
-        let cols = vec!["id".to_string(), STATUS_FIELD.to_string()];
+        let cols = vec![ID_KEY.to_string(), STATUS_FIELD.to_string()];
         let caps = [0, 0];
 
         let open = task("a", &[], &[(STATUS_FIELD, serde_json::json!("open"))]);
@@ -1017,7 +1017,7 @@ mod tests {
         let args = display(
             OutputFormat::Json,
             false,
-            Some(&["id", "priority", STATUS_FIELD]),
+            Some(&[ID_KEY, "priority", STATUS_FIELD]),
         );
         let out = render(
             &[&item],
@@ -1028,7 +1028,7 @@ mod tests {
             "(none)",
         );
         assert!(out.trim_start().starts_with('['), "array: {out}");
-        let id_at = out.find("\"id\"").unwrap();
+        let id_at = out.find(&format!("\"{ID_KEY}\"")).unwrap();
         let pri_at = out.find("\"priority\"").unwrap();
         let status_at = out.find(&format!("\"{STATUS_FIELD}\"")).unwrap();
         assert!(
@@ -1109,8 +1109,8 @@ mod tests {
         // deps is a built-in: always present as the typed map, {} when empty
         // (data, not absence).
         assert!(
-            lines[0].contains(&format!(r#""deps":{{"{BLOCKER}":["d"]}}"#))
-                && lines[1].contains(r#""deps":{}"#)
+            lines[0].contains(&format!("\"{DEPS_KEY}\":{{\"{BLOCKER}\":[\"d\"]}}"))
+                && lines[1].contains(&format!("\"{DEPS_KEY}\":{{}}"))
         );
 
         // Empty input yields no lines.
@@ -1139,7 +1139,7 @@ mod tests {
         let long = "a value that is definitely longer than the configured max width";
         let t = task("api", &[], &[("notes", serde_json::json!(long))]);
         let cfg = DisplayConfig {
-            columns: vec!["id".into(), "notes".into()],
+            columns: vec![ID_KEY.into(), "notes".into()],
             max_width: 20,
             column_max_width: BTreeMap::new(),
             sort: String::new(),
@@ -1180,7 +1180,7 @@ mod tests {
         // An explicit --columns view also still truncates.
         let cols = render(
             &[&t],
-            &display(OutputFormat::Human, false, Some(&["id", "notes"])),
+            &display(OutputFormat::Human, false, Some(&[ID_KEY, "notes"])),
             &cfg,
             &blockers(),
             style(),
@@ -1205,7 +1205,7 @@ mod tests {
             ],
         );
         let cfg = DisplayConfig {
-            columns: vec!["id".into(), "notes".into(), "summary".into()],
+            columns: vec![ID_KEY.into(), "notes".into(), "summary".into()],
             max_width: 10,
             column_max_width: std::iter::once(("notes".to_string(), 60)).collect(),
             sort: String::new(),
@@ -1260,8 +1260,8 @@ mod tests {
 
         // One field per line: `id` value is `api`, STATUS_FIELD its own line.
         assert!(
-            out.lines()
-                .any(|l| l.starts_with("id:") && l.split_whitespace().last() == Some("api")),
+            out.lines().any(|l| l.starts_with(&format!("{ID_KEY}:"))
+                && l.split_whitespace().last() == Some("api")),
             "vertical id line: {out}"
         );
         assert!(

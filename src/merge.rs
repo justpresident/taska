@@ -1165,7 +1165,7 @@ mod tests {
                 0,
                 OpType::AddEdge,
                 "X",
-                &[("target", json!("Y")), ("rel", json!(BLOCKER))],
+                &[(TARGET_KEY, json!("Y")), (REL_KEY, json!(BLOCKER))],
             ),
         ];
         let theirs = vec![
@@ -1175,7 +1175,7 @@ mod tests {
                 0,
                 OpType::AddEdge,
                 "X",
-                &[("target", json!("Y")), ("rel", json!(INFO))],
+                &[(TARGET_KEY, json!("Y")), (REL_KEY, json!(INFO))],
             ),
         ];
         let fork = 1;
