@@ -798,7 +798,7 @@ fn index_baseline(tasks: Vec<TaskState>) -> HashMap<String, TaskState> {
 mod tests {
     use super::*;
     use crate::engine::Engine;
-    use crate::model::STATUS_KEY;
+    use crate::model::{META_KEY, STATUS_KEY};
     use crate::test_support::names::*;
     use serde_json::json;
 
@@ -1353,7 +1353,7 @@ mod tests {
         // But replay ignores it: the task has no `_meta` field, just the winner.
         let state = Engine::materialize_state(Vec::new(), merged, DONE_STATUS);
         assert!(
-            !state["X"].custom_fields.contains_key("_meta"),
+            !state["X"].custom_fields.contains_key(META_KEY),
             "provenance stays out of state"
         );
         assert_eq!(state["X"].custom_fields[STATUS_KEY], json!("b"));

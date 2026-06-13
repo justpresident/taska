@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::engine::Engine;
 use crate::error::DynError;
-use crate::model::{MutationEvent, OpType};
+use crate::model::{MutationEvent, OpType, TASK_ID_KEY};
 use crate::storage::{EventStore, FileStore};
 
 /// One tentatively-merged field conflict, as recorded in the merge marker.
@@ -114,7 +114,7 @@ fn read_marker(store: &FileStore) -> Result<Option<Vec<ConflictItem>>, DynError>
                 .iter()
                 .map(|item| ConflictItem {
                     task_id: item
-                        .get("task_id")
+                        .get(TASK_ID_KEY)
                         .and_then(|v| v.as_str())
                         .unwrap_or("?")
                         .to_string(),

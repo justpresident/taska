@@ -1,7 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
-use taska::model::{DEPS_KEY, REL_KEY, STATUS_KEY, TARGET_KEY};
+use taska::model::{DEPS_KEY, OP_KEY, REL_KEY, STATUS_KEY, TARGET_KEY};
 
 #[test]
 fn undo_uncommitted_truncates_the_tail() {
@@ -170,7 +170,7 @@ fn undo_committed_compensates_typed_edges() {
     let tail = std::fs::read_to_string(&log).unwrap();
     let last = tail.lines().last().unwrap();
     assert!(
-        last.contains(r#""op":"RemoveEdge""#)
+        last.contains(&format!(r#""{OP_KEY}":"RemoveEdge""#))
             && last.contains(&format!(r#""{REL_KEY}":"{INFO}""#))
             && last.contains(&format!(r#""{TARGET_KEY}":"b""#)),
         "compensation is a TYPED RemoveEdge: {last}"

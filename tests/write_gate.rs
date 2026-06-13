@@ -1,7 +1,9 @@
 mod common;
 use common::names::*;
 use common::*;
-use taska::model::{DEPS_KEY, DEP_KEY, ID_KEY, UNBLOCKS_KEY};
+use taska::model::{
+    DEPS_KEY, DEP_KEY, ID_KEY, META_KEY, OP_KEY, SEQ_KEY, TASK_ID_KEY, TIMESTAMP_KEY, UNBLOCKS_KEY,
+};
 
 #[test]
 fn reserved_field_keys_are_rejected() {
@@ -11,7 +13,7 @@ fn reserved_field_keys_are_rejected() {
     let log = dir.join(".taska/mutations.jsonl");
     // Each reserved envelope key must be refused up front (non-zero exit) and
     // append nothing, so it can never shadow the event envelope.
-    for key in ["seq", "op", "task_id", "timestamp", "_meta"] {
+    for key in [SEQ_KEY, OP_KEY, TASK_ID_KEY, TIMESTAMP_KEY, META_KEY] {
         let out = run(ta_bin(), &dir, &["create", "x", &format!("{key}=v")]);
         assert!(
             !out.status.success(),

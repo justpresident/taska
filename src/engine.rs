@@ -347,7 +347,7 @@ impl Engine {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::model::{REL_KEY, TARGET_KEY};
+    use crate::model::{OP_KEY, REL_KEY, SEQ_KEY, TARGET_KEY, TASK_ID_KEY, TIMESTAMP_KEY};
     use crate::test_support::names::*;
     use serde_json::{json, Value};
 
@@ -472,15 +472,19 @@ mod tests {
     fn edge_event_missing_rel_is_skipped() {
         // An edge with no `rel` (a pre-1.0 untyped event that escaped migration)
         // is malformed and dropped rather than silently defaulting to depends_on.
-        let raw = concat!(
-            r#"{"seq":1,"timestamp":"2026-01-01T00:00:00Z","op":"Create","task_id":"a"}"#,
-            "\n",
-            r#"{"seq":2,"timestamp":"2026-01-01T00:00:00Z","op":"Create","task_id":"b"}"#,
-            "\n",
-            r#"{"seq":3,"timestamp":"2026-01-01T00:00:00Z","op":"AddEdge","task_id":"b","target":"a"}"#,
-        );
+        let raw = [
+            format!(
+                r#"{{"{SEQ_KEY}":1,"{TIMESTAMP_KEY}":"2026-01-01T00:00:00Z","{OP_KEY}":"Create","{TASK_ID_KEY}":"a"}}"#
+            ),
+            format!(
+                r#"{{"{SEQ_KEY}":2,"{TIMESTAMP_KEY}":"2026-01-01T00:00:00Z","{OP_KEY}":"Create","{TASK_ID_KEY}":"b"}}"#
+            ),
+            format!(
+                r#"{{"{SEQ_KEY}":3,"{TIMESTAMP_KEY}":"2026-01-01T00:00:00Z","{OP_KEY}":"AddEdge","{TASK_ID_KEY}":"b","{TARGET_KEY}":"a"}}"#
+            ),
+        ];
         let mutations: Vec<MutationEvent> = raw
-            .lines()
+            .iter()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
         let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);

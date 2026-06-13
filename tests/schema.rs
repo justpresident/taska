@@ -1,5 +1,6 @@
 mod common;
 use common::*;
+use taska::model::OP_KEY;
 
 /// Append a `[task_types]` declaration to the store's config.
 fn declare_schema(dir: &Path) {
@@ -207,7 +208,8 @@ fn accumulate_operators_dispatch_by_declared_kind() {
     // The new ops are on disk under their own names.
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        log.contains(r#""op":"Add""#) && log.contains(r#""op":"Remove""#),
+        log.contains(&format!(r#""{OP_KEY}":"Add""#))
+            && log.contains(&format!(r#""{OP_KEY}":"Remove""#)),
         "Add/Remove events logged: {log}"
     );
 }

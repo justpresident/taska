@@ -17,6 +17,8 @@ pub use std::io::Write;
 pub use std::path::{Path, PathBuf};
 pub use std::process::{Command, Output, Stdio};
 
+use taska::model::{OP_KEY, SEQ_KEY, STATUS_KEY, TASK_ID_KEY, TIMESTAMP_KEY};
+
 pub fn ta_bin() -> &'static str {
     env!("CARGO_BIN_EXE_ta")
 }
@@ -139,13 +141,13 @@ pub fn append_orphan_update(log: &Path, task_id: &str) {
     let next = content
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .filter_map(|e| e["seq"].as_u64())
+        .filter_map(|e| e[SEQ_KEY].as_u64())
         .max()
         .unwrap_or(0)
         + 1;
     content.push_str(&format!(
-        "{{\"seq\":{next},\"timestamp\":\"2026-01-01T00:00:00Z\",\"op\":\"Update\",\
-         \"task_id\":\"{task_id}\",\"status\":\"x\"}}\n"
+        "{{\"{SEQ_KEY}\":{next},\"{TIMESTAMP_KEY}\":\"2026-01-01T00:00:00Z\",\"{OP_KEY}\":\"Update\",\
+         \"{TASK_ID_KEY}\":\"{task_id}\",\"{STATUS_KEY}\":\"x\"}}\n"
     ));
     fs::write(log, content).unwrap();
 }

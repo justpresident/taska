@@ -59,6 +59,25 @@ pub const BLOCKED_BY_KEY: &str = "blocked_by";
 /// Computed column: a parent's `done/total` direct-child completion.
 pub const SUBTASKS_KEY: &str = "subtasks";
 
+/// Event-envelope key: the store-minted, strictly-increasing sequence number
+/// that is the authoritative replay/merge order. See [`MutationEvent`].
+pub const SEQ_KEY: &str = "seq";
+
+/// Event-envelope key: the informational RFC 3339 write time (a merge tiebreaker
+/// only - [`SEQ_KEY`] is authoritative).
+pub const TIMESTAMP_KEY: &str = "timestamp";
+
+/// Event-envelope key: the operation discriminator (the serde tag of [`OpType`]).
+pub const OP_KEY: &str = "op";
+
+/// Event-envelope key: the id of the task an event applies to.
+pub const TASK_ID_KEY: &str = "task_id";
+
+/// Event-envelope key: merge provenance. Deliberately NOT materialized into task
+/// state. The same string is the `#[serde(rename)]` tag on [`MutationEvent::meta`]
+/// (which must stay a literal there).
+pub const META_KEY: &str = "_meta";
+
 /// Field names never legal as user fields under ANY config.
 ///
 /// Rejectable at parse time, before a store or config exists. Two reasons,
@@ -74,11 +93,11 @@ pub const SUBTASKS_KEY: &str = "subtasks";
 /// same list.
 pub const RESERVED_FIELD_KEYS: &[&str] = &[
     // event envelope
-    "seq",
-    "timestamp",
-    "op",
-    "task_id",
-    "_meta",
+    SEQ_KEY,
+    TIMESTAMP_KEY,
+    OP_KEY,
+    TASK_ID_KEY,
+    META_KEY,
     // static built-in + computed/injected columns (the column vocabulary)
     ID_KEY,
     DEPS_KEY,

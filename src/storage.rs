@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::config::Config;
 use crate::error::DynError;
-use crate::model::{MutationEvent, TaskState, REL_KEY, TARGET_KEY};
+use crate::model::{MutationEvent, TaskState, OP_KEY, REL_KEY, TARGET_KEY};
 
 /// Turns the current store state (`baseline`, `log`) into the events to append.
 ///
@@ -188,7 +188,7 @@ fn raw_json_lines(path: &Path) -> Result<Vec<Value>, DynError> {
 /// edge event lacking the current `target`+`rel` keys (an untyped edge, or one
 /// still using the `dep`/`type` payload spelling).
 fn legacy_log_marker(value: &Value) -> Option<String> {
-    let op = value.get("op").and_then(Value::as_str)?;
+    let op = value.get(OP_KEY).and_then(Value::as_str)?;
     match op {
         "AddDep" | "RemoveDep" => Some(format!("a log event uses the pre-1.0 op `{op}`")),
         "AddEdge" | "RemoveEdge" => {

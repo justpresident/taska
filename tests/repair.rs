@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use taska::model::{DEPS_KEY, STATUS_KEY, TASK_TYPE_KEY};
+use taska::model::{DEPS_KEY, SEQ_KEY, STATUS_KEY, TASK_TYPE_KEY};
 
 /// A PRE-1.0 store (a legacy `AddDep` op / `dep`/`type` edge keys) can no longer
 /// be read OR migrated in v1 - the read shims and the depends_on migration passes
@@ -21,7 +21,7 @@ fn pre_1_0_store_is_refused_with_a_migration_hint() {
     let next = content
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .filter_map(|e| e["seq"].as_u64())
+        .filter_map(|e| e[SEQ_KEY].as_u64())
         .max()
         .unwrap_or(0)
         + 1;

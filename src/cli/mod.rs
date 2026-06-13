@@ -601,7 +601,7 @@ pub(crate) fn confirm(prompt: &str, force: bool) -> Result<bool, DynError> {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::model::{DEPS_KEY, ID_KEY, STATUS_KEY, UNBLOCKS_KEY};
+    use crate::model::{DEPS_KEY, ID_KEY, SEQ_KEY, STATUS_KEY, UNBLOCKS_KEY};
     use crate::test_support::names::*;
 
     #[test]
@@ -743,7 +743,7 @@ mod tests {
     fn parse_field_ops_rejects_reserved_empty_and_opless() {
         // Both reservation reasons reject at parse time: envelope keys (`seq`)
         // and the static computed columns (`id`, `deps`, `unblocks`).
-        for key in ["seq", ID_KEY, DEPS_KEY, UNBLOCKS_KEY] {
+        for key in [SEQ_KEY, ID_KEY, DEPS_KEY, UNBLOCKS_KEY] {
             assert!(
                 parse_field_ops(&[format!("{key}=1")]).is_err(),
                 "reserved set: {key}"

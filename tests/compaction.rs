@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use taska::model::STATUS_KEY;
+use taska::model::{ID_KEY, STATUS_KEY, TASK_ID_KEY};
 
 #[test]
 fn auto_timestamps_lifecycle_search_and_compaction() {
@@ -151,11 +151,11 @@ fn compact_retains_recent_events_for_merge() {
     // were folded away). The newest task is in the log; the oldest is not.
     let mutations = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        mutations.contains(r#""task_id":"t349""#),
+        mutations.contains(&format!(r#""{TASK_ID_KEY}":"t349""#)),
         "expected the newest event retained: {mutations}"
     );
     assert!(
-        !mutations.contains(r#""task_id":"t0""#),
+        !mutations.contains(&format!(r#""{TASK_ID_KEY}":"t0""#)),
         "the oldest event should have been folded out of the log: {mutations}"
     );
 
@@ -229,8 +229,10 @@ fn pre_1_0_baseline_depends_on_field_is_refused() {
     let baseline = dir.join(".taska").join("baseline.jsonl");
     fs::write(
         &baseline,
-        "{\"id\":\"a\",\"custom_fields\":{\"status\":\"open\"}}\n\
-         {\"id\":\"b\",\"depends_on\":[\"a\"],\"custom_fields\":{\"status\":\"open\"}}\n",
+        format!(
+            "{{\"{ID_KEY}\":\"a\",\"custom_fields\":{{\"{STATUS_KEY}\":\"open\"}}}}\n\
+             {{\"{ID_KEY}\":\"b\",\"depends_on\":[\"a\"],\"custom_fields\":{{\"{STATUS_KEY}\":\"open\"}}}}\n"
+        ),
     )
     .unwrap();
 
