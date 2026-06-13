@@ -1,6 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
+use taska::model::{DEPS_KEY, ID_KEY, REL_KEY, SUBTASKS_KEY, TARGET_KEY};
 
 #[test]
 fn dep_remove_makes_a_blocked_task_ready() {
@@ -33,7 +34,10 @@ fn dep_remove_makes_a_blocked_task_ready() {
 
     // The dependency is gone from the materialized task, not just from `ready`.
     let json = ta(&dir, &["show", "api", "--format", "json"]);
-    assert!(json.contains(r#""deps":{}"#), "dep removed: {json}");
+    assert!(
+        json.contains(&format!(r#""{DEPS_KEY}":{{}}"#)),
+        "dep removed: {json}"
+    );
 }
 
 #[test]
@@ -82,13 +86,16 @@ fn dep_command_adds_and_removes_typed_edges() {
     );
     let json = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(
-        json.contains(&format!(r#""deps":{{"{BLOCKER}":["b"],"{INFO}":["c"]}}"#)),
+        json.contains(&format!(
+            r#""{DEPS_KEY}":{{"{BLOCKER}":["b"],"{INFO}":["c"]}}"#
+        )),
         "typed edges show in deps: {json}"
     );
     // The related edge is recorded as a typed AddEdge event.
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        log.contains(&format!(r#""rel":"{INFO}""#)) && log.contains(r#""target":"c""#),
+        log.contains(&format!(r#""{REL_KEY}":"{INFO}""#))
+            && log.contains(&format!(r#""{TARGET_KEY}":"c""#)),
         "typed related edge in the log: {log}"
     );
 
@@ -96,7 +103,7 @@ fn dep_command_adds_and_removes_typed_edges() {
     ta(&dir, &["dep", "remove", "a", &format!("{BLOCKER}=b")]);
     assert!(
         ta(&dir, &["show", "a", "--format", "json"])
-            .contains(&format!(r#""deps":{{"{INFO}":["c"]}}"#)),
+            .contains(&format!(r#""{DEPS_KEY}":{{"{INFO}":["c"]}}"#)),
         "needs edge removed, related kept"
     );
 
@@ -132,8 +139,9 @@ fn show_lists_forward_inverse_and_symmetric_relationships() {
 
     // `a`'s forward edges live in the deps map, grouped by type.
     assert!(
-        ta(&dir, &["show", "a", "--format", "json"])
-            .contains(&format!(r#""deps":{{"{BLOCKER}":["b"],"{INFO}":["c"]}}"#)),
+        ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(
+            r#""{DEPS_KEY}":{{"{BLOCKER}":["b"],"{INFO}":["c"]}}"#
+        )),
         "a forward edges in deps"
     );
 
@@ -165,7 +173,7 @@ fn dep_remove_by_inverse_name_drops_the_forward_edge() {
     // Remove the relationship from b's side using the inverse name `feeds`.
     ta(&dir, &["dep", "remove", "b", &format!("{BLOCKER_INV}=a")]);
     assert!(
-        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":{}"#),
+        ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(r#""{DEPS_KEY}":{{}}"#)),
         "inverse removal dropped a's needs edge"
     );
     let b = ta(&dir, &["show", "b", "--format", "json"]);
@@ -423,7 +431,8 @@ fn subtask_hierarchy_gates_readiness_and_mirrors_both_ways() {
 
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        log.contains(&format!(r#""rel":"{HIER}""#)) && log.contains(r#""target":"wire-auth""#),
+        log.contains(&format!(r#""{REL_KEY}":"{HIER}""#))
+            && log.contains(&format!(r#""{TARGET_KEY}":"wire-auth""#)),
         "inverse add stored as contains on epic: {log}"
     );
 
@@ -496,17 +505,20 @@ fn dep_tree_marks_subtasks_and_rolls_up_progress() {
     let json: serde_json::Value =
         serde_json::from_str(&ta(&dir, &["dep", "tree", "epic", "--format", "json"])).unwrap();
     let epic = &json[0];
-    assert_eq!(epic["id"], "epic");
-    assert_eq!(epic["subtasks"], serde_json::json!({"done": 1, "total": 2}));
+    assert_eq!(epic[ID_KEY], "epic");
+    assert_eq!(
+        epic[SUBTASKS_KEY],
+        serde_json::json!({"done": 1, "total": 2})
+    );
     let kids = epic["children"].as_array().unwrap();
     assert!(
         kids.iter()
-            .any(|c| c["id"] == "a" && c["edge"] == "subtask" && c["done"] == true),
+            .any(|c| c[ID_KEY] == "a" && c["edge"] == "subtask" && c["done"] == true),
         "subtask child in json: {json}"
     );
     assert!(
         kids.iter()
-            .any(|c| c["id"] == "dep1" && c.get("edge").is_none()),
+            .any(|c| c[ID_KEY] == "dep1" && c.get("edge").is_none()),
         "plain dependency has no edge tag: {json}"
     );
 }
@@ -600,12 +612,15 @@ fn dep_tree_exact_by_default_titles_done_marks_and_open_prune() {
     assert!(open.contains("open-sub"), "open subtask kept: {open}");
 
     // --sort id orders siblings ascending; --reverse flips them.
-    let asc = ta(&dir, &["dep", "tree", "epic", "--sort", "id"]);
+    let asc = ta(&dir, &["dep", "tree", "epic", "--sort", ID_KEY]);
     assert!(
         asc.find("done-mid").unwrap() < asc.find("open-sub").unwrap(),
         "ascending id: {asc}"
     );
-    let desc = ta(&dir, &["dep", "tree", "epic", "--sort", "id", "--reverse"]);
+    let desc = ta(
+        &dir,
+        &["dep", "tree", "epic", "--sort", ID_KEY, "--reverse"],
+    );
     assert!(
         desc.find("open-sub").unwrap() < desc.find("done-mid").unwrap(),
         "reversed id: {desc}"
@@ -645,7 +660,7 @@ fn show_surfaces_typed_relationships_forward_and_inverse() {
     // field; its inverse `feeds` surfaces on the depended-upon task.
     let aj = ta(&dir, &["show", "a", "--format", "json"]);
     assert!(
-        aj.contains(&format!(r#""deps":{{"{BLOCKER}":["b"]}}"#))
+        aj.contains(&format!(r#""{DEPS_KEY}":{{"{BLOCKER}":["b"]}}"#))
             && aj.matches(BLOCKER).count() == 1,
         "needs only inside deps: {aj}"
     );

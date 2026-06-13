@@ -9,6 +9,7 @@
 mod common;
 use common::names::*;
 use common::*;
+use taska::model::ID_KEY;
 
 #[test]
 fn create_list_filter_and_close_under_renamed_workflow() {
@@ -163,7 +164,7 @@ fn computed_timestamps_use_renamed_columns() {
         &[
             "list",
             "--columns",
-            &format!("id,{CREATE_TIME}"),
+            &format!("{ID_KEY},{CREATE_TIME}"),
             "--sort",
             CREATE_TIME,
         ],

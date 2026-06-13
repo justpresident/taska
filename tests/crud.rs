@@ -1,6 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
+use taska::model::{DEPS_KEY, ID_KEY};
 
 #[test]
 fn init_creates_config_and_registers_merge_driver() {
@@ -259,7 +260,7 @@ fn crud_search_and_ready_workflow() {
     let json = ta(&dir, &["list", "--full", "--format", "json"]);
     assert!(json.contains(r#""priority":3"#), "json: {json}");
     assert!(
-        json.contains(&format!(r#""deps":{{"{BLOCKER}":["db"]}}"#)),
+        json.contains(&format!(r#""{DEPS_KEY}":{{"{BLOCKER}":["db"]}}"#)),
         "json: {json}"
     );
 
@@ -358,7 +359,7 @@ fn show_displays_full_task_and_rejects_unknown_id() {
             "show",
             "a",
             "--columns",
-            &format!("id,{STATUS_FIELD}"),
+            &format!("{ID_KEY},{STATUS_FIELD}"),
             "--format",
             "json",
         ],

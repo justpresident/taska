@@ -7,7 +7,7 @@
 
 use serde_json::{json, Map};
 use taska::action;
-use taska::model::OpType;
+use taska::model::{OpType, ID_KEY, STATUS_KEY};
 use taska::storage::{EventStore, FileStore};
 
 /// A throwaway file store under the system temp dir (outside the repo tree).
@@ -63,7 +63,7 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
             open: false,
             ready: false,
             display_columns: &[],
-            sort: "id",
+            sort: ID_KEY,
             reverse: false,
         },
     )
@@ -81,7 +81,7 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
             open: false,
             ready: true,
             display_columns: &[],
-            sort: "id",
+            sort: ID_KEY,
             reverse: false,
         },
     )
@@ -102,7 +102,7 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
     // prime: the config-tailored facts, as structured data - drivable without the
     // cli's markdown rendering (an external frontend would render its own).
     let prime = action::prime(&store).unwrap();
-    assert_eq!(prime.facts.status_field, "status");
+    assert_eq!(prime.facts.status_field, STATUS_KEY);
     assert_eq!(prime.facts.done_status, "closed");
     assert_eq!(prime.facts.summary.total, 2);
     assert!(
@@ -137,7 +137,7 @@ fn write_prep_translates_display_names_to_canonical_via_public_api() {
     canonicalize_fields(&mut payload, &workflow).unwrap();
 
     assert!(
-        payload.contains_key("status"),
+        payload.contains_key(STATUS_KEY),
         "display `state` -> canonical `status`: {payload:?}"
     );
     assert!(!payload.contains_key("state"), "display key consumed");
@@ -198,8 +198,8 @@ fn dep_tree_returns_the_requested_columns_per_node() {
             roots: &["parent".to_string()],
             open: false,
             reverse: false,
-            columns: &["title".to_string(), "status".to_string()],
-            sort: "id",
+            columns: &["title".to_string(), STATUS_KEY.to_string()],
+            sort: ID_KEY,
         },
     )
     .unwrap();
@@ -209,5 +209,5 @@ fn dep_tree_returns_the_requested_columns_per_node() {
     assert_eq!(root.id, "parent");
     let cells: std::collections::HashMap<_, _> = root.cells.iter().cloned().collect();
     assert_eq!(cells.get("title"), Some(&json!("Parent task")));
-    assert_eq!(cells.get("status"), Some(&json!("todo")));
+    assert_eq!(cells.get(STATUS_KEY), Some(&json!("todo")));
 }

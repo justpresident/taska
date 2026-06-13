@@ -1,6 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
+use taska::model::{DEPS_KEY, REL_KEY, TARGET_KEY};
 
 #[test]
 fn undo_uncommitted_truncates_the_tail() {
@@ -163,15 +164,15 @@ fn undo_committed_compensates_typed_edges() {
         "compensation appended, not truncated"
     );
     assert!(
-        ta(&dir, &["show", "a", "--format", "json"]).contains(r#""deps":{}"#),
+        ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(r#""{DEPS_KEY}":{{}}"#)),
         "typed edge compensated away"
     );
     let tail = std::fs::read_to_string(&log).unwrap();
     let last = tail.lines().last().unwrap();
     assert!(
         last.contains(r#""op":"RemoveEdge""#)
-            && last.contains(&format!(r#""rel":"{INFO}""#))
-            && last.contains(r#""target":"b""#),
+            && last.contains(&format!(r#""{REL_KEY}":"{INFO}""#))
+            && last.contains(&format!(r#""{TARGET_KEY}":"b""#)),
         "compensation is a TYPED RemoveEdge: {last}"
     );
 
@@ -183,7 +184,7 @@ fn undo_committed_compensates_typed_edges() {
     ta(&dir, &["undo", "--force"]);
     assert!(
         ta(&dir, &["show", "a", "--format", "json"])
-            .contains(&format!(r#""deps":{{"{INFO}":["b"]}}"#)),
+            .contains(&format!(r#""{DEPS_KEY}":{{"{INFO}":["b"]}}"#)),
         "undoing a committed typed remove restores the edge"
     );
 }

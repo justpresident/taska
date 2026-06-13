@@ -1,5 +1,6 @@
 mod common;
 use common::*;
+use taska::model::{STATUS_KEY, TASK_TYPE_KEY};
 
 #[test]
 fn config_get_set_list_validates_and_preserves_comments() {
@@ -142,7 +143,7 @@ fn renamed_status_field_is_display_only_storage_stays_canonical() {
     ta(&dir, &["update", "t2", "state=closed"]);
     let shown = ta(&dir, &["show", "t1", "--format", "json"]);
     assert!(
-        shown.contains(r#""state":"open""#) && !shown.contains(r#""status""#),
+        shown.contains(r#""state":"open""#) && !shown.contains(STATUS_KEY),
         "display name in output: {shown}"
     );
     // ...and the workflow machinery follows it: filtering, --open, --ready.
@@ -156,7 +157,7 @@ fn renamed_status_field_is_display_only_storage_stays_canonical() {
     // ...but STORAGE is canonical: events carry `status`, never `state`.
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        log.contains(r#""status":"open""#) && !log.contains(r#""state":"open""#),
+        log.contains(&format!("\"{}\":\"open\"", STATUS_KEY)) && !log.contains(r#""state":"open""#),
         "canonical key on disk: {log}"
     );
 
@@ -201,12 +202,12 @@ fn task_type_schemas_validate_and_the_discriminator_maps_canonically() {
     ta(&dir, &["create", "t1", "type=bug", "severity=low"]);
     let shown = ta(&dir, &["show", "t1", "--format", "json"]);
     assert!(
-        shown.contains(r#""type":"bug""#) && !shown.contains("task_type"),
+        shown.contains(r#""type":"bug""#) && !shown.contains(TASK_TYPE_KEY),
         "display name in output: {shown}"
     );
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        log.contains(r#""task_type":"bug""#) && !log.contains(r#""type":"bug""#),
+        log.contains(&format!("\"{}\":\"bug\"", TASK_TYPE_KEY)) && !log.contains(r#""type":"bug""#),
         "canonical key on disk: {log}"
     );
     // Canonical spelling not directly writable; += rejected (single-valued).

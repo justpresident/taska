@@ -1,6 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
+use taska::model::STATUS_KEY;
 
 #[test]
 fn git_merge_driver_resolves_divergent_appends() {
@@ -70,7 +71,7 @@ fn surface_conflict_fails_merge_and_resolve_clears_it() {
         "resolve should report the conflict: {resolved}"
     );
     assert!(
-        resolved.contains("status"),
+        resolved.contains(STATUS_KEY),
         "resolve should name the conflicting field: {resolved}"
     );
     assert!(

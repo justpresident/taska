@@ -1,6 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
+use taska::model::{BLOCKED_BY_KEY, DEPS_KEY, ID_KEY, SUBTASKS_KEY, UNBLOCKS_KEY};
 
 #[test]
 fn list_supports_regex_negation_and_combined_criteria() {
@@ -63,12 +64,12 @@ fn list_supports_regex_negation_and_combined_criteria() {
         "negation: {ne}"
     );
     assert!(
-        lists_task(&ta(&dir, &["list", "deps=api"]), "web"),
+        lists_task(&ta(&dir, &["list", &format!("{DEPS_KEY}=api")]), "web"),
         "deps query"
     );
     // The regex operator is `=~` (perl/bash spelling), its negation `!~`.
     assert!(
-        lists_task(&ta(&dir, &["list", "id=~^a"]), "api"),
+        lists_task(&ta(&dir, &["list", &format!("{ID_KEY}=~^a")]), "api"),
         "id=~ regex"
     );
     let nre = ta(&dir, &["list", &format!("{STATUS_FIELD}!~^op")]);
@@ -85,7 +86,7 @@ fn list_supports_regex_negation_and_combined_criteria() {
     // `deps=<x>` matches a target under ANY relationship type, info included -
     // the filter sees exactly what the deps column shows.
     ta(&dir, &["dep", "add", "web", &format!("{INFO}=db")]);
-    let info = ta(&dir, &["list", "deps=db"]);
+    let info = ta(&dir, &["list", &format!("{DEPS_KEY}=db")]);
     assert!(lists_task(&info, "web"), "info edge matches deps=: {info}");
 }
 
@@ -120,7 +121,10 @@ fn relationship_names_and_computed_columns_filter() {
 
     // Inverse names resolve the reverse direction: children of the umbrella,
     // and what a task blocks - the queries from the motivating session.
-    let children = ta(&dir, &["list", &format!("{HIER_INV}=epic"), "--sort", "id"]);
+    let children = ta(
+        &dir,
+        &["list", &format!("{HIER_INV}=epic"), "--sort", ID_KEY],
+    );
     assert!(
         lists_task(&children, "c1")
             && lists_task(&children, "c2")
@@ -149,7 +153,7 @@ fn relationship_names_and_computed_columns_filter() {
 
     // A computed column used ONLY as a filter is injected: c1 transitively
     // unblocks c2 and epic (no --columns/--sort needed to make this work).
-    let unblocks = ta(&dir, &["list", "unblocks=2"]);
+    let unblocks = ta(&dir, &["list", &format!("{UNBLOCKS_KEY}=2")]);
     assert!(
         lists_task(&unblocks, "c1") && !lists_task(&unblocks, "other"),
         "computed column filters without being displayed: {unblocks}"
@@ -182,7 +186,7 @@ fn comparison_operators_filter_numbers_and_dates() {
     ta(&dir, &["dep", "add", "c", &format!("{BLOCKER}=b")]); // and transitively c
 
     // Numeric comparison (numeric, not lexical: 5 > 3, not "5" vs "3").
-    let ge = ta(&dir, &["list", "priority>=3", "--sort", "id"]);
+    let ge = ta(&dir, &["list", "priority>=3", "--sort", ID_KEY]);
     assert!(
         lists_task(&ge, "b") && lists_task(&ge, "c") && !lists_task(&ge, "a"),
         "priority>=3 keeps b,c: {ge}"
@@ -194,7 +198,10 @@ fn comparison_operators_filter_numbers_and_dates() {
     );
 
     // A computed column compared, injected purely by being named in the filter.
-    let leverage = ta(&dir, &["list", "unblocks>0", "--sort", "id"]);
+    let leverage = ta(
+        &dir,
+        &["list", &format!("{UNBLOCKS_KEY}>0"), "--sort", ID_KEY],
+    );
     assert!(
         lists_task(&leverage, "a") && lists_task(&leverage, "b") && !lists_task(&leverage, "c"),
         "unblocks>0 finds tasks that unblock something: {leverage}"
@@ -273,17 +280,24 @@ fn sort_flag_orders_rows_with_reverse_and_configurable_default() {
     };
 
     // --sort over a numeric column sorts numerically, and --reverse flips it.
-    let asc = ta(&dir, &["list", "--sort", "priority", "--columns", "id"]);
+    let asc = ta(&dir, &["list", "--sort", "priority", "--columns", ID_KEY]);
     assert_eq!(ids(&asc), ["c", "b", "a"], "ascending by priority: {asc}");
     let desc = ta(
         &dir,
-        &["list", "--sort", "priority", "--reverse", "--columns", "id"],
+        &[
+            "list",
+            "--sort",
+            "priority",
+            "--reverse",
+            "--columns",
+            ID_KEY,
+        ],
     );
     assert_eq!(ids(&desc), ["a", "b", "c"], "reversed: {desc}");
 
     // A task missing the sort column sorts last.
     ta(&dir, &["create", "d"]);
-    let missing = ta(&dir, &["list", "--sort", "priority", "--columns", "id"]);
+    let missing = ta(&dir, &["list", "--sort", "priority", "--columns", ID_KEY]);
     assert_eq!(
         ids(&missing),
         ["c", "b", "a", "d"],
@@ -299,14 +313,14 @@ fn sort_flag_orders_rows_with_reverse_and_configurable_default() {
             "--sort",
             "priority",
             "--columns",
-            "id",
+            ID_KEY,
         ],
     );
     assert_eq!(ids(&s), ["c", "b", "a"], "search sorted: {s}");
 
     // The default sort column is configurable (no --sort given).
     fs::write(dir.join(".taska/config.toml"), "[display]\nsort = \"id\"\n").unwrap();
-    let by_id = ta(&dir, &["list", "--columns", "id"]);
+    let by_id = ta(&dir, &["list", "--columns", ID_KEY]);
     assert_eq!(
         ids(&by_id),
         ["a", "b", "c", "d"],
@@ -426,7 +440,7 @@ fn list_unblocks_and_blocked_by_columns() {
 
     let line_for = |out: &str, id: &str| -> String {
         out.lines()
-            .find(|l| l.contains(&format!("\"id\":\"{id}\"")))
+            .find(|l| l.contains(&format!("\"{ID_KEY}\":\"{id}\"")))
             .unwrap_or_else(|| panic!("no line for {id} in {out}"))
             .to_string()
     };
@@ -437,25 +451,25 @@ fn list_unblocks_and_blocked_by_columns() {
         &[
             "list",
             "--columns",
-            "id,unblocks,blocked_by",
+            &format!("{ID_KEY},{UNBLOCKS_KEY},{BLOCKED_BY_KEY}"),
             "--format",
             "jsonl",
         ],
     );
     assert!(
-        line_for(&json, "a").contains(r#""unblocks":2"#),
+        line_for(&json, "a").contains(&format!(r#""{UNBLOCKS_KEY}":2"#)),
         "a unblocks b,c: {json}"
     );
     assert!(
-        line_for(&json, "a").contains(r#""blocked_by":0"#),
+        line_for(&json, "a").contains(&format!(r#""{BLOCKED_BY_KEY}":0"#)),
         "a: {json}"
     );
     assert!(
-        line_for(&json, "c").contains(r#""blocked_by":2"#),
+        line_for(&json, "c").contains(&format!(r#""{BLOCKED_BY_KEY}":2"#)),
         "c blocked by a,b: {json}"
     );
     assert!(
-        line_for(&json, "b").contains(r#""unblocks":1"#),
+        line_for(&json, "b").contains(&format!(r#""{UNBLOCKS_KEY}":1"#)),
         "b unblocks c: {json}"
     );
 
@@ -465,9 +479,9 @@ fn list_unblocks_and_blocked_by_columns() {
         &[
             "list",
             "--columns",
-            "id,unblocks",
+            &format!("{ID_KEY},{UNBLOCKS_KEY}"),
             "--sort",
-            "unblocks",
+            UNBLOCKS_KEY,
             "--reverse",
         ],
     );
@@ -481,7 +495,7 @@ fn list_unblocks_and_blocked_by_columns() {
     // Opt-in only: a plain list never carries the computed columns.
     let default = ta(&dir, &["list", "--format", "jsonl"]);
     assert!(
-        !default.contains("unblocks"),
+        !default.contains(UNBLOCKS_KEY),
         "default omits computed columns: {default}"
     );
 
@@ -489,10 +503,16 @@ fn list_unblocks_and_blocked_by_columns() {
     ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=closed")]);
     let json = ta(
         &dir,
-        &["list", "--columns", "id,blocked_by", "--format", "jsonl"],
+        &[
+            "list",
+            "--columns",
+            &format!("{ID_KEY},{BLOCKED_BY_KEY}"),
+            "--format",
+            "jsonl",
+        ],
     );
     assert!(
-        line_for(&json, "c").contains(r#""blocked_by":1"#),
+        line_for(&json, "c").contains(&format!(r#""{BLOCKED_BY_KEY}":1"#)),
         "done prereq excluded: {json}"
     );
 }
@@ -510,27 +530,33 @@ fn list_subtasks_column_shows_parent_progress() {
 
     let json = ta(
         &dir,
-        &["list", "--columns", "id,subtasks", "--format", "jsonl"],
+        &[
+            "list",
+            "--columns",
+            &format!("{ID_KEY},{SUBTASKS_KEY}"),
+            "--format",
+            "jsonl",
+        ],
     );
     let line_for = |id: &str| -> String {
         json.lines()
-            .find(|l| l.contains(&format!("\"id\":\"{id}\"")))
+            .find(|l| l.contains(&format!("\"{ID_KEY}\":\"{id}\"")))
             .unwrap_or_else(|| panic!("no line for {id}"))
             .to_string()
     };
     assert!(
-        line_for("epic").contains(r#""subtasks":"1/2""#),
+        line_for("epic").contains(&format!(r#""{SUBTASKS_KEY}":"1/2""#)),
         "parent progress: {json}"
     );
     // A task with no subtasks omits the column (absent, not "0/0").
     assert!(
-        !line_for("solo").contains("subtasks"),
+        !line_for("solo").contains(SUBTASKS_KEY),
         "no subtasks omitted: {json}"
     );
 
     // Opt-in: a plain list never carries the computed column.
     assert!(
-        !ta(&dir, &["list", "--format", "jsonl"]).contains("subtasks"),
+        !ta(&dir, &["list", "--format", "jsonl"]).contains(SUBTASKS_KEY),
         "default omits computed column"
     );
 }

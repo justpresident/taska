@@ -1,5 +1,6 @@
 mod common;
 use common::*;
+use taska::model::TASK_TYPE_KEY;
 
 /// A PRE-1.0 store (a legacy `AddDep` op / `dep`/`type` edge keys) can no longer
 /// be read OR migrated in v1 - the read shims and the depends_on migration passes
@@ -123,7 +124,7 @@ fn repair_schema_applies_lossless_fixes_and_reports_the_rest() {
     // The fixes landed ON DISK (rewritten records, canonical shapes).
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
-        log.contains(r#""task_type":"job""#),
+        log.contains(&format!("\"{}\":\"job\"", TASK_TYPE_KEY)),
         "backfill on disk: {log}"
     );
     assert!(log.contains(r#""points":3"#), "numeric string fixed: {log}");
@@ -224,7 +225,10 @@ fn repair_rename_adopts_a_type_column_only_for_declared_values() {
     // c1 is typed (canonical key on disk, display name on read), its old
     // column gone; c2 keeps the column, untyped, in the remainder.
     let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
-    assert!(log.contains(r#""task_type":"bug""#), "canonical key: {log}");
+    assert!(
+        log.contains(&format!("\"{}\":\"bug\"", TASK_TYPE_KEY)),
+        "canonical key: {log}"
+    );
     let c1 = ta(&dir, &["show", "c1", "--format", "json"]);
     assert!(
         c1.contains(r#""type":"bug""#) && !c1.contains("category"),

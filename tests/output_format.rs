@@ -1,6 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
+use taska::model::{DEPS_KEY, ID_KEY};
 
 #[test]
 fn output_format_columns_and_json() {
@@ -24,11 +25,11 @@ fn output_format_columns_and_json() {
         &[
             "list",
             "--columns",
-            &format!("id,{STATUS_FIELD},title,deps"),
+            &format!("{ID_KEY},{STATUS_FIELD},title,{DEPS_KEY}"),
         ],
     );
     assert!(
-        human.contains("ID") && human.contains(&STATUS_FIELD.to_uppercase()),
+        human.contains(&ID_KEY.to_uppercase()) && human.contains(&STATUS_FIELD.to_uppercase()),
         "header: {human}"
     );
     assert!(human.contains("Alpha"), "title column: {human}");
@@ -53,7 +54,13 @@ fn output_format_columns_and_json() {
     );
     let cols = ta(
         &dir,
-        &["list", "--columns", "id,priority", "--format", "json"],
+        &[
+            "list",
+            "--columns",
+            &format!("{ID_KEY},priority"),
+            "--format",
+            "json",
+        ],
     );
     assert!(
         cols.contains(r#""priority":3"#) && !cols.contains(STATUS_FIELD),
@@ -106,16 +113,24 @@ fn full_view_uses_canonical_column_order_in_both_formats() {
     // custom fields alphabetically (alpha, zeta).
     let human = ta(&dir, &["list", "--full"]);
     let header: Vec<&str> = human.lines().next().unwrap().split_whitespace().collect();
+    let id_upper = ID_KEY.to_uppercase();
+    let deps_upper = DEPS_KEY.to_uppercase();
     assert_eq!(
         header,
-        ["ID", "STATUS", "DEPS", "ALPHA", "ZETA"],
+        [
+            id_upper.as_str(),
+            "STATUS",
+            deps_upper.as_str(),
+            "ALPHA",
+            "ZETA"
+        ],
         "human: {human}"
     );
 
     // JSON --full: the keys appear in that identical order, for one object.
     let json = ta(&dir, &["list", "--full", "--format", "json"]);
     let a_obj = json.lines().find(|l| l.contains("\"a\"")).unwrap();
-    let order: Vec<usize> = ["id", "status", "deps", "alpha", "zeta"]
+    let order: Vec<usize> = [ID_KEY, "status", DEPS_KEY, "alpha", "zeta"]
         .iter()
         .map(|k| a_obj.find(&format!("\"{k}\"")).unwrap())
         .collect();
@@ -126,7 +141,7 @@ fn full_view_uses_canonical_column_order_in_both_formats() {
 
     // `show` shares the same default order.
     let show = ta(&dir, &["show", "a", "--format", "json"]);
-    let sorder: Vec<usize> = ["id", "status", "deps", "alpha", "zeta"]
+    let sorder: Vec<usize> = [ID_KEY, "status", DEPS_KEY, "alpha", "zeta"]
         .iter()
         .map(|k| show.find(&format!("\"{k}\"")).unwrap())
         .collect();
@@ -424,7 +439,7 @@ fn layout_flag_and_config_switch_table_and_record() {
     // `list` defaults to the aligned table (uppercase headers, no record labels).
     let table = ta(&dir, &["list"]);
     assert!(
-        table.contains("ID") && table.contains(&STATUS_FIELD.to_uppercase()),
+        table.contains(&ID_KEY.to_uppercase()) && table.contains(&STATUS_FIELD.to_uppercase()),
         "table header: {table}"
     );
     assert!(!table.contains("id:"), "not records: {table}");
@@ -448,7 +463,7 @@ fn layout_flag_and_config_switch_table_and_record() {
         "show defaults to record"
     );
     assert!(
-        ta(&dir, &["show", "a", "--layout", "table"]).contains("ID"),
+        ta(&dir, &["show", "a", "--layout", "table"]).contains(&ID_KEY.to_uppercase()),
         "show --layout table"
     );
 
@@ -546,9 +561,12 @@ fn deps_column_groups_every_relationship_type() {
     let json = ta(&dir, &["list", "--format", "jsonl"]);
     assert!(
         json.contains(&format!(
-            r#""deps":{{"{BLOCKER}":["db","web"],"{INFO}":["infra"]}}"#
+            r#""{DEPS_KEY}":{{"{BLOCKER}":["db","web"],"{INFO}":["infra"]}}"#
         )),
         "typed map in jsonl: {json}"
     );
-    assert!(json.contains(r#""deps":{}"#), "edge-free task: {json}");
+    assert!(
+        json.contains(&format!("\"{DEPS_KEY}\":{{}}")),
+        "edge-free task: {json}"
+    );
 }

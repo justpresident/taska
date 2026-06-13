@@ -13,7 +13,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DynError;
-use crate::model::TaskState;
+use crate::model::{TaskState, DEPS_KEY, ID_KEY};
 
 /// Smallest `keep_events` we accept in production.
 ///
@@ -422,7 +422,7 @@ pub struct DisplayConfig {
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
-            columns: ["id", "title", "status", "deps"]
+            columns: [ID_KEY, "title", "status", DEPS_KEY]
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect(),
