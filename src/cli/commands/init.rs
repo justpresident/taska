@@ -18,5 +18,8 @@ pub fn cmd_init() -> Result<(), DynError> {
         };
         println!("{msg} {}", file.path.display());
     }
+    // On an interactive terminal, offer to set up shell completion (skipped in
+    // scripts/CI and when it's already installed).
+    super::offer_install();
     Ok(())
 }

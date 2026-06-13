@@ -130,3 +130,36 @@ fn dynamic_completion_offers_task_ids_fields_and_columns() {
         "columns: {cols}"
     );
 }
+
+#[test]
+fn install_writes_the_shim_to_the_user_completion_dir() {
+    let dir = fresh_dir("completions-install");
+    let home = dir.join("home");
+    fs::create_dir_all(&home).unwrap();
+
+    let out = Command::new(ta_bin())
+        .args(["completions", "bash", "--install", "user"])
+        .env("HOME", &home)
+        .env_remove("XDG_DATA_HOME")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let file = home.join(".local/share/bash-completion/completions/ta");
+    let content = fs::read_to_string(&file).expect("shim written to the bash user dir");
+    assert!(
+        content.contains("COMPLETE="),
+        "the installed file is the dynamic shim"
+    );
+
+    // A shell without a standard auto-load dir is rejected.
+    let bad = Command::new(ta_bin())
+        .args(["completions", "powershell", "--install", "user"])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(!bad.status.success(), "unsupported shell rejected");
+}

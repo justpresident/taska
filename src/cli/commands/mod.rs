@@ -25,7 +25,7 @@ pub mod undo;
 pub mod update;
 
 pub use compact::cmd_compact;
-pub use completions::cmd_completions;
+pub use completions::{cmd_completions, offer_install, InstallScope};
 pub use config::{cmd_config, ConfigAction};
 pub use create::cmd_create;
 pub use delete::cmd_delete;

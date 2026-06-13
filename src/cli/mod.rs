@@ -36,7 +36,7 @@ use clap_complete::engine::{ArgValueCandidates, ArgValueCompleter};
 use commands::{
     cmd_compact, cmd_completions, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_edit,
     cmd_init, cmd_list, cmd_prime, cmd_repair, cmd_resolve, cmd_show, cmd_status, cmd_undo,
-    cmd_update, ConfigAction, DepAction,
+    cmd_update, ConfigAction, DepAction, InstallScope,
 };
 
 use crate::schema::FieldOps;
@@ -152,19 +152,25 @@ enum Commands {
         #[command(flatten)]
         output: OutputArgs,
     },
-    /// Print a shell completion setup script for `ta`
+    /// Set up (or `--install`) shell completion for `ta`
     ///
-    /// Source the output into your shell's startup file and TAB-completion works
-    /// for `ta`. Completion is DYNAMIC and store-aware: besides subcommands and
-    /// flags it completes task ids, `list` filter fields, and column names, read
-    /// live from the `.taska` store in the current directory - so it always
-    /// matches your data and config.
+    /// Completion is DYNAMIC and store-aware: besides subcommands and flags it
+    /// completes task ids, `list` filter fields, and column names, read live from
+    /// the `.taska` store in the current directory - so it always matches your data
+    /// and config. By default the registration script is printed; `--install`
+    /// writes it into your shell's completion directory instead.
     #[command(
-        after_help = "Install it by sourcing the output from your shell's startup file:\n\n  bash   echo 'source <(ta completions bash)' >> ~/.bashrc\n  zsh    echo 'source <(ta completions zsh)'  >> ~/.zshrc\n  fish   echo 'ta completions fish | source'  >> ~/.config/fish/config.fish\n\nThen restart your shell. The completion is dynamic and store-aware - it also\ncompletes task ids, `list` filter fields, and column names from the current store."
+        after_help = "Easiest - let `ta` install it (asks user vs system, uses sudo for a system path):\n\n  ta completions bash --install\n  ta completions zsh  --install user\n  ta completions fish --install system\n\nOr source the output yourself from your shell's startup file:\n\n  echo 'source <(ta completions bash)' >> ~/.bashrc\n\nThen start a new shell. (`ta init` and the installer also offer to set this up.)"
     )]
     Completions {
         /// The shell to generate the completion script for
         shell: clap_complete::Shell,
+        /// Install it into your shell instead of printing it. Optionally `user` or
+        /// `system`; with no value you're asked where (and prompted for sudo if a
+        /// system path needs root).
+        #[allow(clippy::option_option)] // clap idiom: absent / `--install` / `--install x`
+        #[arg(long, num_args = 0..=1, value_name = "user|system")]
+        install: Option<Option<InstallScope>>,
     },
     /// Undo the last event(s): `ta undo [--count N] [--remove] [--force]`
     Undo {
@@ -470,7 +476,7 @@ pub fn run() -> Result<(), DynError> {
     match cli.command {
         // Commands that don't operate on an existing store.
         Commands::Init => cmd_init(),
-        Commands::Completions { shell } => cmd_completions(shell),
+        Commands::Completions { shell, install } => cmd_completions(shell, install),
         Commands::GitMerge {
             ancestor,
             current,

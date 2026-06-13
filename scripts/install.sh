@@ -14,7 +14,8 @@
 #   TASKA_INSTALL_DIR     directory to install `ta` into
 #                         (default: /usr/local/bin if writable, else ~/.local/bin)
 #   TASKA_NO_MODIFY_PATH  set to 1 to NOT touch your shell rc; just print the
-#                         PATH line to add yourself
+#                         PATH line to add yourself (also skips completion setup)
+#   TASKA_NO_COMPLETIONS  set to 1 to skip the interactive shell-completion offer
 set -euo pipefail
 
 REPO="justpresident/taska"
@@ -139,6 +140,26 @@ ensure_on_path() {
   fi
 }
 
+# --- offer to install shell completions (interactive only) -----------------
+# Skipped on a non-interactive run (e.g. `curl | bash`) or when opted out. On a
+# TTY it asks, then delegates to `ta completions <shell> --install`, which asks
+# user-vs-system and handles sudo - so the install logic has one implementation.
+ensure_completions() { # ensure_completions <bin-path>
+  local bin="$1" shell reply
+  [ "${TASKA_NO_COMPLETIONS:-0}" = "1" ] && return 0
+  [ "${TASKA_NO_MODIFY_PATH:-0}" = "1" ] && return 0
+  [ -t 0 ] || return 0 # non-interactive: skip, per design
+  shell="${SHELL:-}"; shell="${shell##*/}"
+  case "$shell" in bash | zsh | fish) ;; *) return 0 ;; esac
+  printf '\n' >&2
+  printf 'Set up tab-completion for %s? [y/N] ' "$shell" >&2
+  read -r reply || return 0
+  case "$reply" in
+    y | Y | yes | YES) "$bin" completions "$shell" --install || warn "completion setup failed" ;;
+    *) info "skipped - enable later with: ${BIN} completions ${shell} --install" ;;
+  esac
+}
+
 # --- fall back to building from crates.io ----------------------------------
 fallback_cargo() {
   if have cargo; then
@@ -214,9 +235,11 @@ main() {
     warn "an update (this script or 'cargo install ${CRATE}') isn't hidden behind a stale binary."
   fi
 
+  ensure_completions "${dir}/${BIN}"
+
   printf '\n' >&2
   "${dir}/${BIN}" --version >&2 2>/dev/null || true
-  printf '\nGet started:\n  cd your-repo\n  %s init\n  %s create my-task title="My first task" status=open\n\n' "$BIN" "$BIN" >&2
+  printf '\nGet started:\n  cd your-repo\n  %s init\n  %s create my-task title="My first task" status=open\n\nTab-completion: %s completions <shell> --install\n\n' "$BIN" "$BIN" "$BIN" >&2
 }
 
 main "$@"
