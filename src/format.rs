@@ -229,7 +229,7 @@ pub(crate) fn render_rows(
         OutputFormat::Human => {
             let color = want_color(display.output.no_color);
             match display.layout.unwrap_or(Layout::Table) {
-                Layout::Table => render_human(
+                Layout::Table => render_table(
                     tasks,
                     columns,
                     &truncation_caps(columns, display, cfg),
@@ -237,7 +237,7 @@ pub(crate) fn render_rows(
                     blockers,
                     style,
                 ),
-                Layout::List => render_records(tasks, columns, color, blockers, style),
+                Layout::List => render_list(tasks, columns, color, blockers, style),
             }
         }
     }
@@ -245,7 +245,7 @@ pub(crate) fn render_rows(
 
 /// A vertical record per task (the `list` layout), records separated by a blank
 /// line. Each record is the same view `show` produces, so the two share a format.
-fn render_records(
+fn render_list(
     tasks: &[&TaskState],
     columns: &[String],
     color: bool,
@@ -418,7 +418,7 @@ pub(crate) fn full_columns(tasks: &[&TaskState], cfg: &DisplayConfig) -> Vec<Str
 /// [`RowStyle`]: a done task's row greys, else `id`/the status column take their
 /// palette colors and `deps` carries per-type-group styling. Each cell travels
 /// with its plain display width, so alignment is exact even around escapes.
-fn render_human(
+fn render_table(
     tasks: &[&TaskState],
     columns: &[String],
     caps: &[usize],
@@ -733,7 +733,7 @@ mod tests {
 
         // The human header tokens are exactly the columns, in order.
         let full = display(OutputFormat::Human, true, None);
-        let human = render_human(
+        let human = render_table(
             &[&t],
             &cols,
             &truncation_caps(&cols, &full, &cfg),
@@ -920,7 +920,7 @@ mod tests {
 
         // color=true: id cyan (36), STATUS_FIELD green (32), headers + gating deps
         // groups bold (1), info groups plain (no dim), reset.
-        let colored = render_human(&[&t], &cols, &caps, true, &blockers(), style());
+        let colored = render_table(&[&t], &cols, &caps, true, &blockers(), style());
         assert!(colored.contains("\x1b[36m"), "id cyan: {colored:?}");
         assert!(colored.contains("\x1b[32m"), "status green: {colored:?}");
         assert!(
@@ -936,7 +936,7 @@ mod tests {
         assert!(colored.contains("api") && colored.contains("open"));
 
         // color=false: not a single escape byte.
-        let plain = render_human(&[&t], &cols, &caps, false, &blockers(), style());
+        let plain = render_table(&[&t], &cols, &caps, false, &blockers(), style());
         assert!(!plain.contains('\x1b'), "no escapes when off: {plain:?}");
 
         // The record view colors too, and stays clean when off.
@@ -964,14 +964,14 @@ mod tests {
         let caps = [0, 0];
 
         let open = task("a", &[], &[(STATUS_FIELD, serde_json::json!("open"))]);
-        let o = render_human(&[&open], &cols, &caps, true, &blockers(), style());
+        let o = render_table(&[&open], &cols, &caps, true, &blockers(), style());
         assert!(
             o.contains("\x1b[36m") && o.contains("\x1b[32m"),
             "open: id cyan + status green: {o:?}"
         );
 
         let done = task("b", &[], &[(STATUS_FIELD, serde_json::json!(DONE_STATUS))]);
-        let d = render_human(&[&done], &cols, &caps, true, &blockers(), style());
+        let d = render_table(&[&done], &cols, &caps, true, &blockers(), style());
         assert!(d.contains("\x1b[2m"), "done: cells dim/grey: {d:?}");
         assert!(
             !d.contains("\x1b[36m") && !d.contains("\x1b[32m"),

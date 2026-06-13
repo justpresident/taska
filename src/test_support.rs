@@ -161,7 +161,7 @@ pub fn state(tasks: &[TaskState]) -> HashMap<String, TaskState> {
 /// so a helper that left color enabled would make every content assertion below
 /// TTY-dependent (passing under `cargo test`'s piped output, failing in an
 /// interactive terminal). Color wrapping itself is covered separately by calling
-/// `render_human`/`render_record` with an explicit `color` bool.
+/// `render_table`/`render_record` with an explicit `color` bool.
 pub fn display(format: OutputFormat, full: bool, columns: Option<&[&str]>) -> DisplayArgs {
     DisplayArgs {
         output: OutputArgs {
