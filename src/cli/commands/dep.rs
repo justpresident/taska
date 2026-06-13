@@ -1,7 +1,7 @@
 //! The `ta dep` command group - add, remove, and inspect (tree/cycles/plan)
 //! typed relationship edges between tasks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use clap::Subcommand;
 use serde_json::Value;
@@ -191,7 +191,7 @@ fn dep_tree(
 /// requested column's value (truncated), then the `[subtasks d/t]` rollup. The
 /// id/columns are colored by the shared [`RowStyle`], identical to a `list` row
 /// (id cyan, the status column green); a done node greys whole (dim). The
-/// connectors and position markers (`(cycle)`/`(missing)`/`(shown elsewhere)`)
+/// connectors and position markers (`(cycle)`/`(missing)`/`(expanded above|below)`)
 /// are added by the caller.
 fn node_label(node: &Node, color: bool, style: RowStyle) -> String {
     let done = node.done;
@@ -251,16 +251,49 @@ fn render_cell(v: &Value) -> String {
 /// Render the forest to a tree with Unicode box-drawing connectors (written as
 /// `\u` escapes so the source stays ASCII while the output shows the glyphs).
 fn render_human_forest(forest: &[Node], color: bool, style: RowStyle) -> String {
+    // Pre-order line index of each id's *expanded* occurrence (the one drawn with
+    // children), so a collapsed reference can say whether that occurrence sits
+    // above or below it in the output.
+    let mut expanded_at: HashMap<&str, usize> = HashMap::new();
+    let mut idx = 0usize;
+    index_expanded(forest, &mut idx, &mut expanded_at);
+
     let mut out = String::new();
+    let mut line = 0usize;
     for node in forest {
         out.push_str(&node_label(node, color, style));
         out.push('\n');
-        push_kids(node, "", &mut out, color, style);
+        line += 1;
+        push_kids(node, "", &mut out, color, style, &mut line, &expanded_at);
     }
     out.trim_end_matches('\n').to_string()
 }
 
-fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool, style: RowStyle) {
+/// Record, in pre-order, the line index of each id's *expanded* occurrence (a node
+/// drawn with children). Collapsed/cycle/missing occurrences carry no subtree, so
+/// they aren't recorded. Walks in exactly [`render_human_forest`]'s emit order.
+fn index_expanded<'a>(nodes: &'a [Node], idx: &mut usize, at: &mut HashMap<&'a str, usize>) {
+    for node in nodes {
+        let here = *idx;
+        *idx += 1;
+        if let Kids::Children(kids) = &node.kids {
+            if !kids.is_empty() {
+                at.insert(node.id.as_str(), here);
+            }
+            index_expanded(kids, idx, at);
+        }
+    }
+}
+
+fn push_kids(
+    node: &Node,
+    prefix: &str,
+    out: &mut String,
+    color: bool,
+    style: RowStyle,
+    line: &mut usize,
+    expanded_at: &HashMap<&str, usize>,
+) {
     let Kids::Children(kids) = &node.kids else {
         return;
     };
@@ -275,6 +308,7 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool, style: Ro
     let n = kids.len();
     for (i, kid) in kids.iter().enumerate() {
         let last = i + 1 == n;
+        let here = *line;
         out.push_str(prefix);
         out.push_str(anchor);
         out.push_str(if last {
@@ -286,18 +320,23 @@ fn push_kids(node: &Node, prefix: &str, out: &mut String, color: bool, style: Ro
         match &kid.kids {
             Kids::Missing => out.push_str(" (missing)"),
             Kids::Cycle => out.push_str(" (cycle)"),
-            // The node is shown here but its subtree is expanded at the node's
-            // other (canonical-first) occurrence - which, with `--reverse`, may be
-            // below rather than above, so the marker stays direction-neutral.
-            Kids::Collapsed => out.push_str(" (shown elsewhere)"),
+            // Shown here, but its subtree is drawn at the node's expanded
+            // occurrence; point to it (above/below depends on order, esp.
+            // `--reverse`, so it's resolved from the recorded line index).
+            Kids::Collapsed => out.push_str(match expanded_at.get(kid.id.as_str()) {
+                Some(&e) if e < here => " (expanded above)",
+                Some(_) => " (expanded below)",
+                None => " (expanded elsewhere)",
+            }),
             Kids::Children(_) => {}
         }
         out.push('\n');
+        *line += 1;
         let child_prefix = format!(
             "{prefix}{anchor}{}",
             if last { "   " } else { "\u{2502}  " }
         );
-        push_kids(kid, &child_prefix, out, color, style);
+        push_kids(kid, &child_prefix, out, color, style, line, expanded_at);
     }
 }
 

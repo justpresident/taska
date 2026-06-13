@@ -216,10 +216,10 @@ fn dep_tree_nests_dependencies_and_collapses_shared_nodes() {
         "e nested under d: {tree}"
     );
     // d (with its e subtree) is reached again under c, but was already expanded
-    // under b - the second occurrence collapses rather than reprinting.
+    // under b (above) - the second occurrence collapses, pointing to it.
     assert!(
-        tree.contains("(shown elsewhere)"),
-        "shared node collapsed: {tree}"
+        tree.contains("(expanded above)"),
+        "shared node collapsed, pointing up: {tree}"
     );
 }
 
@@ -673,8 +673,8 @@ fn reverse_flips_sibling_order_without_deepening_the_tree() {
     let fwd = ta(&dir, &["dep", "tree", "r"]);
     let rev = ta(&dir, &["dep", "tree", "r", "--reverse"]);
     assert!(
-        rev.contains("(shown elsewhere)"),
-        "x's reference under z still collapses: {rev}"
+        rev.contains("(expanded below)"),
+        "x's reference under z collapses, pointing down to x's later expansion: {rev}"
     );
     assert_eq!(
         depth(&fwd),
