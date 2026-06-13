@@ -219,3 +219,33 @@ fn undo_compensates_committed_events_in_a_nested_store() {
         "state walked back to the committed prior value"
     );
 }
+
+#[test]
+fn undo_preview_renders_a_field_diff_of_changed_columns() {
+    let dir = fresh_dir("undo-diff");
+    init_renamed_open(&dir); // status displayed as `state`, blocker as `needs`
+    ta(&dir, &["create", "api", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["create", "db", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["update", "api", &format!("{STATUS_FIELD}=closed")]);
+    ta(&dir, &["dep", "add", "api", &format!("{BLOCKER}=db")]);
+
+    // The preview (printed even under --force, before applying) is a per-task diff
+    // of ONLY the changed columns: current-state lines marked `-`, reverted `+`.
+    // Field keys are CANONICAL (the events are), so status shows as `status`.
+    let out = ta(&dir, &["undo", "--count", "2", "--force"]);
+    assert!(out.contains("Undoing 2 event(s)"), "header: {out}");
+    assert!(
+        out.contains(&format!("- {STATUS_KEY}: closed")),
+        "current status removed: {out}"
+    );
+    assert!(
+        out.contains(&format!("+ {STATUS_KEY}: open")),
+        "reverted status added: {out}"
+    );
+    assert!(
+        out.contains(&format!("- {DEPS_KEY}:")),
+        "the added edge is shown removed: {out}"
+    );
+    // Only changed columns/tasks: the untouched `db` task never appears.
+    assert!(!out.contains("db:"), "unaffected task absent: {out}");
+}

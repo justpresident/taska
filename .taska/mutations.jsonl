@@ -303,3 +303,4 @@
 {"seq":303,"timestamp":"2026-06-13T17:33:52.482853481Z","op":"AddEdge","task_id":"v1.0.0","rel":"depends_on","target":"shell-completions"}
 {"seq":304,"timestamp":"2026-06-13T17:49:57.964731859Z","op":"AddEdge","task_id":"v1.0.0","rel":"depends_on","target":"undo-diff-output"}
 {"seq":305,"timestamp":"2026-06-13T17:52:31.127150539Z","op":"AddEdge","task_id":"v1.0.0","rel":"depends_on","target":"self-update"}
+{"seq":306,"timestamp":"2026-06-13T19:17:41.817781880Z","op":"Update","task_id":"undo-diff-output","status":"closed"}

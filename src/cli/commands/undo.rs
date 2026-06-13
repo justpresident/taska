@@ -4,11 +4,14 @@
 //! [`crate::action::undo`]; this file renders the preview, runs the confirm, and
 //! reports.
 
+use std::collections::BTreeSet;
+
 use crate::action::undo::{apply, plan};
 use crate::cli::confirm;
 use crate::error::DynError;
-use crate::model::TaskState;
-use crate::storage::FileStore;
+use crate::format::{render_list_record, sgr, want_color, RowStyle};
+use crate::model::{TaskState, DEPS_KEY, STATUS_KEY};
+use crate::storage::{EventStore, FileStore};
 
 /// Undo the last `count` event(s) in the log.
 ///
@@ -29,18 +32,53 @@ pub fn cmd_undo(
         return Ok(());
     };
 
-    // PREVIEW: name each undone event, then show each affected task's before/after.
+    // PREVIEW: name each undone event, then a per-task colored diff of ONLY the
+    // changed columns/deps - the current state's lines marked `-` (red), the
+    // reverted state's `+` (green), rendered through `show`'s record renderer so
+    // the cell coloring matches list/show exactly.
     println!("Undoing {} event(s):", undo.count);
     for event in &undo.undone {
         println!("  seq {}: {:?} `{}`", event.seq, event.op, event.task_id);
     }
+    let color = want_color(false);
+    let config = store.config();
+    let blockers = config.relationships.blocker_types();
+    // undo's before/after are CANONICAL state, so key the style on the canonical
+    // status field (not its display name) for correct status/done coloring.
+    let style = RowStyle {
+        status_field: STATUS_KEY,
+        done_status: &config.workflow.done_status,
+    };
     for change in &undo.changes {
-        println!(
-            "  - {}: {} -> {}",
-            change.id,
-            describe(change.before.as_ref()),
-            describe(change.after.as_ref())
+        let cols = changed_columns(change.before.as_ref(), change.after.as_ref());
+        let before = diff_block(
+            change.before.as_ref(),
+            &cols,
+            "- ",
+            "31",
+            color,
+            &blockers,
+            style,
         );
+        let after = diff_block(
+            change.after.as_ref(),
+            &cols,
+            "+ ",
+            "32",
+            color,
+            &blockers,
+            style,
+        );
+        if before.is_none() && after.is_none() {
+            continue;
+        }
+        println!("{}:", change.id);
+        if let Some(b) = before {
+            println!("{b}");
+        }
+        if let Some(a) = after {
+            println!("{a}");
+        }
     }
 
     if !confirm("Apply this undo?", force)? {
@@ -60,24 +98,63 @@ pub fn cmd_undo(
     Ok(())
 }
 
-/// Render a task's salient state for the before/after preview: `(absent)` for a
-/// missing task, else the JSON of its custom fields plus `deps=<typed map>` when
-/// it has any edge - the same `{type: [targets...]}` shape the `deps` column
-/// shows. Mirrors the field-centric framing of the other task views.
-fn describe(task: Option<&TaskState>) -> String {
-    task.map_or_else(
-        || "(absent)".to_string(),
-        |t| {
-            let fields =
-                serde_json::to_string(&t.custom_fields).unwrap_or_else(|_| "{}".to_string());
-            if t.relationships.is_empty() {
-                fields
+/// The custom-field and `deps` columns whose value differs between two task
+/// states - what the undo will actually change. A missing state (a create/delete
+/// being reversed) contributes all of the other side's columns.
+fn changed_columns(before: Option<&TaskState>, after: Option<&TaskState>) -> Vec<String> {
+    let mut keys: BTreeSet<&str> = BTreeSet::new();
+    for t in [before, after].into_iter().flatten() {
+        keys.extend(t.custom_fields.keys().map(String::as_str));
+    }
+    let mut cols: Vec<String> = keys
+        .into_iter()
+        .filter(|k| {
+            before.and_then(|s| s.custom_fields.get(*k))
+                != after.and_then(|s| s.custom_fields.get(*k))
+        })
+        .map(str::to_string)
+        .collect();
+    if before.map(|s| &s.relationships) != after.map(|s| &s.relationships) {
+        cols.push(DEPS_KEY.to_string());
+    }
+    cols
+}
+
+/// Render the changed columns a single state actually carries as a marked diff
+/// block: each [`render_list_record`] line prefixed with `marker` in SGR `code`.
+/// `None` when this side has none of the changed columns (e.g. a field only the
+/// other side has, so it shows on just one of the `-`/`+` blocks).
+fn diff_block(
+    state: Option<&TaskState>,
+    changed: &[String],
+    marker: &str,
+    code: &str,
+    color: bool,
+    blockers: &BTreeSet<String>,
+    style: RowStyle,
+) -> Option<String> {
+    let task = state?;
+    let cols: Vec<String> = changed
+        .iter()
+        .filter(|c| {
+            if c.as_str() == DEPS_KEY {
+                !task.relationships.is_empty()
             } else {
-                let deps =
-                    serde_json::to_string(&t.relationships).unwrap_or_else(|_| "{}".to_string());
-                format!("{fields} deps={deps}")
+                task.custom_fields.contains_key(c.as_str())
             }
-        },
+        })
+        .cloned()
+        .collect();
+    if cols.is_empty() {
+        return None;
+    }
+    let m = sgr(marker, code, color);
+    Some(
+        render_list_record(task, &cols, color, blockers, style)
+            .lines()
+            .map(|l| format!("  {m}{l}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
     )
 }
 
@@ -85,34 +162,93 @@ fn describe(task: Option<&TaskState>) -> String {
 #[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
-    use crate::model::DEPS_KEY;
     use crate::test_support::names::*;
     use crate::test_support::{task, task_rel};
 
+    fn style() -> RowStyle<'static> {
+        RowStyle {
+            status_field: STATUS_KEY,
+            done_status: DONE_STATUS,
+        }
+    }
+
     #[test]
-    fn describe_renders_absent_fields_and_typed_deps() {
-        assert_eq!(describe(None), "(absent)");
-        let mut t = task_rel(
+    fn changed_columns_reports_differing_fields_and_deps() {
+        let before = task(
             "a",
-            BLOCKER,
-            &["d1"],
-            &[(STATUS_FIELD, serde_json::json!("open"))],
+            &[],
+            &[
+                (STATUS_KEY, serde_json::json!("open")),
+                ("owner", serde_json::json!("x")),
+            ],
         );
-        t.relationships
-            .insert(INFO.to_string(), vec!["d2".to_string()]);
-        let out = describe(Some(&t));
-        assert!(
-            out.contains(&format!(r#""{STATUS_FIELD}":"open""#)),
-            "fields: {out}"
+        let after = task(
+            "a",
+            &[],
+            &[
+                (STATUS_KEY, serde_json::json!("closed")),
+                ("owner", serde_json::json!("x")),
+            ],
         );
-        assert!(
-            out.contains(&format!(
-                r#"{DEPS_KEY}={{"{BLOCKER}":["d1"],"{INFO}":["d2"]}}"#
-            )),
-            "typed deps map shown: {out}"
+        // Only the status value differs; `owner` is identical and there are no deps.
+        assert_eq!(
+            changed_columns(Some(&before), Some(&after)),
+            vec![STATUS_KEY.to_string()]
         );
 
-        let no_deps = task("b", &[], &[]);
-        assert_eq!(describe(Some(&no_deps)), "{}", "empty fields, no deps");
+        // A created task (no `before`) contributes all its columns, deps included.
+        let created = task_rel(
+            "a",
+            BLOCKER,
+            &["d"],
+            &[(STATUS_KEY, serde_json::json!("open"))],
+        );
+        let mut cols = changed_columns(None, Some(&created));
+        cols.sort();
+        assert_eq!(cols, vec![DEPS_KEY.to_string(), STATUS_KEY.to_string()]);
+    }
+
+    #[test]
+    fn diff_block_marks_only_the_columns_each_side_carries() {
+        let before = task_rel(
+            "a",
+            BLOCKER,
+            &["d"],
+            &[(STATUS_KEY, serde_json::json!("closed"))],
+        );
+        let after = task("a", &[], &[(STATUS_KEY, serde_json::json!("open"))]); // deps removed
+        let changed = changed_columns(Some(&before), Some(&after));
+        let blockers = BTreeSet::new();
+
+        // `before` carries status + deps, both marked `-`.
+        let b = diff_block(
+            Some(&before),
+            &changed,
+            "- ",
+            "31",
+            false,
+            &blockers,
+            style(),
+        )
+        .unwrap();
+        assert!(
+            b.contains(&format!("- {STATUS_KEY}: closed")) && b.contains(&format!("- {DEPS_KEY}:")),
+            "before block: {b}"
+        );
+        // `after` carries only status (deps gone), so no deps line on the `+` side.
+        let a = diff_block(
+            Some(&after),
+            &changed,
+            "+ ",
+            "32",
+            false,
+            &blockers,
+            style(),
+        )
+        .unwrap();
+        assert!(
+            a.contains(&format!("+ {STATUS_KEY}: open")) && !a.contains(DEPS_KEY),
+            "after block, no deps: {a}"
+        );
     }
 }
