@@ -109,14 +109,12 @@ Described in docs/crate_release_process.md - use it only when user asks to relea
 
 ## This repo dogfoods taska
 
-The repo tracks its own work in `.taska/`, so:
+The repo tracks its own work in `.taska/`. The day-to-day task-tracking workflow - the command cheatsheet and the file-a-task/notes/commit-with-code habits - is the **Task tracking (taska)** block below, which `ta init` auto-writes between its `TASKA INTEGRATION` markers (generic and config-agnostic; don't hand-edit inside the markers, `ta init` regenerates the block). This section is the repo-specific overlay: it does NOT repeat the block, only the rules that override or extend it.
 
-- **Mutate that store only through the `ta` binary** (`ta create`, `ta update <id> status=closed`, ...) - never hand-edit `mutations.jsonl`/`baseline.jsonl`, and never `git restore` it out from under in-flight work; either corrupts the append-only log.
-- **Commit the eventlog change with the code it describes** - closing a task (`status=closed`; `done_status` is `closed`) goes in the same commit as the feature, and a pending eventlog change is flushed before the next task starts.
-- `config.toml` is plain config, not the eventlog - edit it directly (and you must when adding a config option; see above).
-- The roadmap lives in the store: `ta list` / `ta show <id>` carry the open tasks and the design questions in their notes.
-- **File a roadmap task** with `ta create <kebab-id> type=task title="..." notes="..."` - one task per feature; put the design questions in `notes` (read untruncated with `ta show <id> --full`). Don't pass `status=`: `ta create` stamps the `[workflow] default_status` (`todo`) automatically.
-- **The store enforces a schema** (`[task_types.task]` in `.taska/config.toml`, `untyped_tasks = "deny"`): every task needs `type=task`, `title` and `notes` are required, `status` is the enum `todo|in_progress|closed`, optional `priority` is `low|medium|high`, and the type is `closed` - an undeclared field name is rejected, so adding a new field to the workflow starts with declaring it in the config.
+- **Run every `ta` command as `cargo run -- <subcommand>`.** The block speaks of a `ta` binary; in this repo that always means `cargo run --` (so `ta list` -> `cargo run -- list`, `ta prime` -> `cargo run -- prime`, ...). Never invoke a `ta` on your PATH: a stale or GLIBC-mismatched installed binary runs the wrong code and can silently corrupt the append-only log.
+- **Never `git restore` `.taska/`** out from under in-flight work - it rolls the append-only log back mid-edit and corrupts it (the block already covers never hand-editing the JSONL).
+- **`config.toml` is plain config, not the eventlog** - edit it directly, and you must when adding a config option (see *Adding a config option: backfill the local config* above).
+- **The store enforces a CLOSED schema** (`[task_types.task]`, `untyped_tasks = "deny"`): a field must be declared in `.taska/config.toml` before any task can use it, so adding a workflow field starts with a config edit. Run `cargo run -- prime` for the exact field set.
 
 <!-- BEGIN TASKA INTEGRATION v4 hash:70640e33 -->
 ## Task tracking (taska)
