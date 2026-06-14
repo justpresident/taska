@@ -87,10 +87,17 @@ jobs:
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
           echo "archive=$name.tar.gz" >> "$GITHUB_OUTPUT"
 
+      # Upload via the `gh` CLI (a Go binary preinstalled on the runners) rather
+      # than a third-party JS action - no Node.js runtime, so no node20/node24
+      # deprecation warnings to chase. The release always exists here (this fires
+      # on `release: published`, and workflow_dispatch targets an existing tag's
+      # release); `--clobber` makes a re-run idempotent.
       - name: Attach to the release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.name }}
-          files: |
-            ${{ steps.package.outputs.archive }}
-            ${{ steps.package.outputs.archive }}.sha256
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release upload "${{ steps.tag.outputs.name }}" \
+            "${{ steps.package.outputs.archive }}" \
+            "${{ steps.package.outputs.archive }}.sha256" \
+            --clobber
