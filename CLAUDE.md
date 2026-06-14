@@ -107,10 +107,10 @@ Two gotchas when writing tests:
 ## Release process / Publishing a new version of a crate
 Described in docs/crate_release_process.md - use it only when user asks to release a new version.
 
-<!-- BEGIN TASKA INTEGRATION v5 hash:f517fefb -->
+<!-- BEGIN TASKA INTEGRATION v4 hash:70640e33 -->
 ## Task tracking (taska)
 
-This repo tracks work in a local, git-native store (`.taska/`) - drive it through the `ta` CLI, never hand-edit `.taska/` and never `git restore` it out from under in-flight work (either corrupts the append-only log). Field names, statuses, task types, and relationships are defined by `.taska/config.toml` and vary per repo, so run `ta prime` for THIS store's schema and copy-paste-ready examples, and `ta <command> --help` for a command's flags.
+This repo tracks work in a local, git-native store (`.taska/`) - drive it through the `ta` CLI, never hand-edit `.taska/`. Field names, statuses, task types, and relationships are defined by `.taska/config.toml` and vary per repo, so run `ta prime` for THIS store's schema and copy-paste-ready examples, and `ta <command> --help` for a command's flags.
 
 ```bash
 ta list --ready                     # actionable work: not done, all deps done
