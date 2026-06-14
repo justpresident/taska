@@ -42,6 +42,19 @@ crates.io - the two halves are independent.
    cargo fmt --all -- --check
    cargo test --all --all-features
    ```
+   Then **validate the tutorials**. The `tutorials/` walkthroughs are NOT run by
+   `cargo test` - they deliberately don't `set -e` (some steps fail on purpose),
+   so a broken step can't fail a test; they're release-readiness UX material, so
+   validate them here by hand. Build the binary, run every walkthrough end to
+   end, and READ the output: each command's result should match its narration,
+   with no stray `error:` / `is not a field` / `validation failed` outside the
+   intentional demos (03-merge's surfaced conflict, 09-schemas' four-violation
+   create). Fix any drift - a renamed flag, changed output, a new write gate like
+   the typo guard requiring `--new-field` - and commit before continuing.
+   ```bash
+   cargo build
+   PATH="$PWD/target/debug:$PATH" TUTORIAL_NONINTERACTIVE=1 bash tutorials/run-all.sh 2>&1 | less
+   ```
 
 ## Update the changelog
 
