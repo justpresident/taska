@@ -2,8 +2,84 @@
 
 All notable changes to `taska` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
-[Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes bump the
-minor). History before 0.3.0 lives in the git log.
+[Semantic Versioning](https://semver.org/). History before 0.3.0 lives in the
+git log.
+
+## [1.0.0] - 2026-06-14
+
+First **stable** release. It rounds out the agent-facing surface (a config
+primer, an editor round-trip, shell completion, a self-updater), ships prebuilt
+binaries and a one-line installer, adds a soft typo guard for field names, and
+drops every pre-1.0 on-disk compatibility shim - so `taska` now reads only
+v1.0+ stores.
+
+### Added
+- **`ta prime`** - a config-tailored primer for an AI agent driving the store:
+  this store's actual status field/values, declared task types and
+  relationships, the core commands in that vocabulary, and a count summary -
+  generated live from the config so it never goes stale (`--format json` for the
+  raw facts).
+- **Agent integration on `ta init`:** writes a config-agnostic, marker-delimited
+  task-tracking block into `AGENTS.md`/`CLAUDE.md` (created if absent, updated
+  idempotently), pointing agents at `ta prime` and `ta <command> --help`.
+- **`ta edit` / `ed`** - round-trip a task's fields through `$EDITOR` as TOML (or
+  `--json`); the saved diff funnels through the same write gate as `ta update`,
+  with a re-edit loop on any error.
+- **`ta self-update`** - download this platform's prebuilt binary from the latest
+  GitHub release and replace the running executable in place (`--check` to report
+  only, `--force` to reinstall); warns if another `ta` still shadows it on PATH.
+- **Shell completion** - `ta completions <shell>` for bash/zsh/fish/powershell/
+  elvish, **dynamic and store-aware** (completes live task ids, `list` filter
+  fields, and column names), with `--install [user|system]` to set it up (sudo
+  fallback for system paths). `ta init` and the installer offer it interactively.
+- **Prebuilt binaries and a `curl | bash` installer.** A tag-triggered workflow
+  ships static-musl Linux and macOS (Intel + Apple Silicon) `ta` binaries on the
+  GitHub release; `install.sh` downloads, checksum-verifies, and installs the
+  right one (or falls back to `cargo install`) and puts it on PATH.
+- **Soft typo guard.** A field name no task uses yet is rejected - with a
+  did-you-mean suggestion - unless you pass `--new-field`, so a misspelling
+  (`titel`, `pirority`) can't silently create a phantom column. Schemaless stores
+  stay schemaless; the first task on an empty store seeds the vocabulary.
+- **Richer `ta list` filters:** comparison operators `field>value` / `>=` / `<` /
+  `<=` (numeric or lexicographic, so RFC 3339 dates compare chronologically), and
+  element-wise matching on multi-valued fields - `tags=urgent` matches a member,
+  `scores>=5` matches if any element does.
+- **Shadowed-binary warning.** When more than one `ta` is on PATH, every command
+  warns, probes each copy's version, and prints the exact `rm` that keeps only
+  the newest - so an update can't land on a copy you never run.
+
+### Changed
+- **Output is plain ASCII** (no Unicode typography); `dep tree` keeps its
+  box-drawing connectors.
+- **`dep tree` rendering:** subtasks show a done-state checkbox (`[x]` / `[ ]`)
+  with connectors aligned under it, a parent rolls up `[subtasks done/total]`, a
+  collapsed shared node points to where it's expanded (`expanded above` /
+  `below`), and `--reverse` flips sibling order.
+- **Consistent coloring across every command.** One styling rule drives `list`,
+  `show`, and `dep tree` (id cyan, the status column green, a done task's whole
+  row/record dimmed, deps colored by kind); informational relationships render
+  plain rather than dim.
+- **`ta undo` preview is a colored per-field `-`/`+` diff** of just the columns
+  that change, styled like `ta show`.
+- **`ta list` regex operators are `=~` / `!~`** (the bare `~` / `!=~` spellings
+  are gone).
+- **Frontend-agnostic core** (for library consumers): command logic moved into an
+  `action` layer and the write gate / schema law into a `schema` module, both
+  depending only on the storage trait, so a non-CLI frontend can drive the same
+  functionality through one verified write choreography.
+
+### Fixed
+- Repeated `+=` / `-=` to the same field in one command now accumulates **all**
+  operands (previously all but the last were dropped).
+- `install.sh` works on macOS (bash 3.2 + BSD tools) and no longer trips an
+  unbound-variable error during cleanup.
+
+### Removed
+- **All pre-1.0 on-disk compatibility (breaking).** This binary reads only v1.0+
+  stores: the legacy edge spellings (`AddDep`/`RemoveDep`, `type`/`dep` payload
+  keys), untyped edges, and the top-level `depends_on` baseline field are no
+  longer accepted. A pre-1.0 store is detected and refused on read - migrate it
+  with `ta repair --migrate` on the **last 0.x release** first, then upgrade.
 
 ## [0.5.0] - 2026-06-07
 

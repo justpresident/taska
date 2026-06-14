@@ -1,6 +1,6 @@
 [package]
 name = "taska"
-version = "0.5.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Roman Studenikin <justpresident@gmail.com>"]
 description = "Local-first, git-native task & dependency tracker for humans and ai agents"
@@ -10,8 +10,11 @@ license = "Apache-2.0"
 readme = "README.md"
 keywords = ["task", "todo", "agentic", "git", "cli"]
 categories = ["command-line-utilities", "development-tools"]
-# Keep the published tarball to the crate itself; internal/draft docs stay in the repo.
-exclude = ["/docs"]
+# Ship the code, its tests/benches, and the user-facing docs - nothing else.
+# Excluded: /docs (drafts), the dogfood task store, the tutorial walkthroughs, CI
+# config, the agent guide, and the installer script - all dev/repo material a
+# crate consumer doesn't need.
+exclude = ["/docs", "/.taska", "/tutorials", "/.github", "/CLAUDE.md", "/scripts"]
 
 # Release builds (and the binaries the release workflow ships) are size- and
 # speed-optimized: fat LTO needs codegen-units = 1 to inline across the whole
