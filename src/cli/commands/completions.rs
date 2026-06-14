@@ -43,9 +43,11 @@ pub fn cmd_completions(
     install_shim(shell, scope, &shim)
 }
 
-/// Offer (interactively, on a TTY) to install completions for the user's shell -
-/// the hook `ta init` runs. A no-op when non-interactive, the shell is unknown or
-/// unsupported, or completions are already installed.
+/// Install completions for the user's shell - the hook `ta init` runs on a TTY.
+/// Completions are non-destructive and always useful, so this never asks WHETHER
+/// to set them up, only WHERE (user vs system, via [`prompt_scope`], defaulting
+/// to a no-root user install on Enter). A no-op when non-interactive, the shell
+/// is unknown or unsupported, or completions are already installed.
 pub fn offer_install() {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return;
@@ -59,9 +61,6 @@ pub fn offer_install() {
         .filter_map(|s| target_path(shell, s).ok())
         .any(|p| p.exists())
     {
-        return;
-    }
-    if !ask(&format!("Set up `ta` tab-completion for {shell}?"), false) {
         return;
     }
     let Ok(shim) = shim(shell) else { return };
@@ -221,12 +220,14 @@ fn ensure_zsh_fpath(dir: &Path) -> Result<(), DynError> {
 
 // --- prompts ---------------------------------------------------------------
 
-/// Ask `user` vs `system` (default user); non-interactive -> user.
+/// Ask `user` vs `system` (default user); non-interactive -> user. The prompt
+/// names what it's for, since it's the first thing the caller shows (there's no
+/// preceding yes/no - completions always get set up, this only picks where).
 fn prompt_scope() -> InstallScope {
     if !std::io::stdin().is_terminal() {
         return InstallScope::User;
     }
-    print!("Install for (u)ser or (s)ystem? [u] ");
+    print!("Install `ta` completions for (u)ser or (s)ystem? [u] ");
     let _ = std::io::stdout().flush();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_ok() {
@@ -236,24 +237,6 @@ fn prompt_scope() -> InstallScope {
         }
     }
     InstallScope::User
-}
-
-/// A `[y/N]` (or `[Y/n]`) prompt; non-interactive returns `default`.
-fn ask(question: &str, default: bool) -> bool {
-    if !std::io::stdin().is_terminal() {
-        return default;
-    }
-    print!("{question} {} ", if default { "[Y/n]" } else { "[y/N]" });
-    let _ = std::io::stdout().flush();
-    let mut line = String::new();
-    if std::io::stdin().read_line(&mut line).is_err() {
-        return default;
-    }
-    match line.trim().to_ascii_lowercase().as_str() {
-        "y" | "yes" => true,
-        "n" | "no" => false,
-        _ => default,
-    }
 }
 
 /// The login shell as a completion `Shell`, from `$SHELL`.

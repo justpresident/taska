@@ -160,7 +160,7 @@ enum Commands {
     /// and config. By default the registration script is printed; `--install`
     /// writes it into your shell's completion directory instead.
     #[command(
-        after_help = "Easiest - let `ta` install it (asks user vs system, uses sudo for a system path):\n\n  ta completions bash --install\n  ta completions zsh  --install user\n  ta completions fish --install system\n\nOr source the output yourself from your shell's startup file:\n\n  echo 'source <(ta completions bash)' >> ~/.bashrc\n\nThen start a new shell. (`ta init` and the installer also offer to set this up.)"
+        after_help = "Easiest - let `ta` install it (asks user vs system, uses sudo for a system path):\n\n  ta completions bash --install\n  ta completions zsh  --install user\n  ta completions fish --install system\n\nOr source the output yourself from your shell's startup file:\n\n  echo 'source <(ta completions bash)' >> ~/.bashrc\n\nThen start a new shell. (`ta init` and the installer also set this up on a TTY, asking only user vs system.)"
     )]
     Completions {
         /// The shell to generate the completion script for

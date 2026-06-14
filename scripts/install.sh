@@ -140,24 +140,21 @@ ensure_on_path() {
   fi
 }
 
-# --- offer to install shell completions (interactive only) -----------------
-# Skipped on a non-interactive run (e.g. `curl | bash`) or when opted out. On a
-# TTY it asks, then delegates to `ta completions <shell> --install`, which asks
-# user-vs-system and handles sudo - so the install logic has one implementation.
+# --- install shell completions (interactive only) --------------------------
+# Skipped on a non-interactive run (e.g. `curl | bash`) or when opted out
+# (TASKA_NO_COMPLETIONS / TASKA_NO_MODIFY_PATH). Completions are non-destructive
+# and always useful, so we don't ask WHETHER to set them up - we delegate
+# straight to `ta completions <shell> --install`, which asks only WHERE (user vs
+# system) and handles sudo, so the install logic has one implementation.
 ensure_completions() { # ensure_completions <bin-path>
-  local bin="$1" shell reply
+  local bin="$1" shell
   [ "${TASKA_NO_COMPLETIONS:-0}" = "1" ] && return 0
   [ "${TASKA_NO_MODIFY_PATH:-0}" = "1" ] && return 0
   [ -t 0 ] || return 0 # non-interactive: skip, per design
   shell="${SHELL:-}"; shell="${shell##*/}"
   case "$shell" in bash | zsh | fish) ;; *) return 0 ;; esac
   printf '\n' >&2
-  printf 'Set up tab-completion for %s? [y/N] ' "$shell" >&2
-  read -r reply || return 0
-  case "$reply" in
-    y | Y | yes | YES) "$bin" completions "$shell" --install || warn "completion setup failed" ;;
-    *) info "skipped - enable later with: ${BIN} completions ${shell} --install" ;;
-  esac
+  "$bin" completions "$shell" --install || warn "completion setup failed"
 }
 
 # --- fall back to building from crates.io ----------------------------------
