@@ -21,8 +21,9 @@ run git commit -q -m "track deploy"
 # 1. Undo an UNCOMMITTED, MULTI-FIELD update -> truncation.
 # -------------------------------------------------------------------------
 say "Make ONE uncommitted update that changes SEVERAL fields at once (a single"
-say "Update event): move the status, raise the priority, and add an owner."
-run ta update deploy status=staging owner=alice priority=high
+say "Update event): move the status, raise the priority, and add an owner ('owner' is a"
+say "new field name, so --new-field opts it past the typo guard)."
+run ta update deploy --new-field status=staging owner=alice priority=high
 run ta show deploy
 
 say "Undo it. The event was never committed, so undo TRUNCATES it. The preview is a"
@@ -51,7 +52,7 @@ run tail -n 2 .taska/mutations.jsonl
 say "'--count N' undoes the last N events. Make two edits of different kinds - a"
 say "field set and a dependency edge (we add a second task to depend on)..."
 run ta create db title="Database"
-run ta update deploy region=us-east
+run ta update deploy --new-field region=us-east
 run ta dep add deploy depends_on=db
 run ta show deploy
 

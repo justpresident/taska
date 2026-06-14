@@ -7,7 +7,10 @@ fresh_repo
 say "taska tasks are just an id plus arbitrary key=value fields - no fixed schema."
 say "Values parse as JSON when they can (priority=3 is a number; status=open a string)."
 run ta create migrate-db title="Run DB migration" status=open priority=2
-run ta create deploy-api title="Deploy the API" status=open priority=1 owner=alice
+say "Fields are free-form, but a NAME no task uses yet needs --new-field (a typo guard,"
+say "so 'titel' can't silently become a column). migrate-db seeded title/status/priority;"
+say "'owner' is new here, so we opt in:"
+run ta create deploy-api --new-field title="Deploy the API" status=open priority=1 owner=alice
 run ta create write-docs title="Write the docs" status=todo
 
 say "'ta list' renders an aligned table of the configured columns (id, title, status, deps)."

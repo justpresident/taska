@@ -10,11 +10,16 @@ source "$(dirname "$0")/lib.sh"
 
 fresh_repo
 
-say "Manufacture an orphan: create a task, delete it, then update the (now-gone) task."
-say "That trailing Update targets a task that no longer exists -> an orphaned event."
+say "Orphans arise when a task's Create is DROPPED while an Update to it survives - a"
+say "merge removal-union, a 'git revert', or a hand-edit. The write gate won't let you"
+say "make one directly (an Update to a missing task is rejected up front), so we"
+say "reproduce the end state: create temp, update it, then remove its Create line from"
+say "the log (a stand-in for that revert/merge - never hand-edit a real store)."
+run ta create keep title="Keep me" status=open
 run ta create temp title="Temporary" status=open
-run ta delete temp
 run ta update temp status=closed
+# Drop temp's Create line (simulating a revert/merge removal), orphaning the Update.
+sed -i '/"op":"Create"[^}]*"task_id":"temp"/d' .taska/mutations.jsonl
 
 say "Any READ command warns about orphans on STDERR (it never blocks the read)."
 say "Watch for the 'taska: warning: ... orphaned event(s)' line:"
