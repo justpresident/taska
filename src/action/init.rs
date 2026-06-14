@@ -47,7 +47,7 @@ pub struct InitOutcome {
 const BLOCK_BEGIN: &str = "<!-- BEGIN TASKA INTEGRATION";
 const BLOCK_END: &str = "<!-- END TASKA INTEGRATION -->";
 /// The block's schema version (bump when the guidance text changes).
-const BLOCK_VERSION: u32 = 4;
+const BLOCK_VERSION: u32 = 5;
 /// Candidate agent files. Every one that already exists is updated; if none do,
 /// the FIRST is created (`AGENTS.md` - the emerging cross-tool standard).
 const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
@@ -205,7 +205,8 @@ fn integration_block() -> String {
         "## Task tracking (taska)\n\
          \n\
          This repo tracks work in a local, git-native store (`.taska/`) - drive it through the \
-         `ta` CLI, never hand-edit `.taska/`. Field names, statuses, task types, and \
+         `ta` CLI, never hand-edit `.taska/` and never `git restore` it out from under in-flight \
+         work (either corrupts the append-only log). Field names, statuses, task types, and \
          relationships are defined by `.taska/config.toml` and vary per repo, so run `ta prime` \
          for THIS store's schema and copy-paste-ready examples, and `ta <command> --help` for a \
          command's flags.\n\

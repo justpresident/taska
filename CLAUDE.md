@@ -107,19 +107,10 @@ Two gotchas when writing tests:
 ## Release process / Publishing a new version of a crate
 Described in docs/crate_release_process.md - use it only when user asks to release a new version.
 
-## This repo dogfoods taska
-
-The repo tracks its own work in `.taska/`. The day-to-day task-tracking workflow - the command cheatsheet and the file-a-task/notes/commit-with-code habits - is the **Task tracking (taska)** block below, which `ta init` auto-writes between its `TASKA INTEGRATION` markers (generic and config-agnostic; don't hand-edit inside the markers, `ta init` regenerates the block). This section is the repo-specific overlay: it does NOT repeat the block, only the rules that override or extend it.
-
-- **Run every `ta` command as `cargo run -- <subcommand>`.** The block speaks of a `ta` binary; in this repo that always means `cargo run --` (so `ta list` -> `cargo run -- list`, `ta prime` -> `cargo run -- prime`, ...). Never invoke a `ta` on your PATH: a stale or GLIBC-mismatched installed binary runs the wrong code and can silently corrupt the append-only log.
-- **Never `git restore` `.taska/`** out from under in-flight work - it rolls the append-only log back mid-edit and corrupts it (the block already covers never hand-editing the JSONL).
-- **`config.toml` is plain config, not the eventlog** - edit it directly, and you must when adding a config option (see *Adding a config option: backfill the local config* above).
-- **The store enforces a CLOSED schema** (`[task_types.task]`, `untyped_tasks = "deny"`): a field must be declared in `.taska/config.toml` before any task can use it, so adding a workflow field starts with a config edit. Run `cargo run -- prime` for the exact field set.
-
-<!-- BEGIN TASKA INTEGRATION v4 hash:70640e33 -->
+<!-- BEGIN TASKA INTEGRATION v5 hash:f517fefb -->
 ## Task tracking (taska)
 
-This repo tracks work in a local, git-native store (`.taska/`) - drive it through the `ta` CLI, never hand-edit `.taska/`. Field names, statuses, task types, and relationships are defined by `.taska/config.toml` and vary per repo, so run `ta prime` for THIS store's schema and copy-paste-ready examples, and `ta <command> --help` for a command's flags.
+This repo tracks work in a local, git-native store (`.taska/`) - drive it through the `ta` CLI, never hand-edit `.taska/` and never `git restore` it out from under in-flight work (either corrupts the append-only log). Field names, statuses, task types, and relationships are defined by `.taska/config.toml` and vary per repo, so run `ta prime` for THIS store's schema and copy-paste-ready examples, and `ta <command> --help` for a command's flags.
 
 ```bash
 ta list --ready                     # actionable work: not done, all deps done
@@ -137,3 +128,11 @@ Working habits:
 - Read a task's full, untruncated notes with `ta show <id> --full`.
 - Commit the `.taska/` change in the same commit as the code it describes; if the store has pending changes unrelated to what you're starting, commit those first.
 <!-- END TASKA INTEGRATION -->
+
+## Dogfooding overrides
+
+The **Task tracking (taska)** block above is the generic workflow (auto-written by `ta init` between its markers - don't hand-edit inside them, `ta init` regenerates it). In this repo it's adjusted by:
+
+- **Run every `ta` command as `cargo run -- <subcommand>`.** Wherever the block above says `ta`, this repo means `cargo run --` (so `ta list` -> `cargo run -- list`, `ta prime` -> `cargo run -- prime`, ...). Never invoke a `ta` on your PATH: a stale or GLIBC-mismatched installed binary runs the wrong code and can silently corrupt the log.
+- **`config.toml` is plain config, not the eventlog** - edit it directly, and you must when adding a config option (see *Adding a config option: backfill the local config* above).
+- **The store enforces a CLOSED schema** (`[task_types.task]`, `untyped_tasks = "deny"`): a field must be declared in `.taska/config.toml` before any task can use it, so adding a workflow field starts with a config edit. Run `cargo run -- prime` for the exact field set.
