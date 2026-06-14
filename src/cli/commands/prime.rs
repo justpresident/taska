@@ -219,7 +219,9 @@ fn render_guide(f: &PrimeFacts) -> String {
          (`notes=@FILE`) on any `ta create`/`ta update` instead of quoting on the command line \
          (`+=` takes `@` too). Set prerequisites with `ta dep add`, and append to related tasks \
          as things change so the trail stays current. Don't pass `{sf}=` on create (it defaults \
-         to `{default}`); read full notes with `ta show <id> --full`.\n\
+         to `{default}`); read full notes with `ta show <id> --full`. A field name no task uses \
+         yet is rejected unless you add `--new-field` (a typo guard, with a did-you-mean) - reuse \
+         existing field names otherwise.\n\
          ```bash\n\
          {write_block}\n\
          ```\n\

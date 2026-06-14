@@ -58,11 +58,18 @@ enum Commands {
     /// (`id`, `deps`, the timestamp/graph columns, relationship type names).
     /// Fields are free-form until `[task_types]` declares schemas - then the
     /// task must conform to its type (every violation reported in one error).
+    /// A field name no task uses yet is rejected (with a did-you-mean) unless
+    /// `--new-field` is passed, so a typo can't silently create a phantom column.
     Create {
         id: String,
         /// Fields as `key=value` (parsed as JSON when possible). `key=@FILE` reads
         /// the value from a file, `key=@-` from stdin; `key=@@x` is a literal `@x`.
         fields: Vec<String>,
+        /// Allow field names the store has never seen (otherwise a never-before-used
+        /// name is rejected as a likely typo). The first task on an empty store is
+        /// exempt - it seeds the vocabulary.
+        #[arg(long)]
+        new_field: bool,
     },
     /// Update a task: `=` sets, `+=` accumulates, `-=` removes (e.g. `points+=2`)
     ///
@@ -80,6 +87,10 @@ enum Commands {
         /// file / stdin. At least one required.
         #[arg(required = true)]
         fields: Vec<String>,
+        /// Allow field names the store has never seen (otherwise a never-before-used
+        /// name is rejected as a likely typo - did-you-mean included).
+        #[arg(long)]
+        new_field: bool,
     },
     /// Add/remove typed relationship edges: `ta dep add <task> <type>=<target> ...`
     Dep {
@@ -640,8 +651,16 @@ fn refuse_if_legacy(store: &FileStore) -> Result<(), DynError> {
 /// store. Handlers depend only on the `EventStore` abstraction.
 fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), DynError> {
     match command {
-        Commands::Create { id, fields } => cmd_create(store, &id, &fields),
-        Commands::Update { id, fields } => cmd_update(store, &id, &fields),
+        Commands::Create {
+            id,
+            fields,
+            new_field,
+        } => cmd_create(store, &id, &fields, new_field),
+        Commands::Update {
+            id,
+            fields,
+            new_field,
+        } => cmd_update(store, &id, &fields, new_field),
         Commands::Dep { action } => {
             let types = store.config().relationships.types.clone();
             cmd_dep_group(store, action, &types)

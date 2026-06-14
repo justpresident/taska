@@ -6,6 +6,7 @@
 //! race a concurrent writer. A single implementation serves every frontend; the
 //! payloads arrive in CANONICAL form (the frontend maps its display names first).
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
@@ -14,9 +15,21 @@ use crate::action::materialize;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType, STATUS_KEY};
 use crate::schema::{
-    build_field_events, coerce_event_fields, schema_default_stamps, vet_events, FieldOps,
+    build_field_events, coerce_event_fields, schema_default_stamps, vet_events, vet_new_fields,
+    FieldOps,
 };
 use crate::storage::EventStore;
+
+/// The result of a write.
+///
+/// The events actually appended (empty = nothing changed), and the brand-new
+/// field names the write introduced (for the redundant `--new-field` warning -
+/// non-empty only when `allow_new_fields` let them in, or the store was empty
+/// under the typo-guard grace).
+pub struct WriteOutcome {
+    pub written: Vec<MutationEvent>,
+    pub new_fields: Vec<String>,
+}
 
 /// Create a new task from a CANONICAL payload (plus the `raw` inline-token map
 /// backing declared-string coercion).
@@ -30,7 +43,8 @@ pub fn create(
     id: &str,
     mut payload: Map<String, Value>,
     raw: &Map<String, Value>,
-) -> Result<(), DynError> {
+    allow_new_fields: bool,
+) -> Result<WriteOutcome, DynError> {
     let workflow = &store.config().workflow;
     if !workflow.default_status.is_empty() && !payload.contains_key(STATUS_KEY) {
         payload.insert(
@@ -47,13 +61,21 @@ pub fn create(
 
     let draft = MutationEvent::new(OpType::Create, id, payload);
     let config = store.config().clone();
-    store.append_checked(&|baseline, log| {
+    let new_fields = RefCell::new(Vec::new());
+    let written = store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
         let mut events = vec![draft.clone()];
         coerce_event_fields(&mut events, raw, &state, &config);
-        vet_events(&events, &state, &config)
+        let out = vet_events(&events, &state, &config)?;
+        // Typo guard AFTER the schema gate, so a closed type's own undeclared-field
+        // rejection wins (where `--new-field` wouldn't help).
+        *new_fields.borrow_mut() = vet_new_fields(&events, &state, &config, allow_new_fields)?;
+        Ok(out)
     })?;
-    Ok(())
+    Ok(WriteOutcome {
+        written,
+        new_fields: new_fields.into_inner(),
+    })
 }
 
 /// Apply CANONICAL field ops to an existing task, returning the events actually
@@ -66,12 +88,21 @@ pub fn update(
     store: &impl EventStore,
     id: &str,
     ops: &FieldOps,
-) -> Result<Vec<MutationEvent>, DynError> {
+    allow_new_fields: bool,
+) -> Result<WriteOutcome, DynError> {
     let config = store.config().clone();
-    store.append_checked(&|baseline, log| {
+    let new_fields = RefCell::new(Vec::new());
+    let written = store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
         let events = build_field_events(id, ops, &state, &config)?;
-        vet_events(&events, &state, &config)
+        let out = vet_events(&events, &state, &config)?;
+        // Typo guard AFTER the schema gate (see `create`).
+        *new_fields.borrow_mut() = vet_new_fields(&events, &state, &config, allow_new_fields)?;
+        Ok(out)
+    })?;
+    Ok(WriteOutcome {
+        written,
+        new_fields: new_fields.into_inner(),
     })
 }
 

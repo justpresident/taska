@@ -5,7 +5,12 @@ use crate::error::DynError;
 use crate::schema::{canonicalize_field_pairs, canonicalize_fields};
 use crate::storage::EventStore;
 
-pub fn cmd_update(store: &impl EventStore, id: &str, fields: &[String]) -> Result<(), DynError> {
+pub fn cmd_update(
+    store: &impl EventStore,
+    id: &str,
+    fields: &[String],
+    new_field: bool,
+) -> Result<(), DynError> {
     let mut ops = parse_field_ops(fields)?;
     // Display names map onto their canonical storage keys: a renamed `state+=x`
     // must hit the same single-valued rejection that `status+=x` does under the
@@ -18,11 +23,14 @@ pub fn cmd_update(store: &impl EventStore, id: &str, fields: &[String]) -> Resul
     // canonicalize keys through the pairs-aware variant.
     canonicalize_field_pairs(&mut ops.append, workflow)?;
     canonicalize_field_pairs(&mut ops.subtract, workflow)?;
-    let written = crate::action::write::update(store, id, &ops)?;
-    if written.is_empty() {
+    let outcome = crate::action::write::update(store, id, &ops, new_field)?;
+    if outcome.written.is_empty() {
         println!("`{id}` already up to date - no changes");
     } else {
         println!("Updated task `{id}`");
+    }
+    if new_field && outcome.new_fields.is_empty() {
+        eprintln!("warning: --new-field had no effect - no new field names were introduced");
     }
     Ok(())
 }

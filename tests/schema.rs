@@ -81,8 +81,9 @@ fn write_gate_enforces_whole_task_schemas() {
     );
     ta(&dir, &["update", "t1", "type=feature", "owner=bob"]);
 
-    // feature is OPEN: undeclared fields (and += onto them) are fine.
-    ta(&dir, &["update", "t1", "notes+=first"]);
+    // feature is OPEN: undeclared fields (and += onto them) are fine for the
+    // schema - but a never-before-seen name still needs --new-field (typo guard).
+    ta(&dir, &["update", "t1", "--new-field", "notes+=first"]);
 
     // The grandfathered task: any field write must bring it into conformance.
     let out = run(ta_bin(), &dir, &["update", "legacy", "priority=2"]);
@@ -141,7 +142,14 @@ fn schema_coercion_shapes_declared_values_on_the_real_binary() {
     // An undeclared field on an OPEN type keeps the JSON-or-string guess.
     ta(
         &dir,
-        &["create", "c2", "type=feature", "owner=ann", "weight=2.5"],
+        &[
+            "create",
+            "c2",
+            "--new-field",
+            "type=feature",
+            "owner=ann",
+            "weight=2.5",
+        ],
     );
     assert!(ta(&dir, &["show", "c2", "--format", "json"]).contains(r#""weight":2.5"#));
 }
@@ -198,7 +206,7 @@ fn accumulate_operators_dispatch_by_declared_kind() {
 
     // Strings (and undeclared fields on open types) keep the text append.
     ta(&dir, &["create", "n2", "type=feature", "owner=z"]);
-    ta(&dir, &["update", "n2", "log+=first"]);
+    ta(&dir, &["update", "n2", "--new-field", "log+=first"]);
     ta(&dir, &["update", "n2", "log+=second"]);
     assert!(
         ta(&dir, &["show", "n2", "--format", "json"]).contains(r#""log":"first\nsecond""#),
@@ -245,7 +253,10 @@ fn repeated_compound_assign_in_one_command_accumulates() {
 
     // Text (undeclared field on an OPEN type): operands join with `\n`, in order.
     ta(&dir, &["create", "f", "type=feature", "owner=z"]);
-    ta(&dir, &["update", "f", "log+=one", "log+=two"]);
+    ta(
+        &dir,
+        &["update", "f", "--new-field", "log+=one", "log+=two"],
+    );
     assert!(
         ta(&dir, &["show", "f", "--format", "json"]).contains(r#""log":"one\ntwo""#),
         "text operands join in token order"
@@ -377,7 +388,7 @@ fn untyped_tasks_policy_walks_allow_warn_deny() {
 
     // warn: still tolerated (creations and writes work), but reported.
     ta(&dir, &["config", "set", "workflow.untyped_tasks", "warn"]);
-    ta(&dir, &["create", "free2", "note=x"]);
+    ta(&dir, &["create", "free2", "--new-field", "note=x"]);
     let out = run(ta_bin(), &dir, &["list"]);
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("do not conform"),

@@ -582,16 +582,19 @@ fn schema_violations(fields: &Map<String, Value>, config: &Config) -> Vec<String
     }
 
     if def.closed {
-        let allowed: BTreeSet<&str> = def
+        let allowed: BTreeSet<String> = def
             .fields
             .keys()
-            .map(|name| declared_field_key(name, &w.status_field))
-            .chain([TASK_TYPE_KEY, STATUS_KEY])
+            .map(|name| declared_field_key(name, &w.status_field).to_string())
+            .chain([TASK_TYPE_KEY.to_string(), STATUS_KEY.to_string()])
             .collect();
         for key in fields.keys() {
             if !allowed.contains(key.as_str()) {
+                let did = nearest_known(key, &allowed)
+                    .map(|k| format!("; did you mean `{k}`?"))
+                    .unwrap_or_default();
                 violations.push(format!(
-                    "undeclared field `{key}` (task type `{type_name}` is closed; declared \
+                    "undeclared field `{key}` (task type `{type_name}` is closed{did}; declared \
                      fields: {})",
                     def.fields.keys().cloned().collect::<Vec<_>>().join(", ")
                 ));
@@ -599,6 +602,172 @@ fn schema_violations(fields: &Map<String, Value>, config: &Config) -> Vec<String
         }
     }
     violations
+}
+
+/// The store's known field vocabulary, in CANONICAL keys.
+///
+/// Every field name any task already uses, plus the names the config makes known
+/// up front - the declared `[task_types]` fields, the `[display]` columns, the
+/// status/type discriminators, and the reserved/computed names. The soft-schema
+/// typo guard ([`vet_new_fields`]) treats a write to any name OUTSIDE this set as
+/// introducing a brand-new column.
+pub fn known_field_names<S: BuildHasher>(
+    state: &HashMap<String, TaskState, S>,
+    config: &Config,
+) -> BTreeSet<String> {
+    let w = &config.workflow;
+    // Reserved/computed names (envelope keys, id/deps, timestamp & graph columns,
+    // relationship names) - known so they're never mistaken for a typo'd field.
+    let mut names = reserved_field_names(config);
+    names.insert(STATUS_KEY.to_string());
+    names.insert(TASK_TYPE_KEY.to_string());
+    // Declared schema fields (display -> canonical).
+    for def in config.task_types.types.values() {
+        for name in def.fields.keys() {
+            names.insert(declared_field_key(name, &w.status_field).to_string());
+        }
+    }
+    // Configured display columns (display -> canonical for the two renamable ones).
+    for col in &config.display.columns {
+        let canonical = if col == &w.status_field {
+            STATUS_KEY
+        } else if col == &w.type_field {
+            TASK_TYPE_KEY
+        } else {
+            col.as_str()
+        };
+        names.insert(canonical.to_string());
+    }
+    // Every field already in use across the store.
+    for task in state.values() {
+        for key in task.custom_fields.keys() {
+            names.insert(key.clone());
+        }
+    }
+    names
+}
+
+/// The field names a draft batch INTRODUCES.
+///
+/// Payload keys of the field-carrying ops (`Create`/`Update`/`Append`/`Add`/
+/// `Remove`) that aren't in `known`, in first-seen order, deduped. Edge ops carry
+/// a target, not a user field, so they are skipped.
+pub fn introduced_field_names(events: &[MutationEvent], known: &BTreeSet<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for ev in events {
+        if !matches!(
+            ev.op,
+            OpType::Create | OpType::Update | OpType::Append | OpType::Add | OpType::Remove
+        ) {
+            continue;
+        }
+        for key in ev.payload.keys() {
+            if !known.contains(key) && !out.iter().any(|k| k == key) {
+                out.push(key.clone());
+            }
+        }
+    }
+    out
+}
+
+/// The soft-schema typo guard.
+///
+/// A write that introduces a field name outside the store's
+/// [`known_field_names`] vocabulary is REJECTED - with a did-you-mean suggestion -
+/// unless `allow_new_fields`, so a misspelling (`titel`, `pirority`) can't
+/// silently spawn a phantom column. Returns the new field names the write
+/// introduces, so the frontend can warn when `allow_new_fields` was redundant.
+///
+/// EMPTY-STORE GRACE: while the store holds no tasks, the first write bootstraps
+/// the vocabulary freely (there's nothing to compare against yet), so getting
+/// started needs no flag. A CLOSED `[task_types]` schema already rejects
+/// undeclared fields on its own - where `--new-field` would not help - so this
+/// runs AFTER [`vet_events`], guarding only schemaless/open types.
+pub fn vet_new_fields<S: BuildHasher>(
+    events: &[MutationEvent],
+    state: &HashMap<String, TaskState, S>,
+    config: &Config,
+    allow_new_fields: bool,
+) -> Result<Vec<String>, DynError> {
+    let known = known_field_names(state, config);
+    let introduced = introduced_field_names(events, &known);
+    if introduced.is_empty() || allow_new_fields || state.is_empty() {
+        return Ok(introduced);
+    }
+    Err(unknown_field_message(&introduced, &known).into())
+}
+
+/// The block message for [`vet_new_fields`]: each introduced field with a
+/// did-you-mean (when one is close), plus the `--new-field` remedy.
+fn unknown_field_message(introduced: &[String], known: &BTreeSet<String>) -> String {
+    use std::fmt::Write as _;
+    let suggestion = |f: &str| {
+        nearest_known(f, known)
+            .map(|k| format!(" - did you mean `{k}`?"))
+            .unwrap_or_default()
+    };
+    if let [f] = introduced {
+        return format!(
+            "`{f}` is not a field any task uses{} \
+             (pass --new-field to add it as a new column)",
+            suggestion(f)
+        );
+    }
+    let mut s =
+        String::from("these field names aren't used by any task (pass --new-field to add them):");
+    for f in introduced {
+        let _ = write!(s, "\n  - `{f}`{}", suggestion(f));
+    }
+    s
+}
+
+/// The known name closest to `name` within the typo threshold - Damerau/OSA
+/// distance scaled by length (1 for short names, 2 for longer) - or `None`. Ties
+/// resolve to the shortest, then lexicographically smallest, candidate.
+fn nearest_known(name: &str, known: &BTreeSet<String>) -> Option<String> {
+    let limit = if name.chars().count() >= 6 { 2 } else { 1 };
+    known
+        .iter()
+        .filter(|k| k.as_str() != name)
+        .map(|k| (osa_distance(name, k), k.len(), k))
+        .filter(|(d, _, _)| *d <= limit)
+        .min()
+        .map(|(_, _, k)| k.clone())
+}
+
+/// Optimal string alignment distance (restricted Damerau-Levenshtein): like
+/// Levenshtein, but an adjacent transposition (`titel`<->`title`) counts as ONE
+/// edit - the commonest typo. Three rolling rows keep it O(n*m) time, O(m) space.
+fn osa_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (n, m) = (a.len(), b.len());
+    if n == 0 {
+        return m;
+    }
+    if m == 0 {
+        return n;
+    }
+    let mut prev2 = vec![0usize; m + 1]; // row i-2 (for transpositions)
+    let mut prev: Vec<usize> = (0..=m).collect(); // row i-1
+    let mut cur = vec![0usize; m + 1]; // row i
+    for i in 1..=n {
+        cur[0] = i;
+        for j in 1..=m {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let mut val = (prev[j] + 1) // deletion
+                .min(cur[j - 1] + 1) // insertion
+                .min(prev[j - 1] + cost); // substitution
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                val = val.min(prev2[j - 2] + 1); // transposition
+            }
+            cur[j] = val;
+        }
+        // Rotate: next iteration's (i-2, i-1) rows are this iteration's (i-1, i).
+        std::mem::swap(&mut prev2, &mut prev);
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[m]
 }
 
 /// Schema-aware value coercion for `Create`/`Update` payloads, run under the
@@ -1413,6 +1582,82 @@ required = true
             err.to_string()
                 .contains(&format!("`{STATUS_FIELD}`: expected enum")),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn osa_distance_counts_adjacent_transpositions_as_one() {
+        assert_eq!(osa_distance("title", "title"), 0);
+        // The two flagship typos are adjacent transpositions - distance 1.
+        assert_eq!(osa_distance("titel", "title"), 1);
+        assert_eq!(osa_distance("pirority", "priority"), 1);
+        assert_eq!(osa_distance("notes", "note"), 1); // deletion
+        assert!(osa_distance("title", "status") > 2); // unrelated
+    }
+
+    #[test]
+    fn typo_guard_blocks_unknown_fields_with_a_suggestion() {
+        use crate::test_support::{state, task};
+        let config = Config::default();
+        let existing = state(&[task(
+            "t",
+            &[],
+            &[
+                ("title", serde_json::json!("x")),
+                ("notes", serde_json::json!("y")),
+            ],
+        )]);
+
+        let typo = MutationEvent::new(
+            OpType::Update,
+            "t",
+            std::iter::once(("titel".to_string(), serde_json::json!("z"))).collect(),
+        );
+        // Blocked, with a did-you-mean and the remedy.
+        let msg = vet_new_fields(std::slice::from_ref(&typo), &existing, &config, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("titel") && msg.contains("did you mean `title`"),
+            "suggestion: {msg}"
+        );
+        assert!(msg.contains("--new-field"), "remedy: {msg}");
+        // --new-field lets it through, reporting the introduced name.
+        let introduced = vet_new_fields(&[typo], &existing, &config, true).unwrap();
+        assert_eq!(introduced, vec!["titel".to_string()]);
+
+        // A field a task already uses passes with nothing introduced.
+        let known = MutationEvent::new(
+            OpType::Update,
+            "t",
+            std::iter::once(("notes".to_string(), serde_json::json!("k"))).collect(),
+        );
+        assert!(vet_new_fields(&[known], &existing, &config, false)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn typo_guard_grants_the_empty_store_first_write() {
+        use crate::test_support::state;
+        let config = Config::default();
+        let empty = state(&[]);
+        let create = MutationEvent::new(
+            OpType::Create,
+            "first",
+            [
+                ("title".to_string(), serde_json::json!("a")),
+                ("estimate".to_string(), serde_json::json!(3)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        // `estimate` is brand-new, but the first write on an empty store seeds the
+        // vocabulary freely (no block) while still reporting the new name.
+        let introduced = vet_new_fields(&[create], &empty, &config, false).unwrap();
+        assert!(
+            introduced.contains(&"estimate".to_string()),
+            "grace still reports new names: {introduced:?}"
         );
     }
 }

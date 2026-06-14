@@ -10,7 +10,12 @@ use crate::model::TaskState;
 use crate::schema::{canonicalize_field_pairs, canonicalize_fields, dispatch_accumulate, FieldOps};
 use crate::storage::EventStore;
 
-pub fn cmd_create(store: &impl EventStore, id: &str, fields: &[String]) -> Result<(), DynError> {
+pub fn cmd_create(
+    store: &impl EventStore,
+    id: &str,
+    fields: &[String],
+    new_field: bool,
+) -> Result<(), DynError> {
     let workflow = &store.config().workflow;
     let FieldOps {
         set: mut payload,
@@ -49,7 +54,10 @@ pub fn cmd_create(store: &impl EventStore, id: &str, fields: &[String]) -> Resul
         payload.insert(key, value);
     }
 
-    crate::action::write::create(store, id, payload, &raw)?;
+    let outcome = crate::action::write::create(store, id, payload, &raw, new_field)?;
     println!("Created task `{id}`");
+    if new_field && outcome.new_fields.is_empty() {
+        eprintln!("warning: --new-field had no effect - no new field names were introduced");
+    }
     Ok(())
 }

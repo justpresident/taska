@@ -28,7 +28,7 @@ fn create(store: &FileStore, id: &str, title: &str, status: &str) {
     payload.insert("title".to_string(), json!(title));
     payload.insert(workflow.status_field.clone(), json!(status));
     taska::schema::canonicalize_fields(&mut payload, workflow).unwrap();
-    action::write::create(store, id, payload, &Map::new()).unwrap();
+    action::write::create(store, id, payload, &Map::new(), false).unwrap();
 }
 
 #[test]

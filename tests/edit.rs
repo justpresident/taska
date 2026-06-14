@@ -253,3 +253,33 @@ fn edit_discard_leaves_task_unchanged() {
         "task must be unchanged"
     );
 }
+
+#[test]
+fn edit_prompts_to_add_a_new_field_name() {
+    let dir = setup("edit_new_field");
+    // `a` is the first task (empty-store grace), so it seeds freely.
+    ta(&dir, &["create", "a", "title=Alpha"]);
+
+    // The editor adds a brand-new field name; on the now non-empty store that
+    // trips the interactive new-field prompt. Answer `y` to add it.
+    let ed = editor_script(
+        &dir,
+        "ed.sh",
+        "#!/bin/sh\nprintf '\\nowner = \"bob\"\\n' >> \"$1\"\n",
+    );
+    let out = run_edit(&dir, &["edit", "a"], &ed, "y\n", &[]);
+    assert!(
+        out.status.success(),
+        "edit failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no task uses yet") && stderr.contains("owner"),
+        "new-field prompt shown: {stderr}"
+    );
+    assert!(
+        show_json(&dir, "a").contains("\"owner\":\"bob\""),
+        "field added after confirming"
+    );
+}

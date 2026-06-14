@@ -25,7 +25,8 @@ use crate::config::{Config, WorkflowConfig};
 use crate::error::DynError;
 use crate::model::TaskState;
 use crate::schema::{
-    build_field_events, canonical_field_pairs, canonicalize_fields, vet_events, FieldOps,
+    build_field_events, canonical_field_pairs, canonicalize_fields, introduced_field_names,
+    known_field_names, vet_events, FieldOps,
 };
 use crate::storage::EventStore;
 
@@ -44,9 +45,12 @@ pub fn cmd_edit(store: &impl EventStore, id: &str, as_json: bool) -> Result<(), 
     );
 
     // Re-edit loop: open, validate the saved result, and on any error offer to
-    // reopen the same file (left exactly as the user saved it) or discard.
+    // reopen the same file (left exactly as the user saved it) or discard. A save
+    // that introduces a brand-new field name (not used by any task) is treated
+    // interactively here - add it, or re-edit to fix a typo - rather than blocked
+    // with `--new-field` the way `create`/`update` are.
     let config = store.config();
-    let payload = loop {
+    let (payload, allow_new_fields) = loop {
         open_in_editor(&tmp.path)?;
         let edited = std::fs::read_to_string(&tmp.path)?;
         if edited.trim().is_empty() {
@@ -54,7 +58,19 @@ pub fn cmd_edit(store: &impl EventStore, id: &str, as_json: bool) -> Result<(), 
             return Ok(());
         }
         match preview(&edited, as_json, &view, &snapshot, id, config) {
-            Ok(set) => break set,
+            Ok((set, new_fields)) if new_fields.is_empty() => break (set, false),
+            Ok((set, new_fields)) => {
+                eprintln!(
+                    "note: this adds field name(s) no task uses yet: {}",
+                    new_fields.join(", ")
+                );
+                if confirm(
+                    "Add them as new fields? (no = re-edit to fix a typo)",
+                    false,
+                )? {
+                    break (set, true);
+                }
+            }
             Err(e) => {
                 eprintln!("error: {e}");
                 if !confirm("Re-edit to fix it? (no = discard your changes)", false)? {
@@ -72,13 +88,14 @@ pub fn cmd_edit(store: &impl EventStore, id: &str, as_json: bool) -> Result<(), 
 
     // Re-validate against current state (the editor ran outside the lock) and
     // append through the shared write path.
-    crate::action::write::update(store, id, &set_only(payload))?;
+    crate::action::write::update(store, id, &set_only(payload), allow_new_fields)?;
     println!("Updated task `{id}`");
     Ok(())
 }
 
 /// Validate a saved edit against the pre-edit snapshot and return the canonical
-/// `set` payload (changed/added fields, plus removed fields as `null`). Runs the
+/// `set` payload (changed/added fields, plus removed fields as `null`) together
+/// with the brand-new field names it introduces (not used by any task). Runs the
 /// same parse -> diff -> canonicalize -> build -> vet pipeline the final write does,
 /// so the user sees the real diagnostics *before* the store lock is taken.
 fn preview(
@@ -88,14 +105,16 @@ fn preview(
     snapshot: &HashMap<String, TaskState>,
     id: &str,
     config: &Config,
-) -> Result<Map<String, Value>, DynError> {
+) -> Result<(Map<String, Value>, Vec<String>), DynError> {
     let parsed = parse_fields(edited, as_json)?;
     let mut set = diff_payload(view, &parsed);
     canonicalize_fields(&mut set, &config.workflow)?;
     let ops = set_only(set.clone());
     let events = build_field_events(id, &ops, snapshot, config)?;
     vet_events(&events, snapshot, config)?;
-    Ok(set)
+    let known = known_field_names(snapshot, config);
+    let new_fields = introduced_field_names(&events, &known);
+    Ok((set, new_fields))
 }
 
 /// A `FieldOps` carrying only `set` fields - edit never appends or subtracts.

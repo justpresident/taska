@@ -80,7 +80,7 @@ fn undo_committed_unsets_a_newly_added_field() {
     ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
     // Commit the create AND the field-add so the undone event is committed and
     // the compensating (append-only) path runs rather than truncation.
-    ta(&dir, &["update", "a", "owner=bob"]);
+    ta(&dir, &["update", "a", "--new-field", "owner=bob"]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "init"]);
 

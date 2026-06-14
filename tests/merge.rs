@@ -152,6 +152,7 @@ fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
         &[
             "update",
             "X",
+            "--new-field",
             &format!("{STATUS_KEY}=closed"),
             "owner=alice",
             "scope=project",
@@ -165,6 +166,7 @@ fn per_field_merge_keeps_disjoint_fields_and_resolves_overlap() {
         &[
             "update",
             "X",
+            "--new-field",
             &format!("{STATUS_KEY}=open"),
             "owner=bob",
             "priority=3",
@@ -211,11 +213,11 @@ fn clean_disjoint_field_merge_has_no_conflict() {
     // Each branch sets a DIFFERENT field of the same task: no overlap, so even the
     // strict `surface` policy must merge cleanly with no marker and no failure.
     git(&dir, &["branch", "feature"]);
-    ta(&dir, &["update", "t", "owner=alice"]);
+    ta(&dir, &["update", "t", "--new-field", "owner=alice"]);
     git(&dir, &["commit", "-aqm", "main edit"]);
 
     git(&dir, &["checkout", "-q", "feature"]);
-    ta(&dir, &["update", "t", "priority=3"]);
+    ta(&dir, &["update", "t", "--new-field", "priority=3"]);
     git(&dir, &["commit", "-aqm", "feature edit"]);
 
     git(&dir, &["checkout", "-q", "main"]);
@@ -530,11 +532,14 @@ fn concurrent_appends_merge_without_conflict() {
     git(&dir, &["commit", "-qm", "base"]);
     git(&dir, &["branch", "feature"]);
 
-    // Each branch appends to the SAME field since the fork.
-    ta(&dir, &["update", "log", "notes+=from main"]);
+    // Each branch appends to the SAME field since the fork (new field -> --new-field).
+    ta(&dir, &["update", "log", "--new-field", "notes+=from main"]);
     git(&dir, &["commit", "-aqm", "main note"]);
     git(&dir, &["checkout", "-q", "feature"]);
-    ta(&dir, &["update", "log", "notes+=from feature"]);
+    ta(
+        &dir,
+        &["update", "log", "--new-field", "notes+=from feature"],
+    );
     git(&dir, &["commit", "-aqm", "feature note"]);
 
     // Default on_conflict=surface FAILS the merge on a real conflict - so a clean

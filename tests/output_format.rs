@@ -107,12 +107,13 @@ fn full_view_uses_canonical_column_order_in_both_formats() {
     )
     .unwrap();
     ta(&dir, &["create", "dep"]);
-    // Custom fields supplied out of alphabetical order.
+    // Custom fields supplied out of alphabetical order (new names -> --new-field).
     ta(
         &dir,
         &[
             "create",
             "a",
+            "--new-field",
             "zeta=1",
             &format!("{STATUS_KEY}=open"),
             "alpha=2",

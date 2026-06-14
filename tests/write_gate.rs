@@ -103,7 +103,10 @@ fn write_gate_rejects_invalid_and_skips_noops() {
 
     // Multi-field update drops the unchanged field, keeps the changed one.
     let n = rows(&log);
-    ta(&dir, &["update", "a", &closed(), "owner=alice"]);
+    ta(
+        &dir,
+        &["update", "a", "--new-field", &closed(), "owner=alice"],
+    );
     assert_eq!(rows(&log), n + 1, "only the changed field is written");
     assert!(ta(&dir, &["show", "a", "--format", "json"]).contains("\"owner\":\"alice\""));
 
@@ -131,7 +134,7 @@ fn write_gate_rejects_invalid_and_skips_noops() {
     );
     assert!(!bad.status.success(), "+= on status must fail");
     assert!(String::from_utf8_lossy(&bad.stderr).contains(STATUS_FIELD));
-    ta(&dir, &["update", "b", "notes+=hello"]);
+    ta(&dir, &["update", "b", "--new-field", "notes+=hello"]);
 }
 
 /// More gate rules: a dependency on a missing task, a reserved/computed field
@@ -182,8 +185,8 @@ fn gate_rejects_dangling_targets_reserved_fields_and_missing_delete() {
             .success(),
         "create with a reserved field must fail"
     );
-    // A normal field still works.
-    ta(&dir, &["update", "a", "owner=bob"]);
+    // A normal (new) field still works.
+    ta(&dir, &["update", "a", "--new-field", "owner=bob"]);
 
     // Deleting a missing task errors rather than writing a no-op Delete.
     let baddelete = run(ta_bin(), &dir, &["delete", "ghost"]);

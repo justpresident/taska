@@ -243,11 +243,14 @@ fn crud_search_and_ready_workflow() {
     init_renamed_open(&dir);
 
     ta(&dir, &["create", "db", &format!("{STATUS_FIELD}=closed")]);
+    // `priority` is a field no task uses yet, so introducing it needs --new-field
+    // (db is the first task and seeds the vocabulary; api comes after).
     ta(
         &dir,
         &[
             "create",
             "api",
+            "--new-field",
             &format!("{STATUS_FIELD}=open"),
             "priority=3",
         ],
@@ -465,9 +468,10 @@ fn field_value_from_file_and_stdin() {
         "file content is literal, never shell-expanded: {json}"
     );
 
-    // `@-` reads the value from stdin.
+    // `@-` reads the value from stdin. `summary` is a new field (t1 used `notes`),
+    // so it needs --new-field.
     let mut child = Command::new(ta_bin())
-        .args(["update", "t1", "summary=@-"])
+        .args(["update", "t1", "--new-field", "summary=@-"])
         .current_dir(&dir)
         .env("PATH", path_with_bin())
         .stdin(Stdio::piped())
@@ -492,8 +496,8 @@ fn field_value_from_file_and_stdin() {
         "stdin value (trailing newline trimmed) stored"
     );
 
-    // `@@x` is a literal `@x`, not a file read.
-    ta(&dir, &["create", "t2", "owner=@@alice"]);
+    // `@@x` is a literal `@x`, not a file read. `owner` is a new field name.
+    ta(&dir, &["create", "t2", "--new-field", "owner=@@alice"]);
     assert!(
         ta(&dir, &["show", "t2", "--format", "json"]).contains(r#""owner":"@alice""#),
         "double-@ escapes to a literal @ value"
@@ -506,7 +510,8 @@ fn append_op_accumulates_a_text_log() {
     init_repo(&dir);
     ta(&dir, &["init"]);
     ta(&dir, &["create", "task"]);
-    ta(&dir, &["update", "task", "log+=started"]);
+    // First use of `log` introduces it - needs --new-field; later appends don't.
+    ta(&dir, &["update", "task", "--new-field", "log+=started"]);
     ta(&dir, &["update", "task", "log+=made progress"]);
     // The two entries accumulate, newline-joined, instead of overwriting.
     let json = ta(&dir, &["show", "task", "--format", "json"]);
@@ -521,12 +526,13 @@ fn update_mixes_set_and_append_in_one_command() {
     let dir = fresh_dir("update-mixed");
     init_renamed_open(&dir);
     ta(&dir, &["create", "t", &format!("{STATUS_FIELD}=open")]);
-    // One command: set `state` (=) and append to `log` (+=).
+    // One command: set `state` (=) and append to `log` (+=). `log` is new here.
     ta(
         &dir,
         &[
             "update",
             "t",
+            "--new-field",
             &format!("{STATUS_FIELD}=closed"),
             "log+=did the thing",
         ],

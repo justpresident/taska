@@ -42,8 +42,8 @@ mod tests {
     #[test]
     fn compact_folds_log_into_baseline() {
         let store = InMemoryStore::default();
-        cmd_create(&store, "a", &[]).unwrap();
-        cmd_create(&store, "b", &[]).unwrap();
+        cmd_create(&store, "a", &[], false).unwrap();
+        cmd_create(&store, "b", &[], false).unwrap();
         // keep_events = 0 still retains the most recent event (the log never
         // empties, so the seq watermark stays derivable); the rest folds.
         let cfg = CompactionConfig {
@@ -58,7 +58,7 @@ mod tests {
         );
         assert_eq!(store.load_baseline().unwrap().len(), 1, "the rest folded");
         // A later Create still appends to the log and overlays the baseline post-compaction.
-        cmd_create(&store, "c", &[]).unwrap();
+        cmd_create(&store, "c", &[], false).unwrap();
         assert_eq!(read(&store).unwrap().state.len(), 3);
     }
 
@@ -66,7 +66,7 @@ mod tests {
     fn compact_retains_recent_events() {
         let store = InMemoryStore::default();
         for id in ["a", "b", "c", "d", "e"] {
-            cmd_create(&store, id, &[]).unwrap();
+            cmd_create(&store, id, &[], false).unwrap();
         }
         // Keep the 2 most recent, time window off.
         let cfg = CompactionConfig {
