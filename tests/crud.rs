@@ -551,3 +551,58 @@ fn update_mixes_set_and_append_in_one_command() {
         "subsequent append accumulates"
     );
 }
+
+#[test]
+fn dash_c_drives_a_store_in_another_directory() {
+    // A store in one directory...
+    let store = fresh_dir("dashc-store");
+    init_repo(&store);
+    ta(&store, &["init"]);
+    ta(&store, &["create", "alpha", "title=Alpha"]);
+
+    // ...driven from an unrelated working directory via `-C` (git's semantics).
+    let elsewhere = fresh_dir("dashc-elsewhere");
+    let store_path = store.to_str().unwrap();
+
+    // Read: `ta -C <store> list` from `elsewhere` sees the store's task.
+    let listed = run(ta_bin(), &elsewhere, &["-C", store_path, "list"]);
+    assert!(
+        listed.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&listed.stdout);
+    assert!(
+        lists_task(&stdout, "alpha"),
+        "-C list sees the store: {stdout}"
+    );
+
+    // Write: a create via `-C` lands in the store, and creates NO store in the cwd.
+    let created = run(
+        ta_bin(),
+        &elsewhere,
+        &["-C", store_path, "create", "beta", "title=Beta"],
+    );
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    assert!(
+        !elsewhere.join(".taska").exists(),
+        "no store is created in the -C caller's own cwd"
+    );
+    assert!(
+        lists_task(&ta(&store, &["list"]), "beta"),
+        "the write landed in the -C store"
+    );
+
+    // A non-existent -C directory is a clean error that names the flag.
+    let bad = run(ta_bin(), &elsewhere, &["-C", "/no/such/taska/dir", "list"]);
+    assert!(!bad.status.success(), "bad -C dir must fail");
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("-C"),
+        "error names the flag: {}",
+        String::from_utf8_lossy(&bad.stderr)
+    );
+}

@@ -44,6 +44,11 @@ use crate::schema::FieldOps;
 #[derive(Parser)]
 #[command(name = "ta", version, about)]
 struct Cli {
+    /// Run as if `ta` were started in <DIR> (like `git -C`). Store discovery,
+    /// relative `@FILE` paths, and `init`'s repo-root search all resolve from
+    /// there - e.g. `ta -C ../main list` drives a worktree's main checkout store.
+    #[arg(short = 'C', long = "directory", value_name = "DIR", global = true)]
+    directory: Option<PathBuf>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -498,6 +503,12 @@ pub fn run() -> Result<(), DynError> {
     clap_complete::CompleteEnv::with_factory(Cli::command).complete();
     warn_shadowed_binaries();
     let cli = Cli::parse();
+    // `-C <DIR>`: act as if started there, BEFORE any store discovery or relative
+    // path resolution (git's `-C` semantics). A global process-state change, fine
+    // for a run-once CLI - everything downstream just sees the new cwd.
+    if let Some(dir) = cli.directory.as_deref() {
+        std::env::set_current_dir(dir).map_err(|e| format!("-C {}: {e}", dir.display()))?;
+    }
     match cli.command {
         // Commands that don't operate on an existing store.
         Commands::Init => cmd_init(),
