@@ -163,3 +163,34 @@ fn install_writes_the_shim_to_the_user_completion_dir() {
         .unwrap();
     assert!(!bad.status.success(), "unsupported shell rejected");
 }
+
+#[test]
+fn dash_c_completion_targets_the_flagged_store() {
+    // Two stores: one in the cwd we complete from, one we point at with -C.
+    let cwd_store = fresh_dir("complete-c-cwd");
+    init_renamed_open(&cwd_store);
+    ta(
+        &cwd_store,
+        &["create", "in-cwd-store", &format!("{STATUS_FIELD}=open")],
+    );
+
+    let other_store = fresh_dir("complete-c-other");
+    init_renamed_open(&other_store);
+    ta(
+        &other_store,
+        &["create", "in-other-store", &format!("{STATUS_FIELD}=open")],
+    );
+
+    // `ta -C <other> show <TAB>`, completed from cwd_store's dir, must offer the
+    // -C store's ids - not the cwd's. words: ta(0) -C(1) <path>(2) show(3) ""(4).
+    let other = other_store.to_str().unwrap();
+    let cands = complete(&cwd_store, 4, &["ta", "-C", other, "show", ""]);
+    assert!(
+        cands.lines().any(|l| l == "in-other-store"),
+        "completes the -C store's ids: {cands}"
+    );
+    assert!(
+        !cands.lines().any(|l| l == "in-cwd-store"),
+        "not the cwd store's ids: {cands}"
+    );
+}

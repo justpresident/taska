@@ -496,16 +496,53 @@ fn warn_shadowed_binaries() {
     eprintln!("{}", shadow_recommendation(&entries));
 }
 
+/// Honor `-C <DIR>` / `--directory <DIR>` from the RAW args, before clap parses,
+/// so the COMPLETION path can use it too. A completion callback is served by
+/// `complete()` and EXITS before the authoritative post-parse chdir in `run()` -
+/// yet the store-aware completers discover from the cwd, so without this they'd
+/// complete against the wrong store. Best-effort (a missing/invalid value is
+/// ignored, degrading to cwd discovery); the real-command path re-applies `-C`
+/// from the clap-parsed value and errors loudly on a bad dir. Handles every form
+/// clap accepts: `-C x`, `-Cx`, `-C=x`, `--directory x`, `--directory=x`.
+fn chdir_to_directory_flag() {
+    use std::ffi::OsString;
+    let mut dir: Option<OsString> = None;
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("-C" | "--directory") => dir = args.next(),
+            Some(s) if s.starts_with("--directory=") => {
+                dir = Some(OsString::from(&s["--directory=".len()..]));
+            }
+            Some(s) if s.starts_with("-C") && s.len() > 2 => {
+                let rest = &s[2..];
+                dir = Some(OsString::from(rest.strip_prefix('=').unwrap_or(rest)));
+            }
+            _ => {}
+        }
+    }
+    if let Some(dir) = dir.filter(|d| !d.is_empty()) {
+        let _ = std::env::set_current_dir(&dir); // best-effort: bad dir -> cwd discovery
+    }
+}
+
 /// Parse args and dispatch. `main` maps the result to an exit code.
 pub fn run() -> Result<(), DynError> {
+    // A completion callback (the shell sets `COMPLETE` - the var the registration
+    // shim uses) is served by `complete()` below, which EXITS before the
+    // post-parse `-C` chdir. Apply `-C` up front so completions target the same
+    // store the real command would, not the cwd.
+    if std::env::var_os("COMPLETE").is_some() {
+        chdir_to_directory_flag();
+    }
     // Dynamic completion: when the shell asks (COMPLETE env set), emit candidates
     // and exit BEFORE any other work or output. A normal run returns and proceeds.
     clap_complete::CompleteEnv::with_factory(Cli::command).complete();
     warn_shadowed_binaries();
     let cli = Cli::parse();
-    // `-C <DIR>`: act as if started there, BEFORE any store discovery or relative
-    // path resolution (git's `-C` semantics). A global process-state change, fine
-    // for a run-once CLI - everything downstream just sees the new cwd.
+    // The authoritative `-C` for a real command (git's `-C` semantics): act as if
+    // started in <DIR> before any store discovery or relative `@FILE` resolution.
+    // Errors loudly on a bad dir, unlike the best-effort completion pass above.
     if let Some(dir) = cli.directory.as_deref() {
         std::env::set_current_dir(dir).map_err(|e| format!("-C {}: {e}", dir.display()))?;
     }
