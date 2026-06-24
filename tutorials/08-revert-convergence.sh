@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 05-revert-convergence.sh - `git revert` of task events converges either merge way.
+# 08-revert-convergence.sh - `git revert` of task events converges either merge way.
 #
 # Because the merge driver UNIONS both sides' removals, a reverted commit stays
 # reverted no matter which direction you merge. We prove it by merging the same

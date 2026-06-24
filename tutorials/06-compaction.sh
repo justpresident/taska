@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 07-compaction.sh - folding old events into the baseline snapshot.
+# 06-compaction.sh - folding old events into the baseline snapshot.
 #
 # The log is append-only, so it grows forever. 'ta compact' folds the OLD prefix
 # into a baseline.jsonl snapshot, keeping only the most recent events in the log

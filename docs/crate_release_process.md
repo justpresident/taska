@@ -48,7 +48,7 @@ crates.io - the two halves are independent.
    validate them here by hand. Build the binary, run every walkthrough end to
    end, and READ the output: each command's result should match its narration,
    with no stray `error:` / `is not a field` / `validation failed` outside the
-   intentional demos (03-merge's surfaced conflict, 09-schemas' four-violation
+   intentional demos (07-merge's surfaced conflict, 03-schemas' four-violation
    create). Fix any drift - a renamed flag, changed output, a new write gate like
    the typo guard requiring `--new-field` - and commit before continuing.
    ```bash

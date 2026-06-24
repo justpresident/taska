@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 01-basics.sh - creating tasks with arbitrary fields, and the ways to view them.
+# 01-basics.sh - creating tasks with arbitrary fields, viewing them, and unsetting fields.
 source "$(dirname "$0")/lib.sh"
 
 fresh_repo
@@ -32,4 +32,20 @@ run ta list 'title=~API' status=open
 say "'ta show <id>' shows a single task with ALL of its own fields."
 run ta show deploy-api
 
-say "That's the read surface: list / show, each with --columns / --full / --format."
+say "'ta list owner=alice' finds deploy-api while the field is set."
+run ta list owner=alice
+
+say "Unset a field with the null convention: 'ta update <id> owner=null'."
+say "(null is JSON null, not the string \"null\" - it removes the key entirely.)"
+run ta update deploy-api owner=null
+
+say "'ta show' confirms the owner field is gone - it no longer exists on the task."
+run ta show deploy-api
+
+say "It's gone from 'ta list --full' too (no OWNER column, since no task has the field)."
+run ta list --full
+
+say "And 'ta list owner=alice' now finds nothing - the field is truly unset, not blank."
+run ta list owner=alice
+
+say "That's the read surface: list / show, each with --columns / --full / --format, and field=null to delete a field."

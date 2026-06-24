@@ -56,16 +56,15 @@ $ TUTORIAL_NONINTERACTIVE=1 bash tutorials/run-all.sh
 ## The scenarios
 
 | Script | What it teaches |
-|---|---|
-| `01-basics.sh` | Create tasks with arbitrary fields; `list` (aligned table), `--columns`, `--full`, `--format json`; filter criteria (`status=open`, `title=~API`); `show <id>`. |
+|---|---|---|
+| `01-basics.sh` | Create tasks with arbitrary fields; `list` (aligned table), `--columns`, `--full`, `--format json`; filter criteria (`status=open`, `title=~API`); `show <id>`; `update <id> field=null` to unset a field. |
 | `02-dependencies.sh` | `dep add` to add `depends_on` edges; `dep tree`; `list --ready` showing only unblocked tasks; closing a dependency to unblock the dependent. |
-| `03-merge.sh` | Two branches editing concurrently: a clean auto-merge (different fields), a same-field conflict under `surface` (`ta resolve`), and the same conflict resolved silently under `theirs` / `latest`. |
+| `03-schemas.sh` | Declare a `[task_types.bug]` schema; the write gate (whole-task, every violation in one error), constraints (`min_len`/enum/`max`/`pattern`), `+=`/`-=` on numeric and set fields, and the default life-cycle; then migrate two legacy untyped tasks in with `ta repair --schema --set-type-if-none`, ratcheting `untyped_tasks` allow->warn->deny. |
 | `04-undo.sh` | `undo` of an uncommitted action (truncates) vs. a committed one (compensating event, with a before->after preview); `--count`, `--remove` (with its DANGER warning), and the confirmation prompt. |
-| `05-revert-convergence.sh` | `git revert` a commit of task events, then merge in both directions - the result is identical (reverts converge). |
-| `06-orphans.sh` | Manufacture an orphaned event, see the stderr warning on a read, then drop it with `ta resolve`. |
-| `07-compaction.sh` | Create more events than `keep_events`, `compact`, and watch the baseline grow while the log shrinks (task state unchanged). |
-| `08-null-unset.sh` | Set a field, then `update <id> field=null` to unset it; confirm it's gone from `show`, `list --full`, and filter criteria. |
-| `09-schemas.sh` | Declare a `[task_types.bug]` schema; the write gate (whole-task, every violation in one error), constraints (`min_len`/enum/`max`/`pattern`), `+=`/`-=` on numeric and set fields, and the default life-cycle; then migrate two legacy untyped tasks in with `ta repair --schema --set-type-if-none`, ratcheting `untyped_tasks` allow->warn->deny. |
+| `05-orphans.sh` | Manufacture an orphaned event, see the stderr warning on a read, then drop it with `ta resolve`. |
+| `06-compaction.sh` | Create more events than `keep_events`, `compact`, and watch the baseline grow while the log shrinks (task state unchanged). |
+| `07-merge.sh` | Two branches editing concurrently: a clean auto-merge (different fields), a same-field conflict under `surface` (`ta resolve`), and the same conflict resolved silently under `theirs` / `latest`. |
+| `08-revert-convergence.sh` | `git revert` a commit of task events, then merge in both directions - the result is identical (reverts converge). |
 
 ## How the helpers work (`lib.sh`)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 03-merge.sh - concurrent edits on two branches, reconciled by the git merge driver.
+# 07-merge.sh - concurrent edits on two branches, reconciled by the git merge driver.
 #
 # Shows three things:
 #   1. a clean auto-merge (the branches touch DIFFERENT fields),

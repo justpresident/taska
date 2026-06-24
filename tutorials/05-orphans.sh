@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 06-orphans.sh - detecting and cleaning up orphaned events ("no silent failures").
+# 05-orphans.sh - detecting and cleaning up orphaned events ("no silent failures").
 #
 # An ORPHAN is an Update/AddDep/RemoveDep/Delete whose target task no longer
 # exists, so it applies to nothing during replay. It's the symptom of a dropped
@@ -18,8 +18,9 @@ say "the log (a stand-in for that revert/merge - never hand-edit a real store)."
 run ta create keep title="Keep me" status=open
 run ta create temp title="Temporary" status=open
 run ta update temp status=closed
-# Drop temp's Create line (simulating a revert/merge removal), orphaning the Update.
-sed -i '/"op":"Create"[^}]*"task_id":"temp"/d' .taska/mutations.jsonl
+
+say "Drop temp's Create line (simulating a revert/merge removal), orphaning the Update."
+run sed -i '/"op":"Create"[^}]*"task_id":"temp"/d' .taska/mutations.jsonl
 
 say "Any READ command warns about orphans on STDERR (it never blocks the read)."
 say "Watch for the 'taska: warning: ... orphaned event(s)' line:"

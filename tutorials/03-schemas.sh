@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 09-schemas.sh - per-type schemas: the write gate, constraints, defaults, and
+# 03-schemas.sh - per-type schemas: the write gate, constraints, defaults, and
 # migrating a legacy untyped store into a schema with `ta repair`.
 #
 # taska starts schema-agnostic: any field name, any value. Declaring
