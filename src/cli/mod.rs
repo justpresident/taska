@@ -133,10 +133,11 @@ enum Commands {
         #[command(flatten)]
         display: DisplayArgs,
     },
-    /// Show a single task in full by id: `ta show <id>`
+    /// Show one or more tasks in full by id: `ta show <id>...` (duplicates ignored)
     Show {
-        #[arg(add = ArgValueCandidates::new(complete::task_ids))]
-        id: String,
+        /// One or more task ids; duplicate ids are shown once.
+        #[arg(required = true, num_args = 1.., add = ArgValueCandidates::new(complete::task_ids))]
+        ids: Vec<String>,
         #[command(flatten)]
         display: DisplayArgs,
     },
@@ -727,7 +728,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             &display,
             &store.config().display,
         ),
-        Commands::Show { id, display } => cmd_show(store, &id, &display, &store.config().display),
+        Commands::Show { ids, display } => cmd_show(store, &ids, &display, &store.config().display),
         Commands::Edit { id, json, toml: _ } => cmd_edit(store, &id, json),
         Commands::Status { output } => cmd_status(store, &output),
         Commands::Prime { output } => cmd_prime(store, &output),

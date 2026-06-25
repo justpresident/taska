@@ -385,6 +385,57 @@ fn show_displays_full_task_and_rejects_unknown_id() {
 }
 
 #[test]
+fn show_accepts_multiple_ids_deduplicated() {
+    let dir = fresh_dir("show-multi");
+    init_renamed_open(&dir);
+    for id in ["a", "b", "c"] {
+        ta(&dir, &["create", id]);
+    }
+
+    // Two ids -> one vertical record each, separated by a blank line.
+    let human = ta(&dir, &["show", "a", "b"]);
+    let id_lines = human.lines().filter(|l| l.starts_with("id:")).count();
+    assert_eq!(id_lines, 2, "one record per id: {human}");
+    assert!(
+        human.contains("\n\n"),
+        "records separated by a blank line: {human}"
+    );
+
+    // Duplicates collapse and first-occurrence order is preserved: `a b a` -> [a, b].
+    let json = ta(
+        &dir,
+        &[
+            "show",
+            "a",
+            "b",
+            "a",
+            "--columns",
+            ID_KEY,
+            "--format",
+            "json",
+        ],
+    );
+    let (a, b) = (json.find(r#""a""#), json.find(r#""b""#));
+    assert!(
+        a < b && a.is_some(),
+        "first-occurrence order a before b: {json}"
+    );
+    assert_eq!(
+        json.matches(r#""a""#).count(),
+        1,
+        "duplicate id shown once: {json}"
+    );
+
+    // An unknown id alongside known ones still exits non-zero.
+    let out = run(ta_bin(), &dir, &["show", "a", "missing"]);
+    assert!(
+        !out.status.success(),
+        "an unknown id among knowns must exit non-zero, got:\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
 fn create_stamps_configurable_default_status() {
     let dir = fresh_dir("default-status");
     init_repo(&dir);

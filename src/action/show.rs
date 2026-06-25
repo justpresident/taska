@@ -1,6 +1,7 @@
-//! `show` action: one task, with its inverse relationship edges surfaced.
+//! `show` action: one or more tasks, each with its inverse relationship edges
+//! surfaced.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::BuildHasher;
 
 use serde_json::Value;
@@ -13,34 +14,67 @@ use crate::storage::EventStore;
 
 /// A `show` read.
 ///
-/// The task (with inverse edges injected as array fields) plus any read
-/// [`Warning`]s.
+/// The requested tasks (each with inverse edges injected as array fields), in the
+/// deduplicated order they were asked for, plus any read [`Warning`]s.
 pub struct ShowOutcome {
-    pub task: TaskState,
+    pub tasks: Vec<TaskState>,
     pub warnings: Vec<Warning>,
 }
 
-/// Materialize the store and return one task by id.
+/// Materialize the store once and return the named tasks, in the order given with
+/// duplicates dropped (first occurrence wins). Every unknown id is reported in a
+/// single error.
 ///
-/// The INVERSE edges of other tasks pointing here are surfaced as ordinary array
-/// fields under their configured inverse names - the task's own forward edges
-/// already live in `deps`, grouped by type, so they're not duplicated here.
-pub fn show(store: &impl EventStore, id: &str) -> Result<ShowOutcome, DynError> {
+/// For each task, the INVERSE edges of other tasks pointing at it are surfaced as
+/// ordinary array fields under their configured inverse names - the task's own
+/// forward edges already live in `deps`, grouped by type, so they're not
+/// duplicated here.
+pub fn show(store: &impl EventStore, ids: &[String]) -> Result<ShowOutcome, DynError> {
     let session = read(store)?;
-    let mut task = session
-        .state
-        .get(id)
-        .cloned()
-        .ok_or_else(|| format!("no task `{id}`"))?;
     let types = &store.config().relationships.types;
-    for (name, targets) in inverse_edges(&session.state, id, types) {
-        let arr = targets.into_iter().map(Value::String).collect();
-        task.custom_fields.insert(name, Value::Array(arr));
+
+    let mut tasks = Vec::with_capacity(ids.len());
+    let mut missing = Vec::new();
+    let mut seen = HashSet::new();
+    for id in ids {
+        if !seen.insert(id.as_str()) {
+            continue; // duplicate id: show it once
+        }
+        match session.state.get(id.as_str()) {
+            Some(task) => {
+                let mut task = task.clone();
+                for (name, targets) in inverse_edges(&session.state, id, types) {
+                    let arr = targets.into_iter().map(Value::String).collect();
+                    task.custom_fields.insert(name, Value::Array(arr));
+                }
+                tasks.push(task);
+            }
+            None => missing.push(id.as_str()),
+        }
+    }
+    if !missing.is_empty() {
+        return Err(missing_error(&missing).into());
     }
     Ok(ShowOutcome {
-        task,
+        tasks,
         warnings: session.warnings,
     })
+}
+
+/// One error naming every unknown id. A single miss keeps the bare
+/// "no task `<id>`" wording; several are listed together.
+fn missing_error(missing: &[&str]) -> String {
+    match missing {
+        [one] => format!("no task `{one}`"),
+        many => {
+            let list = many
+                .iter()
+                .map(|id| format!("`{id}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("no tasks: {list}")
+        }
+    }
 }
 
 /// A task's INVERSE relationship edges.

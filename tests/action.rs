@@ -89,14 +89,16 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
     assert_eq!(ready.tasks.len(), 1);
     assert_eq!(ready.tasks[0].id, "a");
 
-    // show: one task, with the INVERSE edge surfaced (b depends_on a => a `blocks` b).
-    let show = action::show(&store, "a").unwrap();
-    assert_eq!(show.task.id, "a");
+    // show: the named tasks, with the INVERSE edge surfaced (b depends_on a =>
+    // a `blocks` b). Multiple ids are accepted and deduplicated.
+    let show = action::show(&store, &["a".to_string(), "a".to_string()]).unwrap();
+    assert_eq!(show.tasks.len(), 1, "duplicate id collapses to one task");
+    assert_eq!(show.tasks[0].id, "a");
     assert_eq!(
-        show.task.custom_fields.get("blocks"),
+        show.tasks[0].custom_fields.get("blocks"),
         Some(&json!(["b"])),
         "inverse edge surfaced as a field: {:?}",
-        show.task.custom_fields
+        show.tasks[0].custom_fields
     );
 
     // prime: the config-tailored facts, as structured data - drivable without the

@@ -1,7 +1,8 @@
-//! `ta show <id>` - a single task in full (every field it has, by default).
+//! `ta show <id>...` - one or more tasks in full (every field they have, by
+//! default).
 //!
-//! The task (with its inverse edges surfaced) comes from [`crate::action::show`];
-//! this file is just its presentation.
+//! The tasks (with their inverse edges surfaced) come from [`crate::action::show`];
+//! this file is just their presentation.
 
 use crate::action::show;
 use crate::cli::print_warnings;
@@ -10,22 +11,21 @@ use crate::error::DynError;
 use crate::format::{full_columns, render_rows, DisplayArgs, RowStyle};
 use crate::storage::EventStore;
 
-/// Show a single task by id, defaulting to ALL of its fields (unlike `list`,
-/// which uses the configured columns). An explicit `--columns` still restricts.
-/// Human output defaults to a readable vertical record (`[display].show_layout`,
-/// overridable with `--layout`); `--format json`/`jsonl` go through the same path
-/// as `list`.
+/// Show one or more tasks by id, defaulting to ALL of their fields (unlike
+/// `list`, which uses the configured columns). An explicit `--columns` still
+/// restricts. Human output defaults to a readable vertical record
+/// (`[display].show_layout`, overridable with `--layout`), one record per task;
+/// `--format json`/`jsonl` go through the same path as `list`.
 pub fn cmd_show(
     store: &impl EventStore,
-    id: &str,
+    ids: &[String],
     display: &DisplayArgs,
     cfg: &DisplayConfig,
 ) -> Result<(), DynError> {
-    let outcome = show(store, id)?;
+    let outcome = show(store, ids)?;
     print_warnings(&outcome.warnings);
-    let task = outcome.task;
-    let tasks = [&task];
-    // Default to the full task: every field of this one task. An explicit
+    let tasks: Vec<&_> = outcome.tasks.iter().collect();
+    // Default to the full task: every field of these tasks. An explicit
     // `--columns` overrides.
     let columns = display
         .columns
@@ -65,10 +65,46 @@ mod tests {
             .unwrap();
 
         let d = display(OutputFormat::Human, false, None);
-        assert!(cmd_show(&store, "api", &d, &DisplayConfig::default()).is_ok());
+        assert!(cmd_show(&store, &["api".into()], &d, &DisplayConfig::default()).is_ok());
         assert!(
-            cmd_show(&store, "nope", &d, &DisplayConfig::default()).is_err(),
+            cmd_show(&store, &["nope".into()], &d, &DisplayConfig::default()).is_err(),
             "unknown id must error"
         );
+        // Any unknown id among several still errors.
+        assert!(
+            cmd_show(
+                &store,
+                &["api".into(), "nope".into()],
+                &d,
+                &DisplayConfig::default()
+            )
+            .is_err(),
+            "an unknown id alongside a known one must error"
+        );
+    }
+
+    #[test]
+    fn show_accepts_multiple_ids_deduplicated() {
+        let store = store_without_timestamps();
+        store
+            .append_events(&[
+                MutationEvent::new(OpType::Create, "api", Map::new()),
+                MutationEvent::new(OpType::Create, "web", Map::new()),
+            ])
+            .unwrap();
+
+        // Several ids in one call, with a duplicate that should collapse.
+        let outcome = show(&store, &["web".into(), "api".into(), "web".into()]).unwrap();
+        let ids: Vec<&str> = outcome.tasks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["web", "api"], "deduplicated, first-occurrence order");
+
+        let d = display(OutputFormat::Human, false, None);
+        assert!(cmd_show(
+            &store,
+            &["web".into(), "api".into()],
+            &d,
+            &DisplayConfig::default()
+        )
+        .is_ok());
     }
 }
