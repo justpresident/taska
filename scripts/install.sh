@@ -59,8 +59,10 @@ sha256() { # sha256 <file> -> hex on stdout, or non-zero if no tool
 }
 
 # --- detect the release target triple --------------------------------------
-# Sets TARGET on success; returns 1 when there's no prebuilt for this platform
-# (the caller then falls back to `cargo install`); dies on a truly unsupported one.
+# Sets TARGET for the Linux/macOS x86_64/aarch64 platforms releases ship for, and
+# dies on anything else (Windows, an unsupported OS/arch). A non-zero return is
+# still honored by the caller as a `cargo install` fallback, in case a future
+# platform gap reappears here.
 detect_target() {
   case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
@@ -77,10 +79,7 @@ detect_target() {
     arm64 | aarch64) arch="aarch64" ;;
     *) die "unsupported architecture '$(uname -m)'" ;;
   esac
-  # Releases ship x86_64 for Linux, and both arches for macOS.
-  if [ "$os" = "unknown-linux-musl" ] && [ "$arch" != "x86_64" ]; then
-    return 1
-  fi
+  # Releases ship both arches for Linux (static musl) and macOS.
   TARGET="${arch}-${os}"
 }
 

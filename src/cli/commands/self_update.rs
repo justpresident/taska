@@ -17,11 +17,13 @@ const BIN: &str = "ta";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
 /// The release-asset target triple for this platform, matching what the release
-/// workflow ships (static musl on Linux `x86_64`, both arches on macOS). `None`
-/// means there's no prebuilt binary - the caller falls back to `cargo install`.
+/// workflow ships (static musl on Linux `x86_64`/`aarch64`, both arches on
+/// macOS). `None` means there's no prebuilt binary - the caller falls back to
+/// `cargo install`.
 fn release_target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => Some("x86_64-unknown-linux-musl"),
+        ("linux", "aarch64") => Some("aarch64-unknown-linux-musl"),
         ("macos", "x86_64") => Some("x86_64-apple-darwin"),
         ("macos", "aarch64") => Some("aarch64-apple-darwin"),
         _ => None,
@@ -132,6 +134,7 @@ mod tests {
         // The mapping must name a triple the release workflow actually builds.
         let shipped = [
             "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-musl",
             "x86_64-apple-darwin",
             "aarch64-apple-darwin",
         ];

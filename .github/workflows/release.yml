@@ -34,6 +34,11 @@ jobs:
           # glibc version (the GLIBC-mismatch class of breakage we hit in dev).
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
+          # Static musl for ARM64, built native on GitHub's hosted ARM Linux
+          # runner (same any-distro portability as the x86_64 musl build; native,
+          # so no cross-toolchain to maintain).
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
           # macOS Intel, built native on the Intel runner (GitHub retired
           # macos-13; the Intel runners are now the `-intel`-suffixed labels).
           - os: macos-15-intel
@@ -58,9 +63,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # Pure-Rust crate, but the musl target links through musl-gcc.
+      # Pure-Rust crate, but the musl targets link through musl-gcc (the arm
+      # runner installs the aarch64 musl-gcc natively from the same package).
       - name: Install musl tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: endsWith(matrix.target, '-linux-musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Cache cargo

@@ -56,7 +56,8 @@ $ cargo install taska        # installs the `ta` binary
 
 Or grab a prebuilt binary - no Rust toolchain needed - from the [latest
 release](https://github.com/justpresident/taska/releases/latest). Each release
-ships a static Linux binary (runs on any distro) and both macOS variants:
+ships static Linux binaries (run on any distro) and both macOS variants, for both
+x86_64 and ARM64:
 
 ```console
 # macOS - pick your arch: aarch64 (Apple Silicon) or x86_64 (Intel)
@@ -65,8 +66,8 @@ $ VERSION=v0.5.0                # see the releases page for the latest
 $ curl -sSfL "https://github.com/justpresident/taska/releases/download/$VERSION/ta-$VERSION-$TARGET.tar.gz" | tar xz
 $ sudo mv "ta-$VERSION-$TARGET/ta" /usr/local/bin/
 
-# Linux (static, any distro)
-$ TARGET=x86_64-unknown-linux-musl
+# Linux (static, any distro) - pick your arch: x86_64 or aarch64 (ARM64)
+$ TARGET=x86_64-unknown-linux-musl   # ARM64: aarch64-unknown-linux-musl
 $ curl -sSfL "https://github.com/justpresident/taska/releases/download/$VERSION/ta-$VERSION-$TARGET.tar.gz" | tar xz
 $ sudo mv "ta-$VERSION-$TARGET/ta" /usr/local/bin/
 ```
