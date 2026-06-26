@@ -78,6 +78,18 @@ pub const TASK_ID_KEY: &str = "task_id";
 /// (which must stay a literal there).
 pub const META_KEY: &str = "_meta";
 
+/// Sub-key inside [`META_KEY`] marking a compensating `undo` event.
+///
+/// Its value is the `seq` of the original event this one reverses. It lives
+/// *inside* `_meta` (alongside any merge provenance) rather than as a top-level
+/// field, so it inherits `_meta`'s properties for free - never materialized into
+/// task state, dropped when its event folds into the baseline at compaction - and
+/// needs no new entry in [`RESERVED_FIELD_KEYS`] (a top-level user field named
+/// `undoes` stays legal). The `undo` planner reads it to skip already-undone
+/// events and to avoid re-undoing its own compensations; see
+/// [`MutationEvent::undoes`].
+pub const UNDOES_META_KEY: &str = "undoes";
+
 /// Field names never legal as user fields under ANY config.
 ///
 /// Rejectable at parse time, before a store or config exists. Two reasons,
@@ -230,6 +242,28 @@ impl MutationEvent {
             payload,
         }
     }
+
+    /// The `seq` of the original event this one undoes, if it is a compensating
+    /// `undo` event (it carries [`UNDOES_META_KEY`] inside `_meta`). `None` for an
+    /// ordinary event - so `undoes().is_none()` is the "this is an original, not an
+    /// undo" predicate the `undo` planner selects on.
+    #[must_use]
+    pub fn undoes(&self) -> Option<u64> {
+        self.meta
+            .as_ref()?
+            .get(UNDOES_META_KEY)
+            .and_then(Value::as_u64)
+    }
+
+    /// Mark this event as undoing the original at `original_seq`, recording it
+    /// under [`UNDOES_META_KEY`] inside `_meta` (created if absent, leaving any
+    /// existing provenance keys intact).
+    pub fn set_undoes(&mut self, original_seq: u64) {
+        let obj = self.meta.get_or_insert_with(|| Value::Object(Map::new()));
+        if let Value::Object(map) = obj {
+            map.insert(UNDOES_META_KEY.to_string(), Value::from(original_seq));
+        }
+    }
 }
 
 /// Verify a log slice is strictly increasing by `seq`.
@@ -347,6 +381,7 @@ pub fn task_cmp(a: &TaskState, b: &TaskState, column: &str) -> std::cmp::Orderin
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
 
@@ -361,6 +396,28 @@ mod tests {
         assert!(verify_seq_order(&[]).is_ok());
         assert!(verify_seq_order(&[at(1)]).is_ok());
         assert!(verify_seq_order(&[at(1), at(2), at(5)]).is_ok());
+    }
+
+    #[test]
+    fn undoes_round_trips_through_meta_and_is_never_a_payload_field() {
+        let mut e = at(7);
+        assert_eq!(e.undoes(), None, "a plain event undoes nothing");
+        e.set_undoes(42);
+        assert_eq!(e.undoes(), Some(42));
+
+        // The marker lives under `_meta`, not in the flattened payload, so it
+        // never materializes into task state - and it survives a JSON round-trip.
+        let line = serde_json::to_string(&e).unwrap();
+        assert!(
+            line.contains(r#""_meta":{"undoes":42}"#),
+            "marker stored under _meta: {line}"
+        );
+        let back: MutationEvent = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.undoes(), Some(42));
+        assert!(
+            !back.payload.contains_key(UNDOES_META_KEY) && !back.payload.contains_key(META_KEY),
+            "the marker is not a payload field"
+        );
     }
 
     #[test]

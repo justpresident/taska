@@ -203,9 +203,17 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Undo the last event(s): `ta undo [--count N] [--remove] [--force]`
+    /// Undo event(s), walking back through real history: `ta undo [--seq S] [--count N] [--remove] [--force]`
+    ///
+    /// With no flags, undoes the most recent undoable event; run it again and it
+    /// keeps walking older, skipping anything already undone (it never bounces on
+    /// its own compensations). `--seq S` targets a specific event; `--count N`
+    /// undoes N events from the start point, going older.
     Undo {
-        /// How many of the most recent events to undo (default 1)
+        /// Undo the specific event at this seq (default: the most recent undoable event)
+        #[arg(long)]
+        seq: Option<u64>,
+        /// How many events to undo, walking back from the start point (default 1)
         #[arg(long, default_value_t = 1)]
         count: usize,
         /// Apply without the confirmation prompt
@@ -733,10 +741,11 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
         Commands::Status { output } => cmd_status(store, &output),
         Commands::Prime { output } => cmd_prime(store, &output),
         Commands::Undo {
+            seq,
             count,
             force,
             remove,
-        } => cmd_undo(store, count, force, remove),
+        } => cmd_undo(store, seq, count, force, remove),
         Commands::Compact => {
             let cfg = store.config().compaction.clone();
             cmd_compact(store, &cfg, Utc::now())

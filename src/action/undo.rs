@@ -1,12 +1,16 @@
-//! `undo` action: reverse the last N events.
+//! `undo` action: walk back through genuine history, skipping prior undos.
 //!
-//! `plan` computes what would change and the exact log that would result -
-//! truncating the tail (local events, or `--remove`) or, when committed history
-//! is involved, keeping it and appending compensating events - without writing.
-//! `apply` writes that log. Takes a concrete [`FileStore`]: it inspects git
+//! `plan` selects the original event(s) to reverse - newest-first, or from a
+//! given `--seq` - skipping events that are themselves compensations and
+//! originals already undone, so repeated `undo` peels back real history instead
+//! of bouncing on its own output. It then computes the resulting log without
+//! writing: the clean uncommitted trailing run of targets is truncated, while
+//! committed or buried targets are reversed by appended compensations tagged
+//! `_undoes=<seq>` (the mark that records an original as undone). `apply` writes
+//! that log. Takes a concrete [`FileStore`]: it inspects git
 //! (`committed_mutation_count`) and rewrites the log via `replace_mutations`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
@@ -41,38 +45,76 @@ pub struct UndoPlan {
     new_log: Vec<MutationEvent>,
 }
 
-/// Plan the undo of the last `count` event(s). `None` when there's nothing to
-/// undo (empty log or `count == 0`). No writes.
+/// Plan an undo, walking back through real history.
 ///
-/// Two strategies, chosen by whether any undone event is already git-committed:
-/// truncate the tail (safe for local events; `--remove` extends it to committed
-/// ones, rewriting shared history), or keep committed history and append
-/// compensating events that walk the state back to the target.
-pub fn plan(store: &FileStore, count: usize, remove: bool) -> Result<Option<UndoPlan>, DynError> {
+/// With `seq = None` it targets the most recent *undoable* event and walks older
+/// for `count` of them; with `seq = Some(s)` it starts at `s` (inclusive) and
+/// walks older. Selection skips events that are themselves undo compensations and
+/// originals already undone, so repeated `undo` peels back genuine history
+/// instead of bouncing on its own output. `None` when there's nothing to undo
+/// (empty log, `count == 0`, or no undoable event left). No writes.
+///
+/// Applying is hybrid: the maximal trailing run of selected events that is still
+/// uncommitted (or any committed run when `remove`) is truncated outright; every
+/// other selected event - committed, or buried under newer kept events - is
+/// reversed by an *appended* compensation tagged `_undoes=<its seq>` (see
+/// [`MutationEvent::set_undoes`]), which is what records it as undone.
+pub fn plan(
+    store: &FileStore,
+    seq: Option<u64>,
+    count: usize,
+    remove: bool,
+) -> Result<Option<UndoPlan>, DynError> {
     let baseline = store.load_baseline()?;
     let mutations = store.load_mutations()?;
     let n = mutations.len();
     if count == 0 || n == 0 {
         return Ok(None);
     }
-    let count = count.min(n);
-    let keep = n - count;
-    let undone_slice = &mutations[keep..];
 
-    let current = materialize(store.config(), &baseline, &mutations);
-    let target = materialize(store.config(), &baseline, &mutations[..keep]);
+    // The original events this undo targets, newest-first.
+    let selected = select_targets(&mutations, seq, count)?;
+    if selected.is_empty() {
+        return Ok(None);
+    }
+    let selected_set: HashSet<u64> = selected.iter().map(|&i| mutations[i].seq).collect();
+    let config = store.config();
 
-    // The tasks any undone event touched, sorted for stable output.
-    let mut affected: Vec<String> = undone_slice.iter().map(|e| e.task_id.clone()).collect();
+    // The seqs some existing compensation already undoes. Reversing an original
+    // means replaying the log AS IF that original (and every already-undone one)
+    // never happened - so target states are always computed over the surviving
+    // ORIGINAL events with compensations dropped, never the raw log (whose
+    // compensations would otherwise pin the state and mask the removal).
+    let already_undone: HashSet<u64> = mutations.iter().filter_map(MutationEvent::undoes).collect();
+    let originals_without = |removed: &HashSet<u64>| -> Vec<MutationEvent> {
+        mutations
+            .iter()
+            .filter(|e| e.undoes().is_none() && !removed.contains(&e.seq))
+            .cloned()
+            .collect()
+    };
+
+    // Preview state: current vs the originals with every selected one also removed.
+    let current = materialize(config, &baseline, &mutations);
+    let mut removed_final = already_undone.clone();
+    removed_final.extend(selected_set.iter().copied());
+    let target = materialize(config, &baseline, &originals_without(&removed_final));
+
+    // Each selected event touches exactly its own task; the affected set drives
+    // the preview diff.
+    let mut affected: Vec<String> = selected
+        .iter()
+        .map(|&i| mutations[i].task_id.clone())
+        .collect();
     affected.sort();
     affected.dedup();
 
-    let undone = undone_slice
+    let undone = selected
         .iter()
-        .map(|e| UndoneEvent {
-            seq: e.seq,
-            op: e.op.clone(),
-            task_id: e.task_id.clone(),
+        .map(|&i| UndoneEvent {
+            seq: mutations[i].seq,
+            op: mutations[i].op.clone(),
+            task_id: mutations[i].task_id.clone(),
         })
         .collect();
     let changes = affected
@@ -84,40 +126,113 @@ pub fn plan(store: &FileStore, count: usize, remove: bool) -> Result<Option<Undo
         })
         .collect();
 
-    // How many of the log's events are already committed to git.
+    // Truncate the maximal trailing run of selected events within the writable
+    // region; compensate the rest.
     let committed_count = committed_mutation_count(store);
-    let any_committed = keep < committed_count;
+    let mut p = n;
+    while p > 0 && selected_set.contains(&mutations[p - 1].seq) {
+        p -= 1;
+    }
+    let trunc_floor = if remove { 0 } else { committed_count };
+    let trunc_p = p.max(trunc_floor);
+    let rewrites_committed_history = remove && p < committed_count;
 
-    let (new_log, rewrites_committed_history) = if remove || !any_committed {
-        // Truncate the tail. `--remove` past a commit rewrites shared history.
-        (mutations[..keep].to_vec(), remove && any_committed)
-    } else {
-        // Keep committed history; append compensating events from the committed
-        // prefix's state toward the target.
-        let truncate_to = committed_count;
-        let post = materialize(store.config(), &baseline, &mutations[..truncate_to]);
-        let comps = compensate(&post, &target, &affected);
-
-        let next = mutations[..truncate_to]
-            .iter()
-            .map(|e| e.seq)
-            .max()
-            .map_or(1, |m| m + 1);
-        let mut new_log = mutations[..truncate_to].to_vec();
-        for (seq, mut comp) in (next..).zip(comps) {
-            comp.seq = seq;
+    let mut new_log = mutations[..trunc_p].to_vec();
+    // Selected events still in the kept prefix (committed, or buried under newer
+    // kept events) can't be truncated - reverse them with appended, marked
+    // compensations, newest-first so each task diff stays minimal.
+    let buried: Vec<usize> = selected.iter().copied().filter(|&i| i < trunc_p).collect();
+    if !buried.is_empty() {
+        // The truncated tail originals are already gone from `new_log`, so seed
+        // the suppressed set with them (plus the already-undone) - then each
+        // step's target, computed over the surviving originals, lines up with the
+        // state `new_log` already materializes to.
+        let mut removed_running = already_undone;
+        removed_running.extend(mutations[trunc_p..].iter().map(|e| e.seq));
+        let mut prev = materialize(config, &baseline, &new_log);
+        let mut comps_all: Vec<MutationEvent> = Vec::new();
+        for &i in &buried {
+            let s = mutations[i].seq;
+            removed_running.insert(s);
+            let step = materialize(config, &baseline, &originals_without(&removed_running));
+            let id = mutations[i].task_id.clone();
+            let mut comps = compensate(&prev, &step, std::slice::from_ref(&id));
+            if comps.is_empty() {
+                // The event was shadowed by a later kept write, so reversing it
+                // changes no state - still record the undo with an inert marker
+                // event so a repeated `undo` moves past it.
+                comps.push(MutationEvent::new(OpType::Update, id, Map::new()));
+            }
+            for comp in &mut comps {
+                comp.set_undoes(s);
+            }
+            comps_all.extend(comps);
+            prev = step;
+        }
+        let next = new_log.iter().map(|e| e.seq).max().map_or(1, |m| m + 1);
+        for (assigned, mut comp) in (next..).zip(comps_all) {
+            comp.seq = assigned;
             new_log.push(comp);
         }
-        (new_log, false)
-    };
+    }
 
     Ok(Some(UndoPlan {
-        count,
+        count: selected.len(),
         undone,
         changes,
         rewrites_committed_history,
         new_log,
     }))
+}
+
+/// Choose the original events to undo, newest-first (returned as indices into
+/// `mutations`).
+///
+/// A *candidate* is an event that is neither a compensation (carries no
+/// `_undoes`) nor already undone (no other event points `_undoes` at it). With
+/// `seq = None` the walk starts at the newest event; with `seq = Some(s)` it
+/// starts at `s`, which must exist and be undoable - an unknown, already-undone,
+/// or undo-marker seq is a hard error, since the user named it explicitly. From
+/// the start it walks older, collecting up to `count` candidates and silently
+/// skipping non-candidates along the way.
+fn select_targets(
+    mutations: &[MutationEvent],
+    seq: Option<u64>,
+    count: usize,
+) -> Result<Vec<usize>, DynError> {
+    if mutations.is_empty() {
+        return Ok(Vec::new());
+    }
+    let undone: HashSet<u64> = mutations.iter().filter_map(MutationEvent::undoes).collect();
+    let is_candidate = |e: &MutationEvent| e.undoes().is_none() && !undone.contains(&e.seq);
+
+    let start = match seq {
+        Some(s) => {
+            let idx = mutations
+                .iter()
+                .position(|e| e.seq == s)
+                .ok_or_else(|| format!("no event with seq {s} in the log"))?;
+            if mutations[idx].undoes().is_some() {
+                return Err(format!("seq {s} is itself an undo event; it can't be undone").into());
+            }
+            if undone.contains(&s) {
+                return Err(format!("seq {s} is already undone").into());
+            }
+            idx
+        }
+        None => mutations.len().saturating_sub(1),
+    };
+
+    let mut selected = Vec::new();
+    for i in (0..=start).rev() {
+        if selected.len() >= count {
+            break;
+        }
+        if is_candidate(&mutations[i]) {
+            selected.push(i);
+        }
+    }
+    Ok(selected)
 }
 
 /// Apply a planned undo: rewrite the log to the planned result.
@@ -246,6 +361,44 @@ mod tests {
     use super::*;
     use crate::test_support::names::*;
     use crate::test_support::{state, task, task_rel};
+
+    fn at(op: OpType, id: &str, seq: u64) -> MutationEvent {
+        let mut e = MutationEvent::new(op, id, Map::new());
+        e.seq = seq;
+        e
+    }
+
+    #[test]
+    fn select_targets_walks_back_skipping_undos_and_already_undone() {
+        // Originals at seq 1..=3, plus a compensation (seq 4) undoing seq 3.
+        let mut comp = at(OpType::Update, "a", 4);
+        comp.set_undoes(3);
+        let log = vec![
+            at(OpType::Create, "a", 1),
+            at(OpType::Update, "a", 2),
+            at(OpType::Update, "a", 3),
+            comp,
+        ];
+        let seqs = |sel: Vec<usize>| sel.iter().map(|&i| log[i].seq).collect::<Vec<_>>();
+
+        // Newest candidate is seq 2: seq 4 is a compensation, seq 3 is already undone.
+        assert_eq!(seqs(select_targets(&log, None, 1).unwrap()), vec![2]);
+        // Walking further back yields seq 2 then seq 1, never the comp or the undone.
+        assert_eq!(seqs(select_targets(&log, None, 9).unwrap()), vec![2, 1]);
+        // An explicit, valid original is selected on its own.
+        assert_eq!(seqs(select_targets(&log, Some(1), 1).unwrap()), vec![1]);
+
+        // Naming an already-undone, a compensation, or a missing seq is an error.
+        assert!(
+            select_targets(&log, Some(3), 1).is_err(),
+            "seq 3 already undone"
+        );
+        assert!(
+            select_targets(&log, Some(4), 1).is_err(),
+            "seq 4 is an undo event"
+        );
+        assert!(select_targets(&log, Some(99), 1).is_err(), "no such seq");
+    }
 
     #[test]
     fn compensate_unsets_a_removed_field_with_null() {

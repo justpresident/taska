@@ -249,3 +249,122 @@ fn undo_preview_renders_a_field_diff_of_changed_columns() {
     // Only changed columns/tasks: the untouched `db` task never appears.
     assert!(!out.contains("db:"), "unaffected task absent: {out}");
 }
+
+/// The headline: repeated `undo` keeps walking BACK through real history instead
+/// of bouncing on its own compensations.
+#[test]
+fn undo_walks_back_through_committed_history() {
+    let dir = fresh_dir("undo-walkback");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=s0")]);
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=s1")]);
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=s2")]);
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=s3")]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "hist"]);
+
+    let shows = |val: &str| {
+        ta(&dir, &["show", "a", "--format", "json"])
+            .contains(&format!(r#""{STATUS_FIELD}":"{val}""#))
+    };
+    assert!(shows("s3"), "starts at s3");
+    ta(&dir, &["undo", "--force"]);
+    assert!(shows("s2"), "undo #1 -> s2");
+    // The crux: a second undo must walk to s1, NOT redo s3.
+    ta(&dir, &["undo", "--force"]);
+    assert!(
+        shows("s1"),
+        "undo #2 walks back to s1, never redoes its own compensation"
+    );
+    ta(&dir, &["undo", "--force"]);
+    assert!(shows("s0"), "undo #3 -> s0");
+}
+
+/// Each committed undo records the seq it reverses under `_meta.undoes`, which is
+/// what marks an original as already-undone for the next `undo`.
+#[test]
+fn undo_records_the_undone_seq_in_meta() {
+    let dir = fresh_dir("undo-marker");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=closed")]); // seq 2
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "h"]);
+
+    ta(&dir, &["undo", "--force"]); // undoes seq 2, appends a marked compensation
+    let log = std::fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    assert!(
+        log.contains(r#""_meta":{"undoes":2}"#),
+        "the compensation marks the seq it undoes: {log}"
+    );
+}
+
+/// `--seq` undoes a specific event; naming one that is already undone, is itself a
+/// compensation, or doesn't exist is a hard error.
+#[test]
+fn undo_seq_targets_a_specific_event_and_validates_it() {
+    let dir = fresh_dir("undo-seq");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=p0")]);
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=p1")]); // seq 2
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=p2")]); // seq 3
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "h"]);
+
+    // Undo the mid-history seq 2 (shadowed by seq 3, so state stays p2) - it is
+    // still recorded as undone.
+    ta(&dir, &["undo", "--seq", "2", "--force"]);
+    assert!(
+        ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(r#""{STATUS_FIELD}":"p2""#)),
+        "seq 2 was shadowed by seq 3, so state is unchanged"
+    );
+
+    // Re-undoing the same seq is rejected.
+    let out = run(ta_bin(), &dir, &["undo", "--seq", "2", "--force"]);
+    assert!(
+        !out.status.success(),
+        "re-undo of an already-undone seq must fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("already undone"),
+        "error names the cause: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // An unknown seq is rejected.
+    let out = run(ta_bin(), &dir, &["undo", "--seq", "999", "--force"]);
+    assert!(
+        !out.status.success()
+            && String::from_utf8_lossy(&out.stderr).contains("no event with seq 999"),
+        "unknown seq errors: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // A plain `undo` now skips the already-undone seq 2 and reverses seq 3. With
+    // both seq 2 and seq 3 undone, only the create (p0) survives.
+    ta(&dir, &["undo", "--force"]);
+    assert!(
+        ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(r#""{STATUS_FIELD}":"p0""#)),
+        "the next undo skips undone seq 2 and reverts seq 3, leaving only p0"
+    );
+}
+
+/// `--seq S --count N` starts at S and undoes N events going older.
+#[test]
+fn undo_seq_with_count_walks_older() {
+    let dir = fresh_dir("undo-seq-count");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=v0")]);
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=v1")]);
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=v2")]);
+    ta(&dir, &["update", "a", &format!("{STATUS_FIELD}=v3")]); // seq 4
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "h"]);
+
+    // From seq 4, undo 3 events going older (seq 4, 3, 2), leaving only the create.
+    ta(&dir, &["undo", "--seq", "4", "--count", "3", "--force"]);
+    assert!(
+        ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(r#""{STATUS_FIELD}":"v0""#)),
+        "undoing seq 4,3,2 walks the status back to v0"
+    );
+}
