@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Map, Value};
 
 use crate::action::materialize;
+use crate::config::Config;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType, TaskState, REL_KEY, TARGET_KEY};
 use crate::storage::{EventStore, FileStore};
@@ -80,14 +81,32 @@ pub fn plan(
     let selected_set: HashSet<u64> = selected.iter().map(|&i| mutations[i].seq).collect();
     let config = store.config();
 
+    // Each selected event touches exactly its own task, and no event ever touches
+    // a task it doesn't name - so undo only needs those tasks' own state. Scope
+    // the baseline + log to them ONCE up front and fold only that subset in every
+    // materialization below: a busy store with hundreds of tasks then replays a
+    // handful of events per pass instead of the whole log. The truncation/seq
+    // bookkeeping below still works on the full `mutations` (it rewrites the real
+    // log, all tasks); only state computation is scoped.
+    let mut affected: Vec<String> = selected
+        .iter()
+        .map(|&i| mutations[i].task_id.clone())
+        .collect();
+    affected.sort();
+    affected.dedup();
+    let (scoped_baseline, scoped_muts) = scope_to_tasks(&baseline, &mutations, &affected);
+
     // The seqs some existing compensation already undoes. Reversing an original
-    // means replaying the log AS IF that original (and every already-undone one)
-    // never happened - so target states are always computed over the surviving
-    // ORIGINAL events with compensations dropped, never the raw log (whose
-    // compensations would otherwise pin the state and mask the removal).
-    let already_undone: HashSet<u64> = mutations.iter().filter_map(MutationEvent::undoes).collect();
+    // means replaying AS IF that original (and every already-undone one) never
+    // happened - so target states are computed over the surviving ORIGINAL events
+    // (compensations dropped), never the raw log (whose compensations would
+    // otherwise pin the state and mask the removal).
+    let already_undone: HashSet<u64> = scoped_muts
+        .iter()
+        .filter_map(MutationEvent::undoes)
+        .collect();
     let originals_without = |removed: &HashSet<u64>| -> Vec<MutationEvent> {
-        mutations
+        scoped_muts
             .iter()
             .filter(|e| e.undoes().is_none() && !removed.contains(&e.seq))
             .cloned()
@@ -95,19 +114,10 @@ pub fn plan(
     };
 
     // Preview state: current vs the originals with every selected one also removed.
-    let current = materialize(config, &baseline, &mutations);
+    let current = materialize(config, &scoped_baseline, &scoped_muts);
     let mut removed_final = already_undone.clone();
     removed_final.extend(selected_set.iter().copied());
-    let target = materialize(config, &baseline, &originals_without(&removed_final));
-
-    // Each selected event touches exactly its own task; the affected set drives
-    // the preview diff.
-    let mut affected: Vec<String> = selected
-        .iter()
-        .map(|&i| mutations[i].task_id.clone())
-        .collect();
-    affected.sort();
-    affected.dedup();
+    let target = materialize(config, &scoped_baseline, &originals_without(&removed_final));
 
     let undone = selected
         .iter()
@@ -140,37 +150,24 @@ pub fn plan(
     let mut new_log = mutations[..trunc_p].to_vec();
     // Selected events still in the kept prefix (committed, or buried under newer
     // kept events) can't be truncated - reverse them with appended, marked
-    // compensations, newest-first so each task diff stays minimal.
+    // compensations.
     let buried: Vec<usize> = selected.iter().copied().filter(|&i| i < trunc_p).collect();
     if !buried.is_empty() {
-        // The truncated tail originals are already gone from `new_log`, so seed
-        // the suppressed set with them (plus the already-undone) - then each
-        // step's target, computed over the surviving originals, lines up with the
-        // state `new_log` already materializes to.
-        let mut removed_running = already_undone;
-        removed_running.extend(mutations[trunc_p..].iter().map(|e| e.seq));
-        let mut prev = materialize(config, &baseline, &new_log);
-        let mut comps_all: Vec<MutationEvent> = Vec::new();
-        for &i in &buried {
-            let s = mutations[i].seq;
-            removed_running.insert(s);
-            let step = materialize(config, &baseline, &originals_without(&removed_running));
-            let id = mutations[i].task_id.clone();
-            let mut comps = compensate(&prev, &step, std::slice::from_ref(&id));
-            if comps.is_empty() {
-                // The event was shadowed by a later kept write, so reversing it
-                // changes no state - still record the undo with an inert marker
-                // event so a repeated `undo` moves past it.
-                comps.push(MutationEvent::new(OpType::Update, id, Map::new()));
-            }
-            for comp in &mut comps {
-                comp.set_undoes(s);
-            }
-            comps_all.extend(comps);
-            prev = step;
-        }
+        // Seed the suppressed set with the truncated tail originals (already gone
+        // from `new_log`) plus the already-undone - the state the compensations
+        // walk forward from.
+        let mut seed = already_undone;
+        seed.extend(mutations[trunc_p..].iter().map(|e| e.seq));
+        let comps = buried_compensations(
+            config,
+            &scoped_baseline,
+            &scoped_muts,
+            &mutations,
+            &buried,
+            seed,
+        );
         let next = new_log.iter().map(|e| e.seq).max().map_or(1, |m| m + 1);
-        for (assigned, mut comp) in (next..).zip(comps_all) {
+        for (assigned, mut comp) in (next..).zip(comps) {
             comp.seq = assigned;
             new_log.push(comp);
         }
@@ -183,6 +180,85 @@ pub fn plan(
         rewrites_committed_history,
         new_log,
     }))
+}
+
+/// The compensating events reversing the `buried` originals (indices into
+/// `mutations`), each tagged with the seq it undoes.
+///
+/// Walking newest-first, each step removes one more original from the surviving
+/// set and diffs the affected task's state, so a single original maps to one
+/// tagged compensation; a state-neutral (shadowed) reversal still yields an inert
+/// marker so repeated `undo` makes progress. `seed` is the set already removed
+/// before the first step (the truncated tail plus anything already undone). Runs
+/// on the task-scoped baseline/log, so each replay folds only the affected tasks.
+fn buried_compensations(
+    config: &Config,
+    scoped_baseline: &[TaskState],
+    scoped_muts: &[MutationEvent],
+    mutations: &[MutationEvent],
+    buried: &[usize],
+    seed: HashSet<u64>,
+) -> Vec<MutationEvent> {
+    let originals_without = |removed: &HashSet<u64>| -> Vec<MutationEvent> {
+        scoped_muts
+            .iter()
+            .filter(|e| e.undoes().is_none() && !removed.contains(&e.seq))
+            .cloned()
+            .collect()
+    };
+    let mut removed_running = seed;
+    let mut prev = materialize(
+        config,
+        scoped_baseline,
+        &originals_without(&removed_running),
+    );
+    let mut comps_all = Vec::new();
+    for &i in buried {
+        let s = mutations[i].seq;
+        removed_running.insert(s);
+        let step = materialize(
+            config,
+            scoped_baseline,
+            &originals_without(&removed_running),
+        );
+        let id = mutations[i].task_id.clone();
+        let mut comps = compensate(&prev, &step, std::slice::from_ref(&id));
+        if comps.is_empty() {
+            // The event was shadowed by a later kept write, so reversing it changes
+            // no state - still record the undo with an inert marker event so a
+            // repeated `undo` moves past it.
+            comps.push(MutationEvent::new(OpType::Update, id, Map::new()));
+        }
+        for comp in &mut comps {
+            comp.set_undoes(s);
+        }
+        comps_all.extend(comps);
+        prev = step;
+    }
+    comps_all
+}
+
+/// The baseline records and log events that belong to `affected` - undo's state
+/// computation only ever needs these tasks, so every materialization folds this
+/// subset instead of the whole store.
+fn scope_to_tasks(
+    baseline: &[TaskState],
+    mutations: &[MutationEvent],
+    affected: &[String],
+) -> (Vec<TaskState>, Vec<MutationEvent>) {
+    let ids: HashSet<&str> = affected.iter().map(String::as_str).collect();
+    (
+        baseline
+            .iter()
+            .filter(|t| ids.contains(t.id.as_str()))
+            .cloned()
+            .collect(),
+        mutations
+            .iter()
+            .filter(|e| ids.contains(e.task_id.as_str()))
+            .cloned()
+            .collect(),
+    )
 }
 
 /// Choose the original events to undo, newest-first (returned as indices into
@@ -366,6 +442,35 @@ mod tests {
         let mut e = MutationEvent::new(op, id, Map::new());
         e.seq = seq;
         e
+    }
+
+    #[test]
+    fn scope_to_tasks_keeps_only_the_named_tasks_baseline_and_events() {
+        let baseline = vec![
+            task("a", &[], &[]),
+            task("b", &[], &[]),
+            task("c", &[], &[]),
+        ];
+        let muts = vec![
+            at(OpType::Create, "a", 1),
+            at(OpType::Update, "b", 2),
+            at(OpType::Update, "a", 3),
+            at(OpType::Create, "c", 4),
+        ];
+        let (scoped_baseline, scoped_muts) = scope_to_tasks(&baseline, &muts, &["a".to_string()]);
+        assert_eq!(
+            scoped_baseline
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a"],
+            "only the named task's baseline survives"
+        );
+        assert_eq!(
+            scoped_muts.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![1, 3],
+            "only the named task's events survive, in order"
+        );
     }
 
     #[test]
