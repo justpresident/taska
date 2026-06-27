@@ -110,7 +110,10 @@ pub fn init_renamed(dir: &Path) {
     init_repo(dir);
     fs::create_dir_all(dir.join(".taska")).unwrap();
     fs::write(dir.join(".taska/config.toml"), RENAMED_SCHEMA_CONFIG).unwrap();
-    ta(dir, &["init"]);
+    // --no-commit: these provisioning helpers leave git history to the test, so
+    // tests that build their own commit graphs aren't perturbed by init's
+    // auto-commit (which is covered directly in crud.rs).
+    ta(dir, &["init", "--no-commit"]);
 }
 
 /// Provision a store with the schema-less renamed config (see
@@ -121,7 +124,7 @@ pub fn init_renamed_open(dir: &Path) {
     init_repo(dir);
     fs::create_dir_all(dir.join(".taska")).unwrap();
     fs::write(dir.join(".taska/config.toml"), RENAMED_OPEN_CONFIG).unwrap();
-    ta(dir, &["init"]);
+    ta(dir, &["init", "--no-commit"]); // leave commits to the test (see init_renamed)
 }
 
 pub fn rows(path: &Path) -> usize {

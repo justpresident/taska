@@ -4,8 +4,8 @@
 use crate::action::init::{init, AgentFileStatus, StoreInit};
 use crate::error::DynError;
 
-pub fn cmd_init() -> Result<(), DynError> {
-    let outcome = init()?;
+pub fn cmd_init(no_commit: bool) -> Result<(), DynError> {
+    let outcome = init(!no_commit)?;
     match &outcome.store {
         StoreInit::Reused(dir) => println!("taska store already present at {}", dir.display()),
         StoreInit::Created(dir) => println!("Initialized taska store at {}", dir.display()),
@@ -17,6 +17,9 @@ pub fn cmd_init() -> Result<(), DynError> {
             AgentFileStatus::Unchanged => "taska integration already current in",
         };
         println!("{msg} {}", file.path.display());
+    }
+    if let Some(hash) = &outcome.commit {
+        println!("Committed taska store as {hash}");
     }
     // On an interactive terminal, offer to set up shell completion (skipped in
     // scripts/CI and when it's already installed).

@@ -85,7 +85,7 @@ $ cargo install --path taska
 
 ## Quick start
 
-Run `ta init` once per clone (inside a git repository) to create the `.taska/` store and register the merge driver in your **local** git config. Run from a subdirectory, it creates the store at the repo root (an existing store anywhere up the tree is reused).
+Run `ta init` once per clone (inside a git repository) to create the `.taska/` store and register the merge driver in your **local** git config. It also commits the new store, `.gitattributes`, and the agent-integration block in one commit, so the store is version-controlled from the first command (pass `--no-commit` to skip that and stage nothing). Run from a subdirectory, it creates the store at the repo root (an existing store anywhere up the tree is reused).
 
 In the session below, only the lowercase verbs (`create`, `dep`, `list`, ...) are literal taska syntax. Everything else is yours - task ids like `migrate-db` and fields like `status=open priority=3` are arbitrary, and taska defines none of them:
 
@@ -129,7 +129,7 @@ $ ta list --format jsonl
 {"id":"migrate-db","title":"Run DB migration","status":"closed","deps":{}}
 ```
 
-Commit `.taska/` and `.gitattributes` along with your code - they travel with the repo. The merge-driver *definitions*, however, live in per-clone local git config, so run `ta init` once in every fresh clone (and after a late `git init`); until you do, every `ta` command warns on stderr that the clone's merge protection is incomplete.
+Your first `ta init` commits `.taska/` and `.gitattributes` for you; commit later `.taska/` changes along with the code they describe - they travel with the repo. The merge-driver *definitions*, however, live in per-clone local git config: a fresh clone (or a late `git init`) re-registers them automatically on the next `ta` command, since the committed `.gitattributes` already declares them. taska warns on stderr only if `.gitattributes` itself is missing the entries - then run `ta init` to restore them.
 
 ## How it works
 
@@ -263,7 +263,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 
 | Command | Description |
 |---|---|
-| `ta init` | Create the store, register the git merge drivers, and write/refresh a small, **config-agnostic** agent-integration block in `AGENTS.md` (created if neither it nor `CLAUDE.md` exists) and any existing `CLAUDE.md` - bare command shapes + durable working habits + pointers to `ta prime` (for this store's schema and ready-to-run examples) and `ta <command> --help`. Marker-delimited and idempotent; run once per clone |
+| `ta init` | Create the store, register the git merge drivers, and write/refresh a small, **config-agnostic** agent-integration block in `AGENTS.md` (created if neither it nor `CLAUDE.md` exists) and any existing `CLAUDE.md` - bare command shapes + durable working habits + pointers to `ta prime` (for this store's schema and ready-to-run examples) and `ta <command> --help`. Marker-delimited and idempotent; run once per clone. Commits the store, `.gitattributes`, and the block it wrote in one commit (`--no-commit` to skip), skipping any gitignored path |
 | `ta create <id> [field=value ...]` | Create a task with arbitrary fields. A field name no task uses yet is rejected (with a did-you-mean) unless `--new-field` - so a typo like `titel` can't silently spawn a phantom column. The first task on an empty store is exempt (it seeds the vocabulary) |
 | `ta update <id> <field=value \| field+=value ...>` | `=` sets a field; `+=` appends to a text field (one entry per line). Mix both in one command. Appends merge conflict-free (concurrent appends accumulate). Introducing a never-before-seen field name needs `--new-field`, same as `create` |
 | `ta dep add <task> <type>=<target> ...` | Add typed relationship edge(s); each `type` must be declared in `[relationships]` (e.g. `ta dep add api depends_on=db relates_to=ui`). A `hierarchy` type like `has_subtask` makes a parent/child edge that gates like a blocker but renders distinctly. Rejects a second blocking edge between the same pair, or a second parent for a task |

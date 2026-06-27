@@ -56,7 +56,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Initialize a taska repository environment
-    Init,
+    Init {
+        /// Create the store and `.gitattributes` but don't git-commit them
+        #[arg(long)]
+        no_commit: bool,
+    },
     /// Create a new task: `ta create <id> [field=value ...]`
     ///
     /// Errors if `<id>` already exists or a field name is reserved/computed
@@ -557,7 +561,7 @@ pub fn run() -> Result<(), DynError> {
     }
     match cli.command {
         // Commands that don't operate on an existing store.
-        Commands::Init => cmd_init(),
+        Commands::Init { no_commit } => cmd_init(no_commit),
         Commands::Completions { shell, install } => cmd_completions(shell, install),
         Commands::SelfUpdate { check, force } => cmd_self_update(check, force),
         Commands::GitMerge {
@@ -753,7 +757,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             cmd_compact(store, &cfg, Utc::now())
         }
         // Resolved before dispatch in `run`.
-        Commands::Init
+        Commands::Init { .. }
         | Commands::Completions { .. }
         | Commands::SelfUpdate { .. }
         | Commands::Config { .. }

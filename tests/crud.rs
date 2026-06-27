@@ -36,6 +36,133 @@ fn init_creates_config_and_registers_merge_driver() {
 }
 
 #[test]
+fn init_commits_store_and_leaves_a_clean_tree() {
+    // A fresh init version-controls the store from the first command: .taska, the
+    // .gitattributes merge-driver registration, and the agent file init wrote are
+    // all committed, so `git status` is clean with nothing left for the user to add.
+    let dir = fresh_dir("init-commit");
+    init_repo(&dir);
+    let out = ta(&dir, &["init"]);
+    assert!(
+        out.contains("Committed taska store"),
+        "init reports the commit: {out}"
+    );
+
+    let status = git(&dir, &["status", "--porcelain"]);
+    assert!(
+        status.trim().is_empty(),
+        "clean tree after init: {status:?}"
+    );
+
+    let tracked = git(&dir, &["ls-files"]);
+    for path in [
+        ".taska/config.toml",
+        ".taska/mutations.jsonl",
+        ".gitattributes",
+        "AGENTS.md",
+    ] {
+        assert!(
+            tracked.lines().any(|l| l == path),
+            "{path} is committed: {tracked}"
+        );
+    }
+    let subject = git(&dir, &["log", "-1", "--pretty=%s"]);
+    assert!(
+        subject.contains("Initialize taska store"),
+        "commit subject: {subject}"
+    );
+}
+
+#[test]
+fn reinit_makes_no_empty_commit() {
+    // Re-running init when nothing changed must not pile up empty commits.
+    let dir = fresh_dir("init-recommit");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    let before = git(&dir, &["rev-list", "--count", "HEAD"]);
+    ta(&dir, &["init"]);
+    let after = git(&dir, &["rev-list", "--count", "HEAD"]);
+    assert_eq!(
+        before.trim(),
+        after.trim(),
+        "no new commit on a no-op re-init"
+    );
+    assert!(
+        git(&dir, &["status", "--porcelain"]).trim().is_empty(),
+        "still clean after re-init"
+    );
+}
+
+#[test]
+fn init_no_commit_leaves_the_store_uncommitted() {
+    // --no-commit is the escape hatch for scripted setups: the store is created
+    // but nothing is committed (or even staged), so the tree is dirty afterwards.
+    let dir = fresh_dir("init-nocommit");
+    init_repo(&dir);
+    let out = ta(&dir, &["init", "--no-commit"]);
+    assert!(!out.contains("Committed"), "no commit reported: {out}");
+    assert_eq!(
+        git(&dir, &["rev-list", "--all", "--count"]).trim(),
+        "0",
+        "no commits exist"
+    );
+    let status = git(&dir, &["status", "--porcelain"]);
+    assert!(status.contains(".taska/"), "store left untracked: {status}");
+}
+
+#[test]
+fn init_commit_skips_gitignored_paths() {
+    // A repo may gitignore a file init would otherwise commit (here the agent
+    // file). Explicitly `git add`-ing an ignored path errors and half-stages the
+    // rest, so init must skip the ignored ones and still commit what it can -
+    // never aborting the whole commit.
+    let dir = fresh_dir("init-commit-ignored");
+    init_repo(&dir);
+    fs::write(dir.join(".gitignore"), "AGENTS.md\n").unwrap();
+
+    let out = ta(&dir, &["init"]);
+    assert!(
+        out.contains("Committed taska store"),
+        "still commits: {out}"
+    );
+
+    let tracked = git(&dir, &["ls-files"]);
+    assert!(
+        tracked.lines().any(|l| l == ".taska/config.toml"),
+        "store committed: {tracked}"
+    );
+    assert!(
+        tracked.lines().any(|l| l == ".gitattributes"),
+        ".gitattributes committed: {tracked}"
+    );
+    assert!(
+        !tracked.lines().any(|l| l == "AGENTS.md"),
+        "gitignored agent file is not committed: {tracked}"
+    );
+}
+
+#[test]
+fn init_makes_no_commit_when_everything_is_gitignored() {
+    // If every path init would commit is gitignored (here the whole store), there
+    // is nothing to version-control: init must not error or make a partial commit.
+    let dir = fresh_dir("init-all-ignored");
+    init_repo(&dir);
+    fs::write(
+        dir.join(".gitignore"),
+        ".taska/\n.gitattributes\nAGENTS.md\n",
+    )
+    .unwrap();
+
+    let out = ta(&dir, &["init"]);
+    assert!(!out.contains("Committed"), "nothing committed: {out}");
+    assert_eq!(
+        git(&dir, &["rev-list", "--all", "--count"]).trim(),
+        "0",
+        "no commit created"
+    );
+}
+
+#[test]
 fn init_outside_git_is_quiet_and_actionable() {
     // Deliberately NO `git init`: the store must still initialize, with ONE
     // actionable warning - not the raw `fatal: not in a git directory` noise

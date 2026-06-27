@@ -13,7 +13,7 @@
 //! constant, so auto-registering it can't run anything the repo chose).
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::DynError;
 
@@ -42,6 +42,96 @@ pub fn setup(repo_root: &Path) -> Result<(), DynError> {
         );
     }
     Ok(())
+}
+
+/// Stage and commit exactly `paths` as a single commit with `message`, returning
+/// the new commit's short hash.
+///
+/// Path-scoped on purpose (`git commit -- <paths>`): a user's unrelated staged or
+/// working-tree changes are left untouched. A no-op - returning `None` - when the
+/// committable paths hold nothing new (so a re-init never makes an empty commit),
+/// when every path is gitignored, or when git is unavailable / this isn't a repo
+/// (so a plain-directory `ta init` doesn't fail, matching the best-effort spirit
+/// of [`setup`]).
+///
+/// Gitignored paths are dropped up front: explicitly `git add`-ing an ignored
+/// path is an error (exit 1) that also leaves the rest half-staged, so a repo
+/// that ignores an expected file - say CLAUDE.md, or even `.gitattributes` or the
+/// whole `.taska` store - commits what it can rather than failing the whole step.
+pub fn commit_paths(repo_root: &Path, paths: &[PathBuf], message: &str) -> Option<String> {
+    use std::collections::HashSet;
+    use std::ffi::OsStr;
+
+    if paths.is_empty() {
+        return None;
+    }
+
+    // Run git in the repo as `<leading...> -- <these>`, scoping the subcommand to
+    // exactly `these` paths.
+    let scoped = |leading: &[&OsStr], these: &[&OsStr]| -> Option<std::process::Output> {
+        let mut args: Vec<&OsStr> = leading.to_vec();
+        args.push(OsStr::new("--"));
+        args.extend_from_slice(these);
+        std::process::Command::new("git")
+            .current_dir(repo_root)
+            .args(&args)
+            .output()
+            .ok()
+    };
+
+    let all: Vec<&OsStr> = paths.iter().map(|p| p.as_os_str()).collect();
+
+    // Drop any path git would ignore. `check-ignore` echoes the ignored pathspecs
+    // verbatim (exit 0 = some ignored, 1 = none, anything else = no repo / no git);
+    // it already consults the index, so an already-tracked file is never reported.
+    let ignored: HashSet<&OsStr> = match scoped(&[OsStr::new("check-ignore")], &all) {
+        Some(o) if o.status.code() == Some(0) => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter_map(|line| all.iter().copied().find(|p| p.to_str() == Some(line)))
+            .collect(),
+        _ => HashSet::new(),
+    };
+    let committable: Vec<&OsStr> = all
+        .iter()
+        .copied()
+        .filter(|p| !ignored.contains(p))
+        .collect();
+    if committable.is_empty() {
+        return None; // everything we'd commit is gitignored - nothing to track
+    }
+
+    // Stage the committable paths. A non-repo or missing git fails here, no-op.
+    scoped(&[OsStr::new("add")], &committable).filter(|o| o.status.success())?;
+
+    // Nothing staged among them => nothing to commit (a clean re-init):
+    // `diff --cached --quiet` exits 0 only when there's no staged change.
+    if scoped(
+        &[
+            OsStr::new("diff"),
+            OsStr::new("--cached"),
+            OsStr::new("--quiet"),
+        ],
+        &committable,
+    )?
+    .status
+    .success()
+    {
+        return None;
+    }
+
+    scoped(
+        &[OsStr::new("commit"), OsStr::new("-m"), OsStr::new(message)],
+        &committable,
+    )
+    .filter(|o| o.status.success())?;
+
+    let head = std::process::Command::new("git")
+        .current_dir(repo_root)
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    Some(String::from_utf8_lossy(&head.stdout).trim().to_owned())
 }
 
 /// Append a `<path> merge=<driver>` attribute line if it isn't already present.

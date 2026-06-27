@@ -32,10 +32,15 @@ pub struct AgentFile {
     pub status: AgentFileStatus,
 }
 
-/// The full result of `init`: the store outcome plus every agent file synced.
+/// The full result of `init`.
+///
+/// The store outcome, every agent file synced, and the short hash of the commit
+/// that version-controlled them (`None` when committing was skipped, this isn't a
+/// git repo, or nothing changed since the last init).
 pub struct InitOutcome {
     pub store: StoreInit,
     pub agent_files: Vec<AgentFile>,
+    pub commit: Option<String>,
 }
 
 /// The integration-block markers.
@@ -61,7 +66,12 @@ const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 /// plain directory (no SCM above) keeps it at the cwd. The driver is always
 /// (re)registered, and the integration block is always re-synced, so re-running
 /// is how a clone installs both.
-pub fn init() -> Result<InitOutcome, DynError> {
+///
+/// With `commit`, the store, `.gitattributes`, and any agent file this run wrote
+/// are committed as one path-scoped commit so the store is version-controlled
+/// from the first command; it no-ops cleanly outside a git repo or when nothing
+/// changed (see [`git::commit_paths`]).
+pub fn init(commit: bool) -> Result<InitOutcome, DynError> {
     let (base_dir, store_outcome) = if let Ok(existing) = FileStore::discover() {
         let dir = existing.base_dir;
         (dir.clone(), StoreInit::Reused(dir))
@@ -87,9 +97,37 @@ pub fn init() -> Result<InitOutcome, DynError> {
     // never drifts as the config changes - `ta prime` carries the dynamic detail.
     let agent_files = sync_agent_files(&repo_root, &integration_block())?;
 
+    // Commit only what this run touched: the store, the merge-driver registration,
+    // and an agent file we actually wrote (Created/Updated) - never one left
+    // Unchanged, so a file init didn't touch can't drag the user's unrelated edits
+    // into the commit. A fresh store's message says "Initialize"; a re-init that
+    // has something to commit says "Update".
+    let commit = if commit {
+        let mut paths = vec![store.base_dir, repo_root.join(".gitattributes")];
+        paths.extend(
+            agent_files
+                .iter()
+                .filter(|f| {
+                    matches!(
+                        f.status,
+                        AgentFileStatus::Created | AgentFileStatus::Updated
+                    )
+                })
+                .map(|f| f.path.clone()),
+        );
+        let message = match &store_outcome {
+            StoreInit::Created(_) => "Initialize taska store",
+            StoreInit::Reused(_) => "Update taska store",
+        };
+        git::commit_paths(&repo_root, &paths, message)
+    } else {
+        None
+    };
+
     Ok(InitOutcome {
         store: store_outcome,
         agent_files,
+        commit,
     })
 }
 
