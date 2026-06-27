@@ -5,6 +5,42 @@ All notable changes to `taska` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). History before 0.3.0 lives in the
 git log.
 
+## [1.1.0] - 2026-06-27
+
+Quality-of-life work on top of 1.0: a git-style `-C` flag for driving a store
+from elsewhere, an `ta init` that version-controls the store for you, a reworked
+`ta undo` that walks real history, `ta show` over multiple ids, and ARM64 Linux
+binaries.
+
+### Added
+- **Global `-C` / `--directory` flag** (git's `-C` semantics): run any command as
+  if `ta` were started in `<DIR>`, so e.g. a worktree can drive the main
+  checkout's `.taska` store as a shared board. Store discovery, relative `@FILE`
+  paths, and `init`'s repo-root search all resolve from there; it's honored during
+  shell completion too.
+- **`ta init` commits the store.** After creating `.taska/`, registering the merge
+  drivers, and writing the agent block, `init` makes one path-scoped commit of the
+  store, `.gitattributes`, and the block it wrote - so the store is
+  version-controlled from the first command. `--no-commit` opts out; a user's
+  unrelated changes are left untouched, gitignored paths are skipped, a non-git
+  directory is handled gracefully, and a no-op re-init makes no empty commit.
+- **ARM64 Linux binaries.** Prebuilt static-musl `aarch64-unknown-linux-musl` `ta`
+  binaries now ship on each GitHub release; the installer and `ta self-update`
+  pick the right one automatically.
+
+### Changed
+- **`ta show` accepts multiple ids** - `ta show a b c` renders each task in full
+  (duplicate ids shown once, in first-occurrence order); an unknown id errors.
+- **`ta undo` walks back through real history.** Repeated `undo` peels back
+  genuine events newest-first, skipping its own compensations and already-undone
+  events instead of bouncing on its own output; `--seq` / `--count` pick the
+  starting event and how many to walk older.
+- **Merge drivers auto-register on a fresh clone.** When the committed
+  `.gitattributes` already declares the taska merge drivers, the next `ta` command
+  registers them in your local git config silently instead of warning - it warns
+  only if the `.gitattributes` entries themselves are missing. (The registered
+  command is a taska-owned constant, so this never runs anything the repo chose.)
+
 ## [1.0.0] - 2026-06-14
 
 First **stable** release. It rounds out the agent-facing surface (a config
