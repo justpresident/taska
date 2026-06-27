@@ -68,31 +68,48 @@ fn init_outside_git_is_quiet_and_actionable() {
 }
 
 #[test]
-fn store_commands_warn_until_merge_drivers_are_registered() {
+fn store_commands_auto_register_drivers_when_gitattributes_present() {
     // The trap: `ta init` BEFORE `git init` (the fresh-clone state looks the
-    // same) leaves .gitattributes pointing at merge drivers no config defines -
-    // a git merge would text-merge the log. Every store command must warn.
+    // same) writes `.gitattributes` but can't register the per-clone driver
+    // *definitions* - a git merge would text-merge the log. Because the committed
+    // `.gitattributes` already declares the drivers, the next store command heals
+    // the clone SILENTLY rather than nagging: the registered command is a
+    // taska-owned constant, so auto-registering it can't run anything the repo
+    // chose.
     let dir = fresh_dir("scm-health");
     run(ta_bin(), &dir, &["init"]);
     init_repo(&dir);
 
+    // The drivers are not yet in local config...
+    let pre = run(
+        "git",
+        &dir,
+        &["config", "--get", "merge.taska-merge-driver.driver"],
+    );
+    assert!(
+        !pre.status.success(),
+        "drivers unregistered before any store command runs"
+    );
+
+    // ...the first store command registers them silently - no warning, no block.
     let out = run(ta_bin(), &dir, &["list"]);
-    assert!(out.status.success(), "warning never blocks the command");
+    assert!(out.status.success(), "health never blocks the command");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("merge drivers") && stderr.contains("`ta init`"),
-        "warning points at ta init: {stderr}"
+        !stderr.contains("warning:"),
+        "auto-registered, not nagged: {stderr}"
     );
-
-    // `ta init` repairs the clone; the warning stops.
-    ta(&dir, &["init"]);
-    let out = run(ta_bin(), &dir, &["list"]);
+    let driver = git(
+        &dir,
+        &["config", "--get", "merge.taska-merge-driver.driver"],
+    );
     assert!(
-        !String::from_utf8_lossy(&out.stderr).contains("warning:"),
-        "quiet once registered"
+        driver.contains("ta git-merge"),
+        "driver now registered: {driver}"
     );
 
-    // A deleted .gitattributes resurfaces a warning with the same remedy.
+    // A deleted .gitattributes is the committed half of the setup - we won't
+    // silently rewrite a tracked file, so the warning resurfaces with its remedy.
     fs::remove_file(dir.join(".gitattributes")).unwrap();
     let out = run(ta_bin(), &dir, &["list"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -150,16 +167,25 @@ fn nested_store_inside_a_repo_is_supported_by_walk_up_detection() {
     );
 
     // Unregister a driver (what a fresh clone of this layout looks like): the
-    // warning must fire even though `.git` is two levels above the store.
+    // next store command silently re-registers it via walk-up, even though `.git`
+    // is two levels above the store (git config resolves from `sub`).
     git(
         &dir,
         &["config", "--unset", "merge.taska-merge-driver.driver"],
     );
     let out = run(ta_bin(), &sub, &["list"]);
-    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("merge drivers") && stderr.contains("`ta init`"),
-        "nested store warns via walk-up: {stderr}"
+        !String::from_utf8_lossy(&out.stderr).contains("warning:"),
+        "nested store auto-heals via walk-up: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let driver = git(
+        &dir,
+        &["config", "--get", "merge.taska-merge-driver.driver"],
+    );
+    assert!(
+        driver.contains("ta git-merge"),
+        "driver re-registered via walk-up: {driver}"
     );
 }
 

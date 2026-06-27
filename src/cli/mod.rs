@@ -637,14 +637,16 @@ pub fn run() -> Result<(), DynError> {
     }
 }
 
-/// Print (never fail on) the SCM health warning before every store-backed
-/// command: an unregistered merge driver in this clone, missing `.gitattributes`
-/// entries, or an unsupported SCM - each pointing at its remedy. Warning-only,
-/// unlike the enforce gates: the store itself is healthy, the clone's merge
-/// protection is what's incomplete, and a warning per command nags exactly until
-/// someone runs `ta init`.
+/// Heal-or-warn on SCM merge protection before every store-backed command.
+/// `ensure_scm_health` silently re-registers this clone's merge drivers when
+/// `.gitattributes` already declares them (the per-clone definitions a fresh
+/// clone lacks); the residual warning printed here covers only what it can't fix
+/// (missing `.gitattributes` entries, a failed registration, or an unsupported
+/// SCM), each pointing at its remedy. Warning-only, unlike the enforce gates:
+/// the store itself is healthy, it's the clone's merge protection that may be
+/// incomplete.
 fn warn_scm_health(store: &FileStore) {
-    if let Some(warning) = store.repo_root().and_then(crate::git::health_warning) {
+    if let Some(warning) = store.repo_root().and_then(crate::git::ensure_scm_health) {
         eprintln!("warning: {warning}");
     }
 }
