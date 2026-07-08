@@ -108,12 +108,15 @@ pub fn update(
 
 /// Delete a task. Deleting a missing task is a typo, so it errors (under the lock)
 /// rather than appending a `Delete` that applies to nothing.
-pub fn delete(store: &impl EventStore, id: &str) -> Result<(), DynError> {
+pub fn delete(store: &impl EventStore, id: &str) -> Result<WriteOutcome, DynError> {
     let draft = MutationEvent::new(OpType::Delete, id, Map::new());
     let config = store.config().clone();
-    store.append_checked(&|baseline, log| {
+    let written = store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
         vet_events(std::slice::from_ref(&draft), &state, &config)
     })?;
-    Ok(())
+    Ok(WriteOutcome {
+        written,
+        new_fields: Vec::new(),
+    })
 }

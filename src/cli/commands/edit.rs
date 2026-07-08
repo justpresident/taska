@@ -88,8 +88,9 @@ pub fn cmd_edit(store: &impl EventStore, id: &str, as_json: bool) -> Result<(), 
 
     // Re-validate against current state (the editor ran outside the lock) and
     // append through the shared write path.
-    crate::action::write::update(store, id, &set_only(payload), allow_new_fields)?;
-    println!("Updated task `{id}`");
+    let outcome = crate::action::write::update(store, id, &set_only(payload), allow_new_fields)?;
+    let seq = outcome.written.last().map_or(0, |e| e.seq);
+    println!("[seq:{seq}] Updated task `{id}`");
     Ok(())
 }
 

@@ -97,7 +97,8 @@ pub fn cmd_undo(
              the removed events were never pushed or pulled elsewhere."
         );
     }
-    println!("Undone.");
+    let seq = undo.last_seq();
+    println!("[seq:{seq}] Undone.");
     Ok(())
 }
 

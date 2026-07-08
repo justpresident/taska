@@ -46,6 +46,13 @@ pub struct UndoPlan {
     new_log: Vec<MutationEvent>,
 }
 
+impl UndoPlan {
+    /// The sequence number of the last mutation in the resulting log (0 if empty).
+    pub fn last_seq(&self) -> u64 {
+        self.new_log.last().map_or(0, |e| e.seq)
+    }
+}
+
 /// Plan an undo, walking back through real history.
 ///
 /// With `seq = None` it targets the most recent *undoable* event and walks older

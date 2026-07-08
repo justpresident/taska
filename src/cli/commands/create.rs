@@ -55,7 +55,8 @@ pub fn cmd_create(
     }
 
     let outcome = crate::action::write::create(store, id, payload, &raw, new_field)?;
-    println!("Created task `{id}`");
+    let seq = outcome.written.last().map_or(0, |e| e.seq);
+    println!("[seq:{seq}] Created task `{id}`");
     if new_field && outcome.new_fields.is_empty() {
         eprintln!("warning: --new-field had no effect - no new field names were introduced");
     }

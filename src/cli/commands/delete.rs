@@ -4,7 +4,8 @@ use crate::error::DynError;
 use crate::storage::EventStore;
 
 pub fn cmd_delete(store: &impl EventStore, id: &str) -> Result<(), DynError> {
-    crate::action::write::delete(store, id)?;
-    println!("Deleted task `{id}`");
+    let outcome = crate::action::write::delete(store, id)?;
+    let seq = outcome.written.last().map_or(0, |e| e.seq);
+    println!("[seq:{seq}] Deleted task `{id}`");
     Ok(())
 }

@@ -284,13 +284,15 @@ impl EventStore for FileStore {
             return Ok(events);
         }
         let start = log.iter().map(|e| e.seq).max().map_or(1, |m| m + 1);
+        let mut sequenced = Vec::with_capacity(events.len());
         for (seq, draft) in (start..).zip(&events) {
             let mut event = draft.clone();
             event.seq = seq;
             writeln!(locked_file, "{}", serde_json::to_string(&event)?)?;
+            sequenced.push(event);
         }
         locked_file.flush()?;
-        Ok(events)
+        Ok(sequenced)
     }
 
     /// Unlike normal writes this *does* rewrite the log - that is the whole

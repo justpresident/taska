@@ -27,7 +27,8 @@ pub fn cmd_update(
     if outcome.written.is_empty() {
         println!("`{id}` already up to date - no changes");
     } else {
-        println!("Updated task `{id}`");
+        let seq = outcome.written.last().map_or(0, |e| e.seq);
+        println!("[seq:{seq}] Updated task `{id}`");
     }
     if new_field && outcome.new_fields.is_empty() {
         eprintln!("warning: --new-field had no effect - no new field names were introduced");
