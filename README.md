@@ -1,4 +1,4 @@
-# taska
+ta # taska
 
 ![CI](https://github.com/justpresident/taska/actions/workflows/ci.yml/badge.svg?branch=master)
 ![Coverage](https://raw.githubusercontent.com/justpresident/taska/master/.github/badges/coverage.svg)
@@ -11,9 +11,28 @@ A local-first, **git-native** task & dependency tracker for human and agent work
 
 ### Everything is configurable!
 
-No assumptions about your workflow. Only a bare minimum of fields is fixed - `id` and `deps`. Everything else is arbitrary `key=value` fields that you define yourself. Even the `status` field, which carries a lot of meaning for dependency tracking, can be renamed in the config. You can also configure the value that signals a task is finished - name it `closed`, `done`, or whatever you're used to; taska defines no fixed schema, so you grow your own conventions. That also keeps the filtering and manipulation commands simple and flexible: no dozens of custom flags pinned to a reserved field name.
+No assumptions about your workflow. Only a bare minimum of fields is fixed - `id` and `deps`. Everything else is arbitrary `key=value` fields that you define yourself. By default`status=closed` means the task is done, but you can re-configure both the field name and the value that means the task is done - name it `closed`, `done`, or whatever you get used to; taska mandates no fixed schema, so you grow your own conventions. That also keeps the filtering and manipulation commands simple and flexible: it supports SQL-like select and update syntax:
+```
+ta list owner=alice severity>5 notes=~exception
+ta update some-task-id notes+="all done, ready for review" owner=review_agent
+```
 
-And when you do want guarantees, declare per-task-type schemas in `[task_types]`: typed fields (`uint`, `enum`, `datetime`, `array<T>`, `set<T>`, ...), required fields, and closed types - enforced on every write, with every violation reported in one error. Tasks stay schema-agnostic until you declare a type.
+### Task schema enforcement
+
+#### Soft enforcement
+
+By default, right after you initialize taska, no schema is defined. The columns you define for your first task becomes a soft-enforced schema. The goal of this mode is to prevent you from typos and unintentional violation of your project's rules and concepts. If you have a `priority` field in your tasks and you accidentally mistype it as `pirority`, for example, taska will deny the update with an error:
+```
+- undeclared field `pirority` (task type `task` is closed; did you mean `priority`?; declared fields: notes, priority, status, title)
+````
+
+But if you really want to add a new field that didn't exist before in other tasks you just need to add `--new-field` to your create or update command once. After that this field name becomes known and you don't need to use this flag in further commands.
+
+This mode allows having structure and avoid simple mistakes without any overhead. All fields are optional, but at least you avoid usual mess with each task defining its own field names.
+
+#### Hard enforcement
+
+When you do want real schema guarantees, taska supports defining hard schemas that tasks have to conform to. Declare per-task-type schemas in the `[task_types]` block in config.yml: It supports typed fields (`string`, `int`, `uint`, `enum`, `datetime`, `array<T>`, `set<T>`, ...), required fields, and closed types - enforced on every write, with every violation reported in one error. Tasks stay schema-agnostic until you declare a type. This gives you as much strictness and flexibility as most database`s schema.
 
 ### An append-only log, not a snapshot
 
@@ -21,11 +40,11 @@ The append-only log is inspired by how high-performance KV stores like Cassandra
 
 That single choice is the whole point, because it is what makes git work *for* you instead of against you:
 
-- **One-pass reconstruction.** The whole dependency graph is rebuilt in a single sweep of the event log - no separate load-then-resolve step, and friendlier to cache than a two-pass walk over a full graph.
 - **Branches actually merge.** Two people (or two agents) on separate branches each *append* their events, so merging is just unioning two lists - which taska's git merge driver does cleanly and **per-field**. Two overwritten *snapshots*, by contrast, can only collide. The log is the reason concurrent edits reconcile instead of clobbering each other: no database to keep in sync, no manual sync step, no tasks silently dropped or "resurrected" after deletion.
 - **Full history, for free.** Every change is in the log, so you can see exactly how a task reached its current state - and a delete is just another event, so it stays deleted.
+- **One-pass reconstruction.** Barely noticable, but nice side-effect of this design is that the whole dependency graph is rebuilt in a single sweep of the event log - no separate load-then-resolve step, and friendlier to cache than a two-pass walk over a full graph usually needed for state-storing task managers.
 
-When the event log eventually grows large enough that replaying it gets slow, you can compact it - the same move Cassandra makes with its SSTables. Compaction folds the old prefix of the log into `baseline.jsonl`, a snapshot of the dependency graph in its final state. That file never produces merge conflicts, because it is built only from old, settled events. The smaller `mutations.jsonl` holds the recent events and is the one the merge driver reconciles.
+When the event log eventually grows large enough that replaying it gets slow(~ million of updates, see [compaction](docs/MERGE.md#compaction-and-the-baseline)), you can compact it - the same move Cassandra makes with its SSTables. Compaction folds the old prefix of the log into `baseline.jsonl`, a snapshot of the dependency graph in its final state. That file never produces merge conflicts, because it is built only from old, settled events. The smaller `mutations.jsonl` holds the recent events and is the one the merge driver reconciles.
 
 See [docs/MERGE.md](docs/MERGE.md) for the detailed design: the event log and `seq` model, the merge/rebase algorithm, revert handling, per-field conflict resolution, and compaction.
 
@@ -40,7 +59,7 @@ The default setup installs a custom merge driver - via `.gitattributes` - for **
 
 ## Install
 
-The quick way - a prebuilt `ta` for Linux/macOS, no Rust toolchain needed:
+**The quick way - a prebuilt `ta` for Linux/macOS, no Rust toolchain needed**:
 
 ```console
 $ curl -fsSL https://raw.githubusercontent.com/justpresident/taska/master/scripts/install.sh | bash
@@ -48,35 +67,13 @@ $ curl -fsSL https://raw.githubusercontent.com/justpresident/taska/master/script
 
 It picks the right binary for your OS/arch from the [latest release](https://github.com/justpresident/taska/releases/latest), verifies its checksum, installs to `/usr/local/bin` (or `~/.local/bin` if that isn't writable), and - if that directory isn't on your `PATH` - adds it to your shell's rc file (`.zshrc`/`.bashrc`/`.bash_profile`/`config.fish`/`.profile`, detected from `$SHELL`). Override the location with `TASKA_INSTALL_DIR=...`, pin a tag with `TASKA_VERSION=v0.5.0`, or skip the rc edit with `TASKA_NO_MODIFY_PATH=1`; on an unsupported platform it falls back to `cargo install`. Prefer to read before you pipe? It's [`scripts/install.sh`](scripts/install.sh).
 
-Or, with Rust installed, from crates.io:
+**Or, with Rust installed, from crates.io**:
 
 ```console
 $ cargo install taska        # installs the `ta` binary
 ```
 
-Or grab a prebuilt binary - no Rust toolchain needed - from the [latest
-release](https://github.com/justpresident/taska/releases/latest). Each release
-ships static Linux binaries (run on any distro) and both macOS variants, for both
-x86_64 and ARM64:
-
-```console
-# macOS - pick your arch: aarch64 (Apple Silicon) or x86_64 (Intel)
-$ TARGET=aarch64-apple-darwin   # Intel Macs: x86_64-apple-darwin
-$ VERSION=v0.5.0                # see the releases page for the latest
-$ curl -sSfL "https://github.com/justpresident/taska/releases/download/$VERSION/ta-$VERSION-$TARGET.tar.gz" | tar xz
-$ sudo mv "ta-$VERSION-$TARGET/ta" /usr/local/bin/
-
-# Linux (static, any distro) - pick your arch: x86_64 or aarch64 (ARM64)
-$ TARGET=x86_64-unknown-linux-musl   # ARM64: aarch64-unknown-linux-musl
-$ curl -sSfL "https://github.com/justpresident/taska/releases/download/$VERSION/ta-$VERSION-$TARGET.tar.gz" | tar xz
-$ sudo mv "ta-$VERSION-$TARGET/ta" /usr/local/bin/
-```
-
-Each archive has a sibling `.sha256` you can verify with `shasum -a 256 -c`. On
-macOS, if Gatekeeper quarantines the unsigned binary, clear it with
-`xattr -d com.apple.quarantine /usr/local/bin/ta`.
-
-Or build from source:
+**Or build from source**:
 
 ```console
 $ git clone https://github.com/justpresident/taska
