@@ -170,11 +170,17 @@ fn dep_tree(
             sort: &column,
         },
     )?;
-    crate::cli::print_warnings(&outcome.warnings);
+    for warning in crate::cli::render_warnings(&outcome.warnings) {
+        eprintln!("{warning}");
+    }
     let color = crate::format::want_color(output.no_color);
     if outcome.forest.is_empty() {
         let human = if open { "(nothing open)" } else { "(no tasks)" };
-        crate::format::emit(output, || human.to_string(), || Value::Array(Vec::new()));
+        for line in
+            crate::format::render_args(output, || human.to_string(), || Value::Array(Vec::new()))
+        {
+            println!("{line}");
+        }
         return Ok(());
     }
     // Render the built-once forest to human OR JSON (whichever `--format` needs).
@@ -185,11 +191,13 @@ fn dep_tree(
         status_field: &workflow.status_field,
         done_status: &workflow.done_status,
     };
-    crate::format::emit(
+    for line in crate::format::render_args(
         output,
         || render_human_forest(&outcome.forest, color, style),
         || forest_to_json_value(&outcome.forest),
-    );
+    ) {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -398,14 +406,18 @@ fn node_json(node: &Node) -> Value {
 /// cycles (each an array of member ids); human is one cycle per line.
 fn dep_cycles(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynError> {
     let outcome = crate::action::dep::cycles(store)?;
-    crate::cli::print_warnings(&outcome.warnings);
+    for warning in crate::cli::render_warnings(&outcome.warnings) {
+        eprintln!("{warning}");
+    }
     let cycles = outcome.cycles;
     let color = crate::format::want_color(output.no_color);
-    crate::format::emit(
+    for line in crate::format::render_args(
         output,
         || render_cycles_human(&cycles, color),
         || cycles_to_json_value(&cycles),
-    );
+    ) {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -453,13 +465,17 @@ fn dep_plan(
     output: &OutputArgs,
 ) -> Result<(), DynError> {
     let outcome = crate::action::dep::plan(store, goals, critical)?;
-    crate::cli::print_warnings(&outcome.warnings);
+    for warning in crate::cli::render_warnings(&outcome.warnings) {
+        eprintln!("{warning}");
+    }
     let color = crate::format::want_color(output.no_color);
-    crate::format::emit(
+    for line in crate::format::render_args(
         output,
         || render_plan_human(&outcome, color),
         || plan_to_json_value(&outcome.steps),
-    );
+    ) {
+        println!("{line}");
+    }
     Ok(())
 }
 

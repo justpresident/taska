@@ -6,10 +6,10 @@
 //! the empty-placeholder text, and renders.
 
 use crate::action::{list_tasks, ListQuery};
-use crate::cli::print_warnings;
+use crate::cli::render_warnings;
 use crate::config::DisplayConfig;
 use crate::error::DynError;
-use crate::format::{print_tasks, referenced_columns, DisplayArgs, RowStyle};
+use crate::format::{referenced_columns, render_tasks, DisplayArgs, RowStyle};
 use crate::model::TaskState;
 use crate::storage::EventStore;
 
@@ -37,7 +37,9 @@ pub fn cmd_list(
             reverse: display.reverse,
         },
     )?;
-    print_warnings(&outcome.warnings);
+    for warning in render_warnings(&outcome.warnings) {
+        eprintln!("{warning}");
+    }
 
     // A bare `list` shows "(no tasks)"; `--ready` with nothing actionable reads
     // as "(nothing ready)"; any other filter that matched nothing "(no matches)".
@@ -59,6 +61,9 @@ pub fn cmd_list(
     let mut display = display.clone();
     display.layout = Some(display.layout.unwrap_or(cfg.list_layout));
     let tasks: Vec<&TaskState> = outcome.tasks.iter().collect();
-    print_tasks(&tasks, &display, cfg, &blockers, style, empty);
+    println!(
+        "{}",
+        render_tasks(&tasks, &display, cfg, &blockers, style, empty)
+    );
     Ok(())
 }

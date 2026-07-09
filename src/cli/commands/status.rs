@@ -10,9 +10,9 @@
 use serde_json::Value;
 
 use crate::action::{status, StatusSummary};
-use crate::cli::print_warnings;
+use crate::cli::render_warnings;
 use crate::error::DynError;
-use crate::format::{emit, sgr, want_color, OutputArgs};
+use crate::format::{render_args, sgr, want_color, OutputArgs};
 use crate::storage::EventStore;
 
 pub fn cmd_status(
@@ -24,21 +24,27 @@ pub fn cmd_status(
     // takes), without materializing state. 0 on an empty log.
     if current {
         let seq = store.load_mutations()?.last().map_or(0, |e| e.seq);
-        emit(
+        for line in render_args(
             output,
             || seq.to_string(),
             || serde_json::json!({ "seq": seq }),
-        );
+        ) {
+            println!("{line}");
+        }
         return Ok(());
     }
     let outcome = status(store)?;
-    print_warnings(&outcome.warnings);
+    for warning in render_warnings(&outcome.warnings) {
+        eprintln!("{warning}");
+    }
     let color = want_color(output.no_color);
-    emit(
+    for line in render_args(
         output,
         || render_status_human(&outcome.summary, outcome.seq, color),
         || status_to_json_value(&outcome.summary, outcome.seq),
-    );
+    ) {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -107,7 +113,7 @@ fn render_status_human(s: &StatusSummary, seq: u64, color: bool) -> String {
     lines.join("\n")
 }
 
-/// The summary as a JSON object (a single value; `emit` renders it for
+/// The summary as a JSON object (a single value; `render_args` renders it for
 /// json/jsonl). `seq` is the log's high-water cursor. Keys serialize in sorted
 /// order - deterministic for scripting.
 fn status_to_json_value(s: &StatusSummary, seq: u64) -> Value {

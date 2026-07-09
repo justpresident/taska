@@ -4,7 +4,7 @@
 //! work to the frontend-agnostic [`crate::action`] layer. Handlers depend on the
 //! [`EventStore`](crate::storage::EventStore) abstraction (not the concrete
 //! `FileStore`, except the few that need git or filesystem paths) and reach the
-//! shared CLI plumbing - `parse_field_ops`, `confirm`, `print_warnings` -
+//! shared CLI plumbing - `parse_field_ops`, `confirm`, `render_warnings` -
 //! through the parent [`crate::cli`] module.
 
 pub mod compact;

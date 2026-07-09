@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use crate::action::list::validate_criteria;
 use crate::action::watch::poll;
 use crate::error::DynError;
-use crate::format::{emit, render_diff_lines, state_diff, want_color, OutputArgs};
+use crate::format::{render_args, render_diff_lines, state_diff, want_color, OutputArgs};
 use crate::storage::EventStore;
 
 /// How often to re-check the log while blocking.
@@ -66,11 +66,13 @@ pub fn cmd_watch(
                 }
                 let changed = collect(store, criteria, open, ready, since)?;
                 if !changed.is_empty() {
-                    emit(
+                    for line in render_args(
                         output,
                         || watch_to_human(&changed, color),
                         || watch_to_json_value(&changed),
-                    );
+                    ) {
+                        println!("{line}");
+                    }
                     return Ok(());
                 }
             }
@@ -87,7 +89,7 @@ pub fn cmd_watch(
 /// with its diff lines. Net-zero changes (e.g. a merge artifact that nets out) are
 /// dropped, so an empty result means "nothing renderable changed" and the caller
 /// keeps waiting. Rendering is deferred to [`watch_to_human`]/[`watch_to_json_value`]
-/// so only the format `emit` selects gets built.
+/// so only the format `render_args` selects gets built.
 fn collect(
     store: &impl EventStore,
     criteria: &[String],

@@ -833,30 +833,35 @@ pub(crate) fn replay(
     Engine::materialize_state(baseline, mutations, &w.done_status)
 }
 
-/// Render a read's [`Warning`](crate::action::Warning)s to stderr - the CLI's
-/// presentation of the data [`crate::action::read`] returns. Never blocks the
-/// read; the nonconformance warning is already gated (by config) in the action.
-pub(crate) fn print_warnings(warnings: &[crate::action::Warning]) {
+/// Render a read's [`Warning`](crate::action::Warning)s into user-facing message
+/// lines (one per warning; a nonconformance warning with an empty report yields
+/// none) - the CLI's presentation of the data [`crate::action::read`] returns.
+/// Printing is the caller's concern (every command sends them to stderr); this is
+/// pure so it never blocks the read, and the nonconformance warning is already
+/// gated (by config) in the action.
+pub(crate) fn render_warnings(warnings: &[crate::action::Warning]) -> Vec<String> {
     use crate::action::Warning;
+    let mut lines = Vec::new();
     for warning in warnings {
         match warning {
-            Warning::Orphans(n) => eprintln!(
+            Warning::Orphans(n) => lines.push(format!(
                 "taska: warning: {n} orphaned event(s) in the log (no matching task) - \
                  run `ta resolve` to clean them up."
-            ),
+            )),
             Warning::NonConformance(report) => {
                 if let Some(example) = report.first() {
-                    eprintln!(
+                    lines.push(format!(
                         "taska: warning: {} task(s) do not conform to their task-type schema \
                          (e.g. {example}) - `ta config validate` lists them, `ta repair \
                          --schema` applies the lossless fixes; writes to such a task must bring \
                          it into conformance. Silence with `workflow.warn_nonconforming = false`.",
                         report.len()
-                    );
+                    ));
                 }
             }
         }
     }
+    lines
 }
 
 /// Parse `key=value` / `key+=value` tokens into two payload maps: fields to

@@ -39,7 +39,9 @@ pub fn cmd_config(store: &FileStore, action: ConfigAction) -> Result<(), DynErro
 /// read-tolerated by design.
 fn cmd_config_validate(store: &FileStore) -> Result<(), DynError> {
     let report = crate::action::config::validate(store)?;
-    crate::cli::print_warnings(&report.read_warnings);
+    for warning in crate::cli::render_warnings(&report.read_warnings) {
+        eprintln!("{warning}");
+    }
     for line in &report.nonconformance {
         eprintln!("warning: {line}");
     }

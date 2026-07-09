@@ -1,27 +1,31 @@
 //! `ta prime` - print a config-tailored agent primer for this store.
 //!
 //! The structured facts come from [`crate::action::prime`]; this file renders
-//! them into a markdown guide (human) and passes the same facts to `emit` as JSON
-//! (`--format json`). The guide is plain text - no color - so it satisfies the
+//! them into a markdown guide (human) and passes the same facts to `render_args`
+//! as JSON (`--format json`). The guide is plain text - no color - so it satisfies the
 //! output-consistency contract trivially. It reads THIS store's vocabulary, so a
 //! renamed status field or a freshly declared type is reflected automatically.
 
 use crate::action::prime::{examples, prime, FieldFacts, PrimeExamples, PrimeFacts, TypeFacts};
-use crate::cli::print_warnings;
+use crate::cli::render_warnings;
 use crate::error::DynError;
-use crate::format::{emit, OutputArgs};
+use crate::format::{render_args, OutputArgs};
 use crate::storage::EventStore;
 
 pub fn cmd_prime(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynError> {
     let outcome = prime(store)?;
-    print_warnings(&outcome.warnings);
-    emit(
+    for warning in render_warnings(&outcome.warnings) {
+        eprintln!("{warning}");
+    }
+    for line in render_args(
         output,
         || render_guide(&outcome.facts),
         // The facts are a plain serializable struct, so `to_value` can't fail in
-        // practice; `unwrap_or_default` mirrors `emit`'s own serialization idiom.
+        // practice; `unwrap_or_default` mirrors the serialization idiom in `render_args`.
         || serde_json::to_value(&outcome.facts).unwrap_or_default(),
-    );
+    ) {
+        println!("{line}");
+    }
     Ok(())
 }
 

@@ -113,8 +113,8 @@ pub(crate) enum OutputFormat {
 
 /// The machine-format + color flags EVERY output command shares. Tabular
 /// commands flatten this into [`DisplayArgs`]; structured commands (`status`,
-/// `dep *`) take it directly and route through [`emit`], so `--format`/`--no-color`
-/// behave identically everywhere.
+/// `dep *`) take it directly and route through [`render_args`], so
+/// `--format`/`--no-color` behave identically everywhere.
 #[derive(Args, Clone)]
 pub(crate) struct OutputArgs {
     /// Output format: human, json (pretty array/object), or jsonl (NDJSON)
@@ -152,56 +152,42 @@ pub(crate) struct DisplayArgs {
     pub(crate) layout: Option<Layout>,
 }
 
-/// Emit per the chosen format: the `human` string, pretty JSON, or NDJSON (one
-/// line per top-level array element, else one compact line). Both content args
-/// are **lazy** - only the selected format's builder runs, so a caller never pays
-/// to build the representation it won't print. Color is the caller's concern
-/// (human output only) - json/jsonl are never colored. The single output dispatch
-/// for the structured commands (`status`, `dep *`, `watch`, `prime`).
-pub(crate) fn emit(
+/// Render a structured value per the chosen `--format` into the output lines the
+/// caller prints to stdout: the `human` string, pretty JSON, or NDJSON (one line
+/// per top-level array element, none for an empty array so the caller emits
+/// nothing, else one compact line). Both content args are **lazy**: only the
+/// selected format's builder runs, so a caller never pays to build the
+/// representation it won't print. Color is the caller's concern (human output
+/// only); json/jsonl are never colored. The single format dispatch for the
+/// structured commands (`status`, `dep *`, `watch`, `prime`); callers print the
+/// lines with `for line in render_args(..) { println!("{line}") }`.
+pub(crate) fn render_args(
     out: &OutputArgs,
     human: impl FnOnce() -> String,
     value: impl FnOnce() -> Value,
-) {
+) -> Vec<String> {
     match out.format {
-        OutputFormat::Human => println!("{}", human()),
-        OutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&value()).unwrap_or_default()
-            );
-        }
+        OutputFormat::Human => vec![human()],
+        OutputFormat::Json => vec![serde_json::to_string_pretty(&value()).unwrap_or_default()],
         OutputFormat::Jsonl => match value() {
-            Value::Array(items) => {
-                for item in &items {
-                    println!("{}", serde_json::to_string(item).unwrap_or_default());
-                }
-            }
-            other => println!("{}", serde_json::to_string(&other).unwrap_or_default()),
+            Value::Array(items) => items
+                .iter()
+                .map(|item| serde_json::to_string(item).unwrap_or_default())
+                .collect(),
+            other => vec![serde_json::to_string(&other).unwrap_or_default()],
         },
     }
 }
 
-/// Print an already-ordered task set, with `empty` as the human placeholder for
-/// no rows. `blockers` is the readiness-gating relationship-type set
-/// (`RelationshipConfig::blocker_types`), used only to style the deps cell. The
-/// shared print tail of `list` (plain, `--open`, or `--ready`), which differs
-/// only in how it gathers the tasks; ordering is the action's (`list_tasks`).
-pub(crate) fn print_tasks(
-    tasks: &[&TaskState],
-    display: &DisplayArgs,
-    cfg: &DisplayConfig,
-    blockers: &BTreeSet<String>,
-    style: RowStyle,
-    empty: &str,
-) {
-    println!("{}", render(tasks, display, cfg, blockers, style, empty));
-}
-
-/// Render tasks per the display args. The selected columns decide *which* fields
-/// appear; `--format` decides only how they print, and both formats share the
-/// same field order.
-fn render(
+/// Render an already-ordered task set per the display args, returning the string
+/// for the caller to print (`empty` is the human placeholder for no rows). The
+/// selected columns decide *which* fields appear; `--format` decides only how they
+/// print, and both formats share the same field order. `blockers` is the
+/// readiness-gating relationship-type set (`RelationshipConfig::blocker_types`),
+/// used only to style the deps cell. The shared render of `list` (plain, `--open`,
+/// or `--ready`), which differs only in how it gathers the tasks; ordering is the
+/// action's (`list_tasks`).
+pub(crate) fn render_tasks(
     tasks: &[&TaskState],
     display: &DisplayArgs,
     cfg: &DisplayConfig,
@@ -1002,7 +988,7 @@ mod tests {
             false,
             Some(&[ID_KEY, STATUS_FIELD, DEPS_KEY]),
         );
-        let out = render(
+        let out = render_tasks(
             &[&t],
             &d,
             &DisplayConfig::default(),
@@ -1066,7 +1052,7 @@ mod tests {
         assert!(!render_list_record(&t, &cols, false, &blockers(), style()).contains('\x1b'));
 
         // JSON is never colored, even via the shared render path.
-        let json = render(
+        let json = render_tasks(
             &[&t],
             &display(OutputFormat::Json, false, Some(&[ID_KEY, STATUS_FIELD])),
             &DisplayConfig::default(),
@@ -1141,7 +1127,7 @@ mod tests {
             false,
             Some(&[ID_KEY, "priority", STATUS_FIELD]),
         );
-        let out = render(
+        let out = render_tasks(
             &[&item],
             &args,
             &DisplayConfig::default(),
@@ -1168,7 +1154,7 @@ mod tests {
         let a = task("a", &[], &[("x", serde_json::json!(1))]);
         let b = task("b", &[], &[("y", serde_json::json!(2))]);
         let d = display(OutputFormat::Json, true, None);
-        let out = render(
+        let out = render_tasks(
             &[&a, &b],
             &d,
             &DisplayConfig::default(),
@@ -1187,7 +1173,7 @@ mod tests {
             "absent fields omitted, not null: {out}"
         );
 
-        let empty = render(
+        let empty = render_tasks(
             &[],
             &d,
             &DisplayConfig::default(),
@@ -1203,7 +1189,7 @@ mod tests {
         let a = task_rel("a", BLOCKER, &["d"], &[("x", serde_json::json!(1))]);
         let b = task("b", &[], &[("y", serde_json::json!(2))]);
         let d = display(OutputFormat::Jsonl, true, None);
-        let out = render(
+        let out = render_tasks(
             &[&a, &b],
             &d,
             &DisplayConfig::default(),
@@ -1237,7 +1223,7 @@ mod tests {
 
         // Empty input yields no lines.
         assert_eq!(
-            render(
+            render_tasks(
                 &[],
                 &d,
                 &DisplayConfig::default(),
@@ -1270,7 +1256,7 @@ mod tests {
         };
 
         // --full: the full value survives, no ellipsis.
-        let full = render(
+        let full = render_tasks(
             &[&t],
             &display(OutputFormat::Human, true, None),
             &cfg,
@@ -1285,7 +1271,7 @@ mod tests {
         );
 
         // Default (config columns) still truncates per max_width.
-        let default = render(
+        let default = render_tasks(
             &[&t],
             &display(OutputFormat::Human, false, None),
             &cfg,
@@ -1300,7 +1286,7 @@ mod tests {
         );
 
         // An explicit --columns view also still truncates.
-        let cols = render(
+        let cols = render_tasks(
             &[&t],
             &display(OutputFormat::Human, false, Some(&[ID_KEY, "notes"])),
             &cfg,
@@ -1334,7 +1320,7 @@ mod tests {
             list_layout: Layout::Table,
             show_layout: Layout::List,
         };
-        let out = render(
+        let out = render_tasks(
             &[&t],
             &display(OutputFormat::Human, false, None),
             &cfg,
@@ -1350,7 +1336,7 @@ mod tests {
         );
 
         // --full ignores the per-column map entirely: both survive intact.
-        let full = render(
+        let full = render_tasks(
             &[&t],
             &display(OutputFormat::Human, true, None),
             &cfg,

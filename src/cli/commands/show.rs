@@ -5,7 +5,7 @@
 //! this file is just their presentation.
 
 use crate::action::show;
-use crate::cli::print_warnings;
+use crate::cli::render_warnings;
 use crate::config::DisplayConfig;
 use crate::error::DynError;
 use crate::format::{full_columns, render_rows, DisplayArgs, RowStyle};
@@ -23,7 +23,9 @@ pub fn cmd_show(
     cfg: &DisplayConfig,
 ) -> Result<(), DynError> {
     let outcome = show(store, ids)?;
-    print_warnings(&outcome.warnings);
+    for warning in render_warnings(&outcome.warnings) {
+        eprintln!("{warning}");
+    }
     let tasks: Vec<&_> = outcome.tasks.iter().collect();
     // Default to the full task: every field of these tasks. An explicit
     // `--columns` overrides.
