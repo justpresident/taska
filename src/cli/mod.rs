@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::Utc;
 use clap::{CommandFactory, Parser, Subcommand};
@@ -36,7 +37,7 @@ use clap_complete::engine::{ArgValueCandidates, ArgValueCompleter};
 use commands::{
     cmd_compact, cmd_completions, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_edit,
     cmd_init, cmd_list, cmd_prime, cmd_repair, cmd_resolve, cmd_self_update, cmd_show, cmd_status,
-    cmd_undo, cmd_update, ConfigAction, DepAction, InstallScope,
+    cmd_undo, cmd_update, cmd_watch, parse_duration, ConfigAction, DepAction, InstallScope,
 };
 
 use crate::schema::FieldOps;
@@ -136,6 +137,40 @@ enum Commands {
         ready: bool,
         #[command(flatten)]
         display: DisplayArgs,
+    },
+    /// Watch for tasks matching a filter to change past a cursor, then print a diff
+    ///
+    /// Blocks until a task matching the (list-style) criteria is created, updated,
+    /// or deleted with `seq` greater than `--since`, then prints a per-task diff of
+    /// what changed and exits 0. On the first change it waits `--holdout` to batch a
+    /// burst. If nothing matches before `--timeout`, prints `No updates yet` to
+    /// stderr and exits 1. Seed `--since` from `ta status --current` (or the
+    /// `[seq:N]` any mutation prints); computed columns aren't available as filters.
+    Watch {
+        /// Filter criteria, same grammar as `ta list` (`field=value`, `field=~regex`,
+        /// `field!=value`, comparisons); with none given, every changed task matches.
+        #[arg(add = ArgValueCompleter::new(complete::criteria))]
+        criteria: Vec<String>,
+        /// Only report tasks that are not done.
+        #[arg(long)]
+        open: bool,
+        /// Only report tasks ready to work on: not done and every dependency done.
+        #[arg(long)]
+        ready: bool,
+        /// Only report changes after this mutation seq (from `ta status --current`
+        /// or the `[seq:N]` any mutation prints).
+        #[arg(long)]
+        since: u64,
+        /// How long to block waiting for a change, e.g. `9m`, `1m30s`, `1h`.
+        /// The default stays under common 10-minute foreground caps; for longer
+        /// waits pass a bigger value and run it backgrounded.
+        #[arg(long, value_parser = parse_duration, default_value = "9m")]
+        timeout: Duration,
+        /// After the first change, wait this long to batch a burst before printing.
+        #[arg(long, value_parser = parse_duration, default_value = "10s")]
+        holdout: Duration,
+        #[command(flatten)]
+        output: OutputArgs,
     },
     /// Show one or more tasks in full by id: `ta show <id>...` (duplicates ignored)
     Show {
@@ -746,6 +781,17 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             ready,
             &display,
             &store.config().display,
+        ),
+        Commands::Watch {
+            criteria,
+            open,
+            ready,
+            since,
+            timeout,
+            holdout,
+            output,
+        } => cmd_watch(
+            store, &criteria, open, ready, since, timeout, holdout, &output,
         ),
         Commands::Show { ids, display } => cmd_show(store, &ids, &display, &store.config().display),
         Commands::Edit { id, json, toml: _ } => cmd_edit(store, &id, json),

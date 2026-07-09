@@ -35,6 +35,7 @@ pub mod resolve;
 pub mod show;
 pub mod status;
 pub mod undo;
+pub mod watch;
 pub mod write;
 
 pub use list::{list_tasks, ListOutcome, ListQuery};

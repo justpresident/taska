@@ -5,6 +5,27 @@ All notable changes to `taska` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). History before 0.3.0 lives in the
 git log.
 
+## [Unreleased]
+
+### Added
+- **`ta watch`** streams task mutations: `ta watch [criteria] --since SEQ` blocks
+  until a task matching the (list-grammar) filter is created, updated, or deleted
+  past `SEQ`, then prints a per-task diff of only the changed lines and exits 0.
+  `--holdout` (default 10s) batches a burst before printing; `--timeout` (default
+  9m) bounds the wait, after which it prints `No updates yet` to stderr and
+  exits 1. Built for two agents coordinating through one store (e.g. an
+  implementer and a reviewer ping-ponging a task's status). `--format json` emits
+  structured removed/added deltas per task.
+- **`ta status --current`** prints the store's current high-water mutation `seq`
+  without materializing state - the cursor to seed a `ta watch --since` loop
+  (`{"seq":N}` with `--format json`; `0` on an empty log).
+
+### Changed
+- **`ta undo`'s preview is a line-level diff.** Instead of dumping the whole
+  before and after state on each side, it shows only the lines that change - a
+  reverted appended note prints just that one `- notes: ...` line, not the entire
+  field. The diff renderer is shared with `ta watch`.
+
 ## [1.1.0] - 2026-06-27
 
 Quality-of-life work on top of 1.0: a git-style `-C` flag for driving a store

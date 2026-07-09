@@ -530,33 +530,47 @@ pub(crate) fn render_list_record(
     lines.join("\n")
 }
 
-/// Render the field-level diff between two task states as `-`/`+` lines - the
-/// shared diff view `undo` and `watch` both print. For every column that differs,
-/// only the LINES that changed show: a line present in `before` but gone in
-/// `after` as red `- col: line`, one added in `after` as green `+ col: line`. Text
-/// fields diff per line (so an appended note shows just the appended line, not the
-/// whole field), arrays and `deps` per element/edge, scalars as old-then-new. A
-/// missing side is the empty state, so a create (`before` None) is all `+` and a
-/// delete (`after` None) all `-`. Empty string when the two states are identical.
-pub(crate) fn render_state_diff(
+/// The field-level diff between two task states as `(removed, added)` labeled
+/// lines - the structured data behind [`render_state_diff`], shared with `watch`'s
+/// JSON. For each column that differs, only the LINES that changed appear: a line
+/// in `before` gone from `after` is removed, one new in `after` is added. Text
+/// fields diff per line (an appended note yields just that line), arrays and
+/// `deps` per element/edge, scalars old-then-new. A missing side is the empty
+/// state, so a create (`before` None) is all-added and a delete (`after` None)
+/// all-removed. Each line is labeled `col: value` (deps as `type: target`).
+pub(crate) fn state_diff(
     before: Option<&TaskState>,
     after: Option<&TaskState>,
-    color: bool,
-) -> String {
+) -> (Vec<String>, Vec<String>) {
     // Every field either side carries (deterministic, alphabetical), then deps.
     let mut fields: BTreeSet<&str> = BTreeSet::new();
     for t in [before, after].into_iter().flatten() {
         fields.extend(t.custom_fields.keys().map(String::as_str));
     }
-    let mut lines = Vec::new();
+    let (mut removed, mut added) = (Vec::new(), Vec::new());
     for col in fields.iter().copied().chain(std::iter::once(DEPS_KEY)) {
-        let (removed, added) = line_diff(&field_lines(before, col), &field_lines(after, col));
-        for l in &removed {
-            lines.push(sgr(&format!("  - {}", label_line(col, l)), "31", color));
-        }
-        for l in &added {
-            lines.push(sgr(&format!("  + {}", label_line(col, l)), "32", color));
-        }
+        let (rem, add) = line_diff(&field_lines(before, col), &field_lines(after, col));
+        removed.extend(rem.iter().map(|l| label_line(col, l)));
+        added.extend(add.iter().map(|l| label_line(col, l)));
+    }
+    (removed, added)
+}
+
+/// Render the [`state_diff`] as colored `-`/`+` lines - the shared diff view
+/// `undo` and `watch` both print: removed lines red `  - col: line`, added lines
+/// green `  + col: line`. Empty string when the two states are identical.
+pub(crate) fn render_state_diff(
+    before: Option<&TaskState>,
+    after: Option<&TaskState>,
+    color: bool,
+) -> String {
+    let (removed, added) = state_diff(before, after);
+    let mut lines = Vec::new();
+    for l in &removed {
+        lines.push(sgr(&format!("  - {l}"), "31", color));
+    }
+    for l in &added {
+        lines.push(sgr(&format!("  + {l}"), "32", color));
     }
     lines.join("\n")
 }

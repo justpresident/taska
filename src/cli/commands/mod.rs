@@ -24,6 +24,7 @@ pub mod show;
 pub mod status;
 pub mod undo;
 pub mod update;
+pub mod watch;
 
 pub use compact::cmd_compact;
 pub use completions::{cmd_completions, offer_install, InstallScope};
@@ -42,3 +43,4 @@ pub use show::cmd_show;
 pub use status::cmd_status;
 pub use undo::cmd_undo;
 pub use update::cmd_update;
+pub use watch::{cmd_watch, parse_duration};

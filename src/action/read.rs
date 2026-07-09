@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
+use crate::config::Config;
 use crate::engine::Engine;
 use crate::error::DynError;
 use crate::model::TaskState;
@@ -81,6 +82,17 @@ pub fn read(store: &impl EventStore) -> Result<Session, DynError> {
         inject_time(&mut task.custom_fields, &ts.close_time, task.close_time);
     }
 
+    rename_to_display(&mut state, config);
+
+    Ok(Session { state, warnings })
+}
+
+/// Rename the canonical storage keys (status/type) to their configured display
+/// names in `state`, in place - the read-side half of the canonical<->display
+/// boundary. `read` applies it after its other shaping; `watch` reuses it to shape
+/// state materialized at a cursor WITHOUT the timestamp/computed-column injection,
+/// which would otherwise pollute a diff with non-mutation "changes".
+pub(crate) fn rename_to_display(state: &mut HashMap<String, TaskState>, config: &Config) {
     for (display, canonical) in canonical_field_pairs(&config.workflow) {
         if display == canonical {
             continue;
@@ -91,8 +103,6 @@ pub fn read(store: &impl EventStore) -> Result<Session, DynError> {
             }
         }
     }
-
-    Ok(Session { state, warnings })
 }
 
 /// Insert a computed timestamp as an RFC 3339 string field under `name`, so it

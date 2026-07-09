@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde_json::Value;
 
 use crate::action::{inject_computed_columns, read, Warning};
-use crate::config::RelationshipDef;
+use crate::config::{Config, RelationshipDef};
 use crate::error::DynError;
 use crate::graph;
 use crate::model::{cmp_json, is_done, task_cmp, TaskState, DEPS_KEY, ID_KEY};
@@ -53,7 +53,6 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
     let criteria = compile_criteria(query.criteria)?;
     let session = read(store)?;
     let mut state = session.state;
-    let workflow = &store.config().workflow;
 
     // The columns this query touches: what the frontend will display/sort, plus
     // the criterion fields (so a filter on `unblocks=0` injects the column without
@@ -62,39 +61,10 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
     wanted.extend(criteria.iter().map(|c| c.field.as_str()));
     inject_computed_columns(store, &mut state, &wanted);
 
-    // Filtering context: declared relationship types resolve as filter fields
-    // (forward by type name, reverse by inverse name); the reverse index is built
-    // only when a criterion actually names an inverse.
-    let types = &store.config().relationships.types;
-    let rev = criteria
-        .iter()
-        .any(|c| is_inverse_name(&c.field, types))
-        .then(|| inverse_index(&state, types));
-    let ctx = FilterCtx {
-        types,
-        rev: rev.as_ref(),
-    };
-
-    // `--ready` restricts to the ready set (not done, deps satisfied); it already
-    // implies not-done, so it subsumes `--open`.
-    let blockers = store.config().relationships.blocker_types();
-    let ready_set: Option<HashSet<String>> = if query.ready {
-        let ids = graph::ready_tasks(
-            &state,
-            &workflow.status_field,
-            &workflow.done_status,
-            &blockers,
-        )?;
-        Some(ids.into_iter().collect())
-    } else {
-        None
-    };
-
+    let matched = filter_ids(&state, &criteria, query.open, query.ready, store.config())?;
     let mut tasks: Vec<TaskState> = state
         .values()
-        .filter(|t| !query.open || !is_done(t, &workflow.status_field, &workflow.done_status))
-        .filter(|t| ready_set.as_ref().is_none_or(|s| s.contains(&t.id)))
-        .filter(|t| criteria.iter().all(|c| c.matches(t, &ctx)))
+        .filter(|t| matched.contains(&t.id))
         .cloned()
         .collect();
 
@@ -108,6 +78,78 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
         tasks,
         warnings: session.warnings,
     })
+}
+
+/// The IDs in `state` passing the `--open`/`--ready` shortcuts and every compiled
+/// `criterion`. The filtering core of `list`, factored so `watch` can apply the
+/// SAME semantics to state materialized at any cursor. `state` must be
+/// display-shaped (as `read` / `read::rename_to_display` produce): the criteria
+/// and the done/ready checks use display field names.
+fn filter_ids(
+    state: &HashMap<String, TaskState>,
+    criteria: &[Criterion],
+    open: bool,
+    ready: bool,
+    config: &Config,
+) -> Result<HashSet<String>, DynError> {
+    let workflow = &config.workflow;
+
+    // Declared relationship types resolve as filter fields (forward by type name,
+    // reverse by inverse name); the reverse index is built only when a criterion
+    // actually names an inverse.
+    let types = &config.relationships.types;
+    let rev = criteria
+        .iter()
+        .any(|c| is_inverse_name(&c.field, types))
+        .then(|| inverse_index(state, types));
+    let ctx = FilterCtx {
+        types,
+        rev: rev.as_ref(),
+    };
+
+    // `--ready` (not done, deps satisfied) subsumes `--open`.
+    let blockers = config.relationships.blocker_types();
+    let ready_set: Option<HashSet<String>> = if ready {
+        let ids = graph::ready_tasks(
+            state,
+            &workflow.status_field,
+            &workflow.done_status,
+            &blockers,
+        )?;
+        Some(ids.into_iter().collect())
+    } else {
+        None
+    };
+
+    Ok(state
+        .values()
+        .filter(|t| !open || !is_done(t, &workflow.status_field, &workflow.done_status))
+        .filter(|t| ready_set.as_ref().is_none_or(|s| s.contains(&t.id)))
+        .filter(|t| criteria.iter().all(|c| c.matches(t, &ctx)))
+        .map(|t| t.id.clone())
+        .collect())
+}
+
+/// The IDs in `state` matching list-style `criteria` + `--open`/`--ready` -
+/// `list`'s filter, exposed for `watch` to apply to state at a cursor. `state`
+/// must be display-shaped. Computed columns are NOT injected here (a watch diff
+/// stays free of non-mutation fields), so a criterion on `unblocks`/`blocked_by`/
+/// `subtasks` simply won't match.
+pub(crate) fn matching_ids(
+    store: &impl EventStore,
+    state: &HashMap<String, TaskState>,
+    criteria: &[String],
+    open: bool,
+    ready: bool,
+) -> Result<HashSet<String>, DynError> {
+    let compiled = compile_criteria(criteria)?;
+    filter_ids(state, &compiled, open, ready, store.config())
+}
+
+/// Validate `criteria` (parse + compile regexes) without touching the store, so a
+/// long-blocking command like `watch` rejects a bad filter before it starts.
+pub(crate) fn validate_criteria(criteria: &[String]) -> Result<(), DynError> {
+    compile_criteria(criteria).map(|_| ())
 }
 
 /// A filter operator. `=`/`!=` compare the field's value against a JSON-coerced
