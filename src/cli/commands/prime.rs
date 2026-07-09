@@ -15,9 +15,13 @@ use crate::storage::EventStore;
 pub fn cmd_prime(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynError> {
     let outcome = prime(store)?;
     print_warnings(&outcome.warnings);
-    let human = render_guide(&outcome.facts);
-    let value = serde_json::to_value(&outcome.facts)?;
-    emit(output, &human, &value);
+    emit(
+        output,
+        || render_guide(&outcome.facts),
+        // The facts are a plain serializable struct, so `to_value` can't fail in
+        // practice; `unwrap_or_default` mirrors `emit`'s own serialization idiom.
+        || serde_json::to_value(&outcome.facts).unwrap_or_default(),
+    );
     Ok(())
 }
 

@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::cli::complete;
 
-use crate::action::dep::{Kids, Node};
+use crate::action::dep::{Kids, Node, PlanOutcome, PlanStep};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::format::{OutputArgs, RowStyle};
@@ -174,19 +174,22 @@ fn dep_tree(
     let color = crate::format::want_color(output.no_color);
     if outcome.forest.is_empty() {
         let human = if open { "(nothing open)" } else { "(no tasks)" };
-        crate::format::emit(output, human, &Value::Array(Vec::new()));
+        crate::format::emit(output, || human.to_string(), || Value::Array(Vec::new()));
         return Ok(());
     }
-    // Render the built-once forest to BOTH human and JSON. The shared RowStyle
-    // gives the tree the same per-column / done coloring as a `list` row.
-    let value = Value::Array(outcome.forest.iter().map(node_json).collect());
+    // Render the built-once forest to human OR JSON (whichever `--format` needs).
+    // The shared RowStyle gives the tree the same per-column / done coloring as a
+    // `list` row.
     let workflow = &store.config().workflow;
     let style = crate::format::RowStyle {
         status_field: &workflow.status_field,
         done_status: &workflow.done_status,
     };
-    let human = render_human_forest(&outcome.forest, color, style);
-    crate::format::emit(output, &human, &value);
+    crate::format::emit(
+        output,
+        || render_human_forest(&outcome.forest, color, style),
+        || forest_to_json_value(&outcome.forest),
+    );
     Ok(())
 }
 
@@ -346,6 +349,12 @@ fn push_kids(
     }
 }
 
+/// The forest as a JSON array (one object per root node, children nested) - the
+/// machine form of `dep tree`.
+fn forest_to_json_value(forest: &[Node]) -> Value {
+    Value::Array(forest.iter().map(node_json).collect())
+}
+
 /// One tree node as JSON, recursing into children.
 fn node_json(node: &Node) -> Value {
     let mut o = serde_json::Map::new();
@@ -392,32 +401,43 @@ fn dep_cycles(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynErr
     crate::cli::print_warnings(&outcome.warnings);
     let cycles = outcome.cycles;
     let color = crate::format::want_color(output.no_color);
+    crate::format::emit(
+        output,
+        || render_cycles_human(&cycles, color),
+        || cycles_to_json_value(&cycles),
+    );
+    Ok(())
+}
 
-    let value = Value::Array(
+/// Cycles as JSON: an array of cycles, each an array of member ids.
+fn cycles_to_json_value(cycles: &[Vec<String>]) -> Value {
+    Value::Array(
         cycles
             .iter()
             .map(|c| Value::Array(c.iter().cloned().map(Value::String).collect()))
             .collect(),
-    );
-    let human = if cycles.is_empty() {
-        "No dependency cycles.".to_string()
-    } else {
-        let mut lines = vec![crate::format::sgr(
-            &format!("{} dependency cycle(s):", cycles.len()),
-            "1",
-            color,
-        )];
-        for cycle in &cycles {
-            if cycle.len() == 1 {
-                lines.push(format!("  {} (depends on itself)", cycle[0]));
-            } else {
-                lines.push(format!("  {}", cycle.join(" <-> ")));
-            }
+    )
+}
+
+/// Cycles as human text: a bold count header, then one cycle per line
+/// (`a <-> b <-> a`, or `x (depends on itself)` for a self-loop).
+fn render_cycles_human(cycles: &[Vec<String>], color: bool) -> String {
+    if cycles.is_empty() {
+        return "No dependency cycles.".to_string();
+    }
+    let mut lines = vec![crate::format::sgr(
+        &format!("{} dependency cycle(s):", cycles.len()),
+        "1",
+        color,
+    )];
+    for cycle in cycles {
+        if cycle.len() == 1 {
+            lines.push(format!("  {} (depends on itself)", cycle[0]));
+        } else {
+            lines.push(format!("  {}", cycle.join(" <-> ")));
         }
-        lines.join("\n")
-    };
-    crate::format::emit(output, &human, &value);
-    Ok(())
+    }
+    lines.join("\n")
 }
 
 /// `ta dep plan <goal> ...` - the not-done transitive prerequisites of the goal(s)
@@ -434,38 +454,50 @@ fn dep_plan(
 ) -> Result<(), DynError> {
     let outcome = crate::action::dep::plan(store, goals, critical)?;
     crate::cli::print_warnings(&outcome.warnings);
-    let steps = &outcome.steps;
-    let total = outcome.total;
     let color = crate::format::want_color(output.no_color);
+    crate::format::emit(
+        output,
+        || render_plan_human(&outcome, color),
+        || plan_to_json_value(&outcome.steps),
+    );
+    Ok(())
+}
 
-    let value = Value::Array(
+/// Plan steps as JSON: an array of `{id, status}` objects, in dependency order.
+fn plan_to_json_value(steps: &[PlanStep]) -> Value {
+    Value::Array(
         steps
             .iter()
             .map(|s| serde_json::json!({ ID_KEY: &s.id, STATUS_KEY: &s.status }))
             .collect(),
-    );
-    let human = if steps.is_empty() {
-        "Nothing to do - every prerequisite is already done.".to_string()
+    )
+}
+
+/// The plan as human text: a numbered `id  status` list in dependency order,
+/// closed by a summary line (critical-path or total-remaining). A single note
+/// when nothing remains.
+fn render_plan_human(outcome: &PlanOutcome, color: bool) -> String {
+    let steps = &outcome.steps;
+    if steps.is_empty() {
+        return "Nothing to do - every prerequisite is already done.".to_string();
+    }
+    let width = steps.iter().map(|s| s.id.len()).max().unwrap_or(0);
+    let mut lines: Vec<String> = steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let id_c = crate::format::sgr(&format!("{:<width$}", s.id), "36", color);
+            format!("{:>2}. {id_c}  {}", i + 1, s.status)
+        })
+        .collect();
+    lines.push(if outcome.critical {
+        format!(
+            "(critical path: {} of {} remaining task(s))",
+            steps.len(),
+            outcome.total
+        )
     } else {
-        let width = steps.iter().map(|s| s.id.len()).max().unwrap_or(0);
-        let mut lines: Vec<String> = steps
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let id_c = crate::format::sgr(&format!("{:<width$}", s.id), "36", color);
-                format!("{:>2}. {id_c}  {}", i + 1, s.status)
-            })
-            .collect();
-        lines.push(if outcome.critical {
-            format!(
-                "(critical path: {} of {total} remaining task(s))",
-                steps.len()
-            )
-        } else {
-            format!("({total} task(s) remaining, in order)")
-        });
-        lines.join("\n")
-    };
-    crate::format::emit(output, &human, &value);
-    Ok(())
+        format!("({} task(s) remaining, in order)", outcome.total)
+    });
+    lines.join("\n")
 }

@@ -22,13 +22,21 @@ pub fn cmd_status(
     // takes), without materializing state. 0 on an empty log.
     if current {
         let seq = store.load_mutations()?.last().map_or(0, |e| e.seq);
-        emit(output, &seq.to_string(), &serde_json::json!({ "seq": seq }));
+        emit(
+            output,
+            || seq.to_string(),
+            || serde_json::json!({ "seq": seq }),
+        );
         return Ok(());
     }
     let outcome = status(store)?;
     print_warnings(&outcome.warnings);
-    let human = render_status_human(&outcome.summary, want_color(output.no_color));
-    emit(output, &human, &status_value(&outcome.summary));
+    let color = want_color(output.no_color);
+    emit(
+        output,
+        || render_status_human(&outcome.summary, color),
+        || status_to_json_value(&outcome.summary),
+    );
     Ok(())
 }
 
@@ -85,7 +93,7 @@ fn render_status_human(s: &StatusSummary, color: bool) -> String {
 
 /// The summary as a JSON object (a single value; `emit` renders it for
 /// json/jsonl). Keys serialize in sorted order - deterministic for scripting.
-fn status_value(s: &StatusSummary) -> Value {
+fn status_to_json_value(s: &StatusSummary) -> Value {
     let by_status: serde_json::Map<String, Value> = s
         .by_status
         .iter()
@@ -134,7 +142,7 @@ mod tests {
 
     #[test]
     fn json_output_is_one_object_with_the_fields() {
-        let parsed = status_value(&sample());
+        let parsed = status_to_json_value(&sample());
         assert_eq!(parsed["total"], 5);
         assert_eq!(parsed["ready"], 3);
         assert_eq!(parsed["blocked"], 1);

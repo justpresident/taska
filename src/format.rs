@@ -152,26 +152,32 @@ pub(crate) struct DisplayArgs {
     pub(crate) layout: Option<Layout>,
 }
 
-/// Emit `value` per the chosen format: the prebuilt `human` string, pretty JSON,
-/// or NDJSON (one line per top-level array element, else one compact line). Color
-/// is the caller's concern (human output only) - json/jsonl are never colored.
-/// The single output dispatch for the structured commands (`status`, `dep *`).
-pub(crate) fn emit(out: &OutputArgs, human: &str, value: &Value) {
+/// Emit per the chosen format: the `human` string, pretty JSON, or NDJSON (one
+/// line per top-level array element, else one compact line). Both content args
+/// are **lazy** - only the selected format's builder runs, so a caller never pays
+/// to build the representation it won't print. Color is the caller's concern
+/// (human output only) - json/jsonl are never colored. The single output dispatch
+/// for the structured commands (`status`, `dep *`, `watch`, `prime`).
+pub(crate) fn emit(
+    out: &OutputArgs,
+    human: impl FnOnce() -> String,
+    value: impl FnOnce() -> Value,
+) {
     match out.format {
-        OutputFormat::Human => println!("{human}"),
+        OutputFormat::Human => println!("{}", human()),
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(value).unwrap_or_default()
+                serde_json::to_string_pretty(&value()).unwrap_or_default()
             );
         }
-        OutputFormat::Jsonl => match value {
+        OutputFormat::Jsonl => match value() {
             Value::Array(items) => {
-                for item in items {
+                for item in &items {
                     println!("{}", serde_json::to_string(item).unwrap_or_default());
                 }
             }
-            other => println!("{}", serde_json::to_string(other).unwrap_or_default()),
+            other => println!("{}", serde_json::to_string(&other).unwrap_or_default()),
         },
     }
 }
@@ -565,11 +571,19 @@ pub(crate) fn render_state_diff(
     color: bool,
 ) -> String {
     let (removed, added) = state_diff(before, after);
+    render_diff_lines(&removed, &added, color)
+}
+
+/// Render already-computed [`state_diff`] lines as colored `-`/`+` output: removed
+/// lines red `  - line`, added lines green `  + line`. Empty string when both are
+/// empty. Split out so a caller that already holds the removed/added lists (e.g.
+/// `watch`, which carries them per changed task) reuses the exact `-`/`+` form.
+pub(crate) fn render_diff_lines(removed: &[String], added: &[String], color: bool) -> String {
     let mut lines = Vec::new();
-    for l in &removed {
+    for l in removed {
         lines.push(sgr(&format!("  - {l}"), "31", color));
     }
-    for l in &added {
+    for l in added {
         lines.push(sgr(&format!("  + {l}"), "32", color));
     }
     lines.join("\n")
