@@ -165,6 +165,11 @@ enum Commands {
     },
     /// Summary counts: total, per-status, blocked, ready, closed
     Status {
+        /// Print only the store's current high-water mutation `seq` - the cursor
+        /// `ta watch --since` takes - instead of the counts. Seeds a watch loop:
+        /// `SINCE=$(ta status --current)`.
+        #[arg(long)]
+        current: bool,
         #[command(flatten)]
         output: OutputArgs,
     },
@@ -744,7 +749,7 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
         ),
         Commands::Show { ids, display } => cmd_show(store, &ids, &display, &store.config().display),
         Commands::Edit { id, json, toml: _ } => cmd_edit(store, &id, json),
-        Commands::Status { output } => cmd_status(store, &output),
+        Commands::Status { current, output } => cmd_status(store, current, &output),
         Commands::Prime { output } => cmd_prime(store, &output),
         Commands::Undo {
             seq,

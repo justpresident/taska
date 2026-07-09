@@ -1,7 +1,9 @@
 //! `ta status` - total, per-status, blocked, ready, and closed counts.
 //!
 //! The counts come from [`crate::action::status`]; this file is just their
-//! presentation (the aligned human table and the JSON object).
+//! presentation (the aligned human table and the JSON object). `--current` is a
+//! separate, state-free shortcut: it prints the log's high-water `seq` (the
+//! cursor `ta watch --since` takes) and skips materialization entirely.
 
 use serde_json::Value;
 
@@ -11,7 +13,18 @@ use crate::error::DynError;
 use crate::format::{emit, sgr, want_color, OutputArgs};
 use crate::storage::EventStore;
 
-pub fn cmd_status(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynError> {
+pub fn cmd_status(
+    store: &impl EventStore,
+    current: bool,
+    output: &OutputArgs,
+) -> Result<(), DynError> {
+    // `--current`: just the log's high-water `seq` (the cursor `ta watch --since`
+    // takes), without materializing state. 0 on an empty log.
+    if current {
+        let seq = store.load_mutations()?.last().map_or(0, |e| e.seq);
+        emit(output, &seq.to_string(), &serde_json::json!({ "seq": seq }));
+        return Ok(());
+    }
     let outcome = status(store)?;
     print_warnings(&outcome.warnings);
     let human = render_status_human(&outcome.summary, want_color(output.no_color));
