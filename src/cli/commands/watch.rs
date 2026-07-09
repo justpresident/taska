@@ -36,18 +36,27 @@ pub fn cmd_watch(
 
     let color = want_color(output.no_color);
     let deadline = Instant::now() + timeout;
+    // Poll cheaply: stat the log and only read+parse it when its `(len, mtime)`
+    // fingerprint changed since the last check - so a long/backgrounded watch
+    // doesn't re-parse the whole log every second. `None` (a store that can't stat)
+    // disables the short-circuit and always re-reads.
+    let mut last_fp: Option<(u64, std::time::SystemTime)> = None;
 
     loop {
-        if collect(store, criteria, open, ready, since, color)?.is_some() {
-            // A match arrived: hold out briefly (bounded by the time left) to batch
-            // a burst, then emit the accumulated set.
-            let wait = holdout.min(deadline.saturating_duration_since(Instant::now()));
-            if !wait.is_zero() {
-                sleep(wait);
-            }
-            if let Some((human, value)) = collect(store, criteria, open, ready, since, color)? {
-                emit(output, &human, &value);
-                return Ok(());
+        let fp = store.log_fingerprint();
+        if fp.is_none() || fp != last_fp {
+            last_fp = fp;
+            if collect(store, criteria, open, ready, since, color)?.is_some() {
+                // A match arrived: hold out briefly (bounded by the time left) to
+                // batch a burst, then emit the accumulated set.
+                let wait = holdout.min(deadline.saturating_duration_since(Instant::now()));
+                if !wait.is_zero() {
+                    sleep(wait);
+                }
+                if let Some((human, value)) = collect(store, criteria, open, ready, since, color)? {
+                    emit(output, &human, &value);
+                    return Ok(());
+                }
             }
         }
         if Instant::now() >= deadline {

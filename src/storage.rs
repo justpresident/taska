@@ -36,6 +36,13 @@ pub trait EventStore {
     fn load_baseline(&self) -> Result<Vec<TaskState>, DynError>;
     /// Read every event from the active mutation log.
     fn load_mutations(&self) -> Result<Vec<MutationEvent>, DynError>;
+    /// A cheap change fingerprint of the mutation log - `(len, mtime)` of the log
+    /// file - so a poller (`watch`) can skip a full read+parse when nothing moved.
+    /// `None` for a store that can't stat it (e.g. the in-memory test store), which
+    /// tells the poller to always re-read.
+    fn log_fingerprint(&self) -> Option<(u64, std::time::SystemTime)> {
+        None
+    }
     /// Append events to the end of the log without rewriting existing lines.
     fn append_events(&self, new_events: &[MutationEvent]) -> Result<(), DynError>;
     /// Atomically append a **verified** batch: read the current state, let
@@ -234,6 +241,11 @@ impl EventStore for FileStore {
     /// past the largest already in the log (or 1 for a fresh/fully-overlaid log).
     /// Minting under the same lock as the write is what stops two concurrent
     /// writers from handing out the same `seq`.
+    fn log_fingerprint(&self) -> Option<(u64, std::time::SystemTime)> {
+        let meta = fs::metadata(self.mutations_path()).ok()?;
+        Some((meta.len(), meta.modified().ok()?))
+    }
+
     fn append_events(&self, drafts: &[MutationEvent]) -> Result<(), DynError> {
         if drafts.is_empty() {
             return Ok(());
