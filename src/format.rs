@@ -6,7 +6,7 @@
 //! and the human/json/jsonl renderers; the command handlers feed it an
 //! already-ordered task slice (ordering is the action's) and print the result.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::IsTerminal;
 
 use clap::{Args, ValueEnum};
@@ -528,6 +528,99 @@ pub(crate) fn render_list_record(
         }
     }
     lines.join("\n")
+}
+
+/// Render the field-level diff between two task states as `-`/`+` lines - the
+/// shared diff view `undo` and `watch` both print. For every column that differs,
+/// only the LINES that changed show: a line present in `before` but gone in
+/// `after` as red `- col: line`, one added in `after` as green `+ col: line`. Text
+/// fields diff per line (so an appended note shows just the appended line, not the
+/// whole field), arrays and `deps` per element/edge, scalars as old-then-new. A
+/// missing side is the empty state, so a create (`before` None) is all `+` and a
+/// delete (`after` None) all `-`. Empty string when the two states are identical.
+pub(crate) fn render_state_diff(
+    before: Option<&TaskState>,
+    after: Option<&TaskState>,
+    color: bool,
+) -> String {
+    // Every field either side carries (deterministic, alphabetical), then deps.
+    let mut fields: BTreeSet<&str> = BTreeSet::new();
+    for t in [before, after].into_iter().flatten() {
+        fields.extend(t.custom_fields.keys().map(String::as_str));
+    }
+    let mut lines = Vec::new();
+    for col in fields.iter().copied().chain(std::iter::once(DEPS_KEY)) {
+        let (removed, added) = line_diff(&field_lines(before, col), &field_lines(after, col));
+        for l in &removed {
+            lines.push(sgr(&format!("  - {}", label_line(col, l)), "31", color));
+        }
+        for l in &added {
+            lines.push(sgr(&format!("  + {}", label_line(col, l)), "32", color));
+        }
+    }
+    lines.join("\n")
+}
+
+/// The semantic "lines" of one column on a (maybe-missing) task - the unit the
+/// diff adds/removes: each text line of a string, each element of an array, each
+/// `type: target` edge of `deps`, or the single rendered form of a scalar. Empty
+/// when the task is missing or lacks the column.
+fn field_lines(state: Option<&TaskState>, col: &str) -> Vec<String> {
+    let Some(task) = state else {
+        return Vec::new();
+    };
+    if col == DEPS_KEY {
+        return task
+            .relationships
+            .iter()
+            .flat_map(|(rel, targets)| targets.iter().map(move |t| format!("{rel}: {t}")))
+            .collect();
+    }
+    match task.custom_fields.get(col) {
+        None => Vec::new(),
+        Some(Value::String(s)) => s.split('\n').map(str::to_string).collect(),
+        Some(Value::Array(items)) => items.iter().map(human_display).collect(),
+        Some(other) => vec![human_display(other)],
+    }
+}
+
+/// Multiset line diff preserving each side's order: the lines of `before` with no
+/// matching line left in `after` (removed), and vice-versa (added). Duplicates
+/// match one-for-one, so re-appending an identical line shows a single `+`.
+fn line_diff(before: &[String], after: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut after_left: HashMap<&str, usize> = HashMap::new();
+    for s in after {
+        *after_left.entry(s.as_str()).or_default() += 1;
+    }
+    let mut removed = Vec::new();
+    for b in before {
+        match after_left.get_mut(b.as_str()) {
+            Some(n) if *n > 0 => *n -= 1,
+            _ => removed.push(b.clone()),
+        }
+    }
+    let mut before_left: HashMap<&str, usize> = HashMap::new();
+    for s in before {
+        *before_left.entry(s.as_str()).or_default() += 1;
+    }
+    let mut added = Vec::new();
+    for a in after {
+        match before_left.get_mut(a.as_str()) {
+            Some(n) if *n > 0 => *n -= 1,
+            _ => added.push(a.clone()),
+        }
+    }
+    (removed, added)
+}
+
+/// Prefix a diff line with its column (`col: line`), except `deps`, whose lines
+/// already read as `type: target`.
+fn label_line(col: &str, line: &str) -> String {
+    if col == DEPS_KEY {
+        line.to_string()
+    } else {
+        format!("{col}: {line}")
+    }
 }
 
 /// Pad each `(cell, plain_width)` to its column width - padding by the plain
@@ -1281,6 +1374,88 @@ mod tests {
             out.lines()
                 .any(|l| l.trim() == "line two" && l.starts_with(' ')),
             "continuation line indented: {out}"
+        );
+    }
+
+    #[test]
+    fn state_diff_shows_only_the_appended_line_each_direction() {
+        let before = task("a", &[], &[("notes", serde_json::json!("one\ntwo"))]);
+        let after = task("a", &[], &[("notes", serde_json::json!("one\ntwo\nthree"))]);
+
+        // Adding (watch's forward direction): only the new line, a single `+`.
+        let add = render_state_diff(Some(&before), Some(&after), false);
+        assert_eq!(add, "  + notes: three", "only the appended line: {add:?}");
+
+        // Reverting (undo's direction): the same line as a single `-`, nothing else.
+        let rev = render_state_diff(Some(&after), Some(&before), false);
+        assert_eq!(rev, "  - notes: three", "only the removed line: {rev:?}");
+    }
+
+    #[test]
+    fn state_diff_scalar_change_is_old_then_new() {
+        let before = task("a", &[], &[(STATUS_FIELD, serde_json::json!("open"))]);
+        let after = task("a", &[], &[(STATUS_FIELD, serde_json::json!("closed"))]);
+        let diff = render_state_diff(Some(&before), Some(&after), false);
+        assert_eq!(
+            diff,
+            format!("  - {STATUS_FIELD}: open\n  + {STATUS_FIELD}: closed")
+        );
+    }
+
+    #[test]
+    fn state_diff_create_and_delete_are_all_one_sided() {
+        let t = task_rel(
+            "a",
+            BLOCKER,
+            &["dep"],
+            &[(STATUS_FIELD, serde_json::json!("open"))],
+        );
+        // Create (before None): every field and edge added, nothing removed.
+        let created = render_state_diff(None, Some(&t), false);
+        assert!(
+            created.contains(&format!("+ {STATUS_FIELD}: open"))
+                && created.contains(&format!("+ {BLOCKER}: dep")),
+            "create adds field + edge: {created}"
+        );
+        assert!(
+            created.lines().all(|l| l.trim_start().starts_with('+')),
+            "create is all additions: {created}"
+        );
+        // Delete (after None): the mirror - all removals.
+        let deleted = render_state_diff(Some(&t), None, false);
+        assert!(
+            deleted.lines().all(|l| l.trim_start().starts_with('-')),
+            "delete is all removals: {deleted}"
+        );
+    }
+
+    #[test]
+    fn state_diff_edges_diff_per_edge() {
+        let before = task_rel("a", BLOCKER, &["x"], &[]);
+        let after = task_rel("a", BLOCKER, &["y"], &[]);
+        let diff = render_state_diff(Some(&before), Some(&after), false);
+        assert!(diff.contains(&format!("- {BLOCKER}: x")), "drops x: {diff}");
+        assert!(diff.contains(&format!("+ {BLOCKER}: y")), "adds y: {diff}");
+    }
+
+    #[test]
+    fn state_diff_identical_is_empty_and_color_marks_direction() {
+        let t = task("a", &[], &[(STATUS_FIELD, serde_json::json!("open"))]);
+        assert_eq!(
+            render_state_diff(Some(&t), Some(&t), false),
+            "",
+            "no change -> empty"
+        );
+
+        let after = task("a", &[], &[(STATUS_FIELD, serde_json::json!("closed"))]);
+        let colored = render_state_diff(Some(&t), Some(&after), true);
+        assert!(
+            colored.contains("\x1b[31m") && colored.contains("\x1b[32m"),
+            "red `-` and green `+`: {colored:?}"
+        );
+        assert!(
+            !render_state_diff(Some(&t), Some(&after), false).contains('\x1b'),
+            "no escapes when color off"
         );
     }
 }

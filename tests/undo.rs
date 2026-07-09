@@ -230,8 +230,9 @@ fn undo_preview_renders_a_field_diff_of_changed_columns() {
     ta(&dir, &["dep", "add", "api", &format!("{BLOCKER}=db")]);
 
     // The preview (printed even under --force, before applying) is a per-task diff
-    // of ONLY the changed columns: current-state lines marked `-`, reverted `+`.
-    // Field keys are CANONICAL (the events are), so status shows as `status`.
+    // of ONLY the lines that change: current-state lines marked `-`, reverted `+`.
+    // Field keys are CANONICAL (the events are), so status shows as `status`; a
+    // reverted edge shows as its bare `type: target` line.
     let out = ta(&dir, &["undo", "--count", "2", "--force"]);
     assert!(out.contains("Undoing 2 event(s)"), "header: {out}");
     assert!(
@@ -243,7 +244,7 @@ fn undo_preview_renders_a_field_diff_of_changed_columns() {
         "reverted status added: {out}"
     );
     assert!(
-        out.contains(&format!("- {DEPS_KEY}:")),
+        out.contains(&format!("- {BLOCKER}: db")),
         "the added edge is shown removed: {out}"
     );
     // Only changed columns/tasks: the untouched `db` task never appears.
