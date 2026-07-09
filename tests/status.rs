@@ -39,3 +39,36 @@ fn status_current_tracks_the_high_water_seq() {
     let v: serde_json::Value = serde_json::from_str(&j).unwrap();
     assert_eq!(v["seq"], c2.trim().parse::<u64>().unwrap());
 }
+
+/// The default `status` view (no `--current`) reports the same high-water `seq`
+/// alongside the counts: a `Seq` line in the human table and a `seq` field in the
+/// JSON object, both equal to what `status --current` prints.
+#[test]
+fn status_reports_the_seq_cursor_with_the_counts() {
+    let dir = fresh_dir("status_seq_default");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    ta(&dir, &["create", "foo"]);
+    ta(&dir, &["create", "bar"]);
+
+    let cursor: u64 = ta(&dir, &["status", "--current"]).trim().parse().unwrap();
+
+    // Human: a labeled `Seq` line carrying the cursor (alignment padding varies,
+    // so match on the line, not exact spacing).
+    let human = ta(&dir, &["status"]);
+    assert!(human.contains("Total"), "still shows counts: {human}");
+    let seq_line = human
+        .lines()
+        .find(|l| l.trim_start().starts_with("Seq"))
+        .unwrap_or("");
+    assert!(
+        seq_line.contains(&cursor.to_string()),
+        "human status Seq line shows the cursor {cursor}: {human}"
+    );
+
+    // JSON: a `seq` field equal to the cursor, next to the counts.
+    let j = ta(&dir, &["status", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+    assert_eq!(v["seq"], cursor, "json seq matches --current: {j}");
+    assert_eq!(v["total"], 2, "counts still present: {j}");
+}

@@ -21,6 +21,10 @@ use crate::storage::EventStore;
 pub struct Session {
     pub state: HashMap<String, TaskState>,
     pub warnings: Vec<Warning>,
+    /// The log's high-water `seq` at read time - the cursor this state is as-of
+    /// (0 on an empty store). The same value `status --current` prints and a
+    /// `ta watch --since` loop advances.
+    pub seq: u64,
 }
 
 /// A non-fatal condition a read surfaced, carrying the DATA a frontend needs to
@@ -48,11 +52,13 @@ pub enum Warning {
 /// renamable in config.
 pub fn read(store: &impl EventStore) -> Result<Session, DynError> {
     let config = store.config();
-    let (mut state, orphans) = Engine::materialize_report(
-        store.load_baseline()?,
-        store.load_mutations()?,
-        &config.workflow.done_status,
-    );
+    let baseline = store.load_baseline()?;
+    let mutations = store.load_mutations()?;
+    // The log is strictly increasing by `seq`, so the last event carries the
+    // high-water mark - the cursor this read is as-of.
+    let seq = mutations.last().map_or(0, |e| e.seq);
+    let (mut state, orphans) =
+        Engine::materialize_report(baseline, mutations, &config.workflow.done_status);
 
     let mut warnings = Vec::new();
     if !orphans.is_empty() {
@@ -84,7 +90,11 @@ pub fn read(store: &impl EventStore) -> Result<Session, DynError> {
 
     rename_to_display(&mut state, config);
 
-    Ok(Session { state, warnings })
+    Ok(Session {
+        state,
+        warnings,
+        seq,
+    })
 }
 
 /// Rename the canonical storage keys (status/type) to their configured display

@@ -33,9 +33,11 @@ pub struct StatusSummary {
     pub closed: usize,
 }
 
-/// A `status` read: the summary plus any read [`Warning`]s.
+/// A `status` read: the summary, the log's high-water `seq` (the cursor the state
+/// is as-of), plus any read [`Warning`]s.
 pub struct StatusOutcome {
     pub summary: StatusSummary,
+    pub seq: u64,
     pub warnings: Vec<Warning>,
 }
 
@@ -46,6 +48,7 @@ pub fn status(store: &impl EventStore) -> Result<StatusOutcome, DynError> {
     let summary = status_summary(&session.state, &store.config().workflow, &blockers)?;
     Ok(StatusOutcome {
         summary,
+        seq: session.seq,
         warnings: session.warnings,
     })
 }
