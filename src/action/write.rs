@@ -144,7 +144,7 @@ pub fn delete(
 /// Guards use display field names (identical to `ta list`), so the canonical
 /// `state` is shaped to a display view first (rename only - no computed/timestamp
 /// injection, same limitation as `watch`). A missing task is a plain error; an
-/// unmet guard carries exit code [`crate::error::EXIT_PRECONDITION_FAILED`].
+/// unmet guard carries exit code [`crate::error::ExitCode::Precondition`].
 fn ensure_guard(
     state: &HashMap<String, TaskState>,
     id: &str,

@@ -24,7 +24,7 @@ use std::hash::BuildHasher;
 use serde_json::{Map, Value};
 
 use crate::config::Config;
-use crate::error::DynError;
+use crate::error::{CodedError, DynError};
 use crate::model::{
     MutationEvent, OpType, TaskState, REL_KEY, RESERVED_FIELD_KEYS, STATUS_KEY, TARGET_KEY,
     TASK_TYPE_KEY,
@@ -482,11 +482,10 @@ fn enforce_schemas(
         }
         let violations = schema_violations(fields, config);
         if !violations.is_empty() {
-            return Err(format!(
+            return Err(CodedError::schema(format!(
                 "task `{id}` does not conform to its task-type schema:\n  - {}",
                 violations.join("\n  - ")
-            )
-            .into());
+            )));
         }
     }
     Ok(())
@@ -694,7 +693,10 @@ pub fn vet_new_fields<S: BuildHasher>(
     if introduced.is_empty() || allow_new_fields || state.is_empty() {
         return Ok(introduced);
     }
-    Err(unknown_field_message(&introduced, &known).into())
+    Err(CodedError::schema(unknown_field_message(
+        &introduced,
+        &known,
+    )))
 }
 
 /// The block message for [`vet_new_fields`]: each introduced field with a

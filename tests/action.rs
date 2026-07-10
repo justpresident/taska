@@ -242,7 +242,11 @@ fn conditional_write_is_an_atomic_compare_and_swap() {
     let coded = err
         .downcast_ref::<taska::error::CodedError>()
         .expect("a precondition failure is a CodedError");
-    assert_eq!(coded.code(), 3, "precondition failure exits 3");
+    assert_eq!(
+        coded.code(),
+        taska::error::ExitCode::Precondition,
+        "precondition failure exits 3"
+    );
 
     // The failed write appended nothing - state is unchanged.
     let after = action::read(&store).unwrap();
@@ -270,7 +274,7 @@ fn conditional_write_is_an_atomic_compare_and_swap() {
             .downcast_ref::<taska::error::CodedError>()
             .unwrap()
             .code(),
-        3
+        taska::error::ExitCode::Precondition
     );
     action::write::delete(&store, "t", &[format!("{STATUS_KEY}=in_progress")]).unwrap();
     assert!(

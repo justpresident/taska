@@ -299,9 +299,10 @@ The `--if` guard on `update`/`delete` is evaluated **in the same locked step** t
 | --- | --- |
 | `0` | Success |
 | `1` | Program error (bad input, task not found, I/O, …) |
+| `2` | Schema validation - the write violates a `[task_types]` schema, or introduces an undeclared field name (the typo guard). Fix the fields and retry |
 | `3` | An `--if` precondition wasn't met - the write was rejected, not applied |
 
-(`ta watch` also exits `1` on timeout with no match. A future release folds every code into one documented enum, adding `2` for schema-validation failures.)
+(`ta watch` also exits `1` on timeout with no match.)
 
 A write also can't quietly introduce a **brand-new field name**. A name no task uses yet - and that isn't a declared schema field or a display column - is rejected with a did-you-mean suggestion unless you pass `--new-field`. It's a **soft, schema-free guard against typos** (`titel`, `pirority`): you keep schemaless freedom (any field is one `--new-field` away), but a misspelling can't silently spawn a phantom column. The store's existing field names *are* the vocabulary, so the guard needs no configuration; the first task on an empty store is exempt (it seeds that vocabulary). For hard constraints - required fields, value kinds, a closed field set - declare a `[task_types]` schema on top.
 

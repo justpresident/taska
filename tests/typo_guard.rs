@@ -17,9 +17,10 @@ fn unknown_field_is_blocked_with_a_suggestion_until_new_field() {
     // A later task reusing known names is fine.
     ta(&dir, &["create", "t2", "title=Second", "priority=low"]);
 
-    // A typo of an existing field is rejected, suggesting the real name.
+    // A typo of an existing field is rejected, suggesting the real name. The soft
+    // schema is schema validation too, so it exits 2 (like the `[task_types]` gate).
     let out = run(ta_bin(), &dir, &["create", "t3", "titel=Third"]);
-    assert!(!out.status.success(), "a typo'd field name is blocked");
+    assert_eq!(out.status.code(), Some(2), "soft-schema typo guard exits 2");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("titel") && stderr.contains("did you mean `title`"),

@@ -24,9 +24,10 @@ fn write_gate_enforces_whole_task_schemas() {
     ta(&dir, &["create", "legacy", "priority=1"]);
     declare_schema(&dir);
 
-    // Create without a type: rejected, naming the display field and options.
+    // Create without a type: rejected, naming the display field and options. A
+    // schema-conformance rejection is exit code 2 (distinct from a general error).
     let out = run(ta_bin(), &dir, &["create", "t1"]);
-    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2), "schema violation exits 2");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("missing the `type` field") && stderr.contains("bug, feature"),

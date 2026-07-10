@@ -15,9 +15,12 @@ fn reserved_field_keys_are_rejected() {
     // append nothing, so it can never shadow the event envelope.
     for key in [SEQ_KEY, OP_KEY, TASK_ID_KEY, TIMESTAMP_KEY, META_KEY] {
         let out = run(ta_bin(), &dir, &["create", "x", &format!("{key}=v")]);
-        assert!(
-            !out.status.success(),
-            "reserved key `{key}` must be rejected, got:\n{}",
+        // A reserved-key rejection is STRUCTURAL, not a `[task_types]` schema
+        // violation, so it's a general error (exit 1) - not the schema code (2).
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "reserved key `{key}` is a general error, got:\n{}",
             String::from_utf8_lossy(&out.stdout)
         );
         let stderr = String::from_utf8_lossy(&out.stderr);
