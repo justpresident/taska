@@ -38,7 +38,12 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
-            ExitCode::FAILURE
+            // Most errors exit 1; a `CodedError` (e.g. an `--if` precondition that
+            // didn't hold) sets its own code so an agent can branch on it.
+            ExitCode::from(
+                e.downcast_ref::<taska::error::CodedError>()
+                    .map_or(1, taska::error::CodedError::code),
+            )
         }
     }
 }

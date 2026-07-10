@@ -11,9 +11,11 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
 
+use std::collections::HashMap;
+
 use crate::action::materialize;
-use crate::error::DynError;
-use crate::model::{MutationEvent, OpType, STATUS_KEY};
+use crate::error::{CodedError, DynError};
+use crate::model::{MutationEvent, OpType, TaskState, STATUS_KEY};
 use crate::schema::{
     build_field_events, coerce_event_fields, schema_default_stamps, vet_events, vet_new_fields,
     FieldOps,
@@ -89,11 +91,13 @@ pub fn update(
     id: &str,
     ops: &FieldOps,
     allow_new_fields: bool,
+    guard: &[String],
 ) -> Result<WriteOutcome, DynError> {
     let config = store.config().clone();
     let new_fields = RefCell::new(Vec::new());
     let written = store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
+        ensure_guard(&state, id, guard, &config)?;
         let events = build_field_events(id, ops, &state, &config)?;
         let out = vet_events(&events, &state, &config)?;
         // Typo guard AFTER the schema gate (see `create`).
@@ -106,17 +110,61 @@ pub fn update(
     })
 }
 
-/// Delete a task. Deleting a missing task is a typo, so it errors (under the lock)
-/// rather than appending a `Delete` that applies to nothing.
-pub fn delete(store: &impl EventStore, id: &str) -> Result<WriteOutcome, DynError> {
+/// Delete a task, optionally guarded by an `--if` condition.
+///
+/// Deleting a missing task is a typo, so it errors (under the lock) rather than
+/// appending a `Delete` that applies to nothing. A non-empty `guard` makes the
+/// delete conditional (compare-and-swap), same as `update`.
+pub fn delete(
+    store: &impl EventStore,
+    id: &str,
+    guard: &[String],
+) -> Result<WriteOutcome, DynError> {
     let draft = MutationEvent::new(OpType::Delete, id, Map::new());
     let config = store.config().clone();
     let written = store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
+        ensure_guard(&state, id, guard, &config)?;
         vet_events(std::slice::from_ref(&draft), &state, &config)
     })?;
     Ok(WriteOutcome {
         written,
         new_fields: Vec::new(),
     })
+}
+
+/// Reject the write when the `--if` `guard` doesn't hold on the CURRENT `state` -
+/// the atomic compare-and-swap check. Called inside the `append_checked` closure
+/// (under the store lock, before events are built), so it can't race the
+/// seq-minting append: two agents claiming one task serialize, and the loser sees
+/// the already-changed state and fails. Crucially it runs BEFORE no-op detection,
+/// so a losing claim errors even when the intended end-state already holds (rather
+/// than reporting "already up to date").
+///
+/// Guards use display field names (identical to `ta list`), so the canonical
+/// `state` is shaped to a display view first (rename only - no computed/timestamp
+/// injection, same limitation as `watch`). A missing task is a plain error; an
+/// unmet guard carries exit code [`crate::error::EXIT_PRECONDITION_FAILED`].
+fn ensure_guard(
+    state: &HashMap<String, TaskState>,
+    id: &str,
+    guard: &[String],
+    config: &crate::config::Config,
+) -> Result<(), DynError> {
+    if guard.is_empty() {
+        return Ok(());
+    }
+    let mut display = state.clone();
+    crate::action::read::rename_to_display(&mut display, config);
+    if !display.contains_key(id) {
+        return Err(format!("task `{id}` not found").into());
+    }
+    let unmet = crate::action::list::unmet_criteria(&display, id, guard, config)?;
+    if unmet.is_empty() {
+        return Ok(());
+    }
+    Err(CodedError::precondition(format!(
+        "`{id}` does not meet the required condition(s) `{}` - not applied",
+        unmet.join("`, `")
+    )))
 }

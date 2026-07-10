@@ -101,6 +101,13 @@ enum Commands {
         /// name is rejected as a likely typo - did-you-mean included).
         #[arg(long)]
         new_field: bool,
+        /// Apply ONLY if the task currently matches every condition (same syntax as
+        /// `ta list` filters, e.g. `--if status=todo --if owner=`). Checked
+        /// atomically under the store lock (compare-and-swap): if it doesn't hold,
+        /// the write is rejected with exit code 3 - so agents can race to claim a
+        /// task and exactly one wins. Repeatable (all must hold).
+        #[arg(long = "if", value_name = "COND", add = ArgValueCompleter::new(complete::criteria))]
+        guard: Vec<String>,
     },
     /// Add/remove typed relationship edges: `ta dep add <task> <type>=<target> ...`
     Dep {
@@ -111,6 +118,11 @@ enum Commands {
     Delete {
         #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         id: String,
+        /// Delete ONLY if the task currently matches every condition (same syntax
+        /// as `ta list`; repeatable, all must hold). Checked atomically under the
+        /// store lock; fails with exit code 3 otherwise.
+        #[arg(long = "if", value_name = "COND", add = ArgValueCompleter::new(complete::criteria))]
+        guard: Vec<String>,
     },
     /// List tasks, optionally filtered: `ta list status=~open priority=3 --open`
     List {
@@ -763,12 +775,13 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             id,
             fields,
             new_field,
-        } => cmd_update(store, &id, &fields, new_field),
+            guard,
+        } => cmd_update(store, &id, &fields, new_field, &guard),
         Commands::Dep { action } => {
             let types = store.config().relationships.types.clone();
             cmd_dep_group(store, action, &types)
         }
-        Commands::Delete { id } => cmd_delete(store, &id),
+        Commands::Delete { id, guard } => cmd_delete(store, &id, &guard),
         Commands::List {
             criteria,
             open,

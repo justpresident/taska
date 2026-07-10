@@ -152,6 +152,36 @@ pub(crate) fn validate_criteria(criteria: &[String]) -> Result<(), DynError> {
     compile_criteria(criteria).map(|_| ())
 }
 
+/// The guard `criteria` that task `id` FAILS in `state` (empty = it satisfies them
+/// all, so a conditional write may proceed). Reuses the exact `list` filter
+/// grammar and `FilterCtx`, so a write guard (`--if`) means precisely what
+/// `ta list` means. `state` must be display-shaped (guards use display field
+/// names); an absent task fails every criterion.
+pub(crate) fn unmet_criteria(
+    state: &HashMap<String, TaskState>,
+    id: &str,
+    criteria: &[String],
+    config: &Config,
+) -> Result<Vec<String>, DynError> {
+    let compiled = compile_criteria(criteria)?;
+    let types = &config.relationships.types;
+    let rev = compiled
+        .iter()
+        .any(|c| is_inverse_name(&c.field, types))
+        .then(|| inverse_index(state, types));
+    let ctx = FilterCtx {
+        types,
+        rev: rev.as_ref(),
+    };
+    let task = state.get(id);
+    Ok(criteria
+        .iter()
+        .zip(&compiled)
+        .filter(|(_, c)| !task.is_some_and(|t| c.matches(t, &ctx)))
+        .map(|(raw, _)| raw.clone())
+        .collect())
+}
+
 /// A filter operator. `=`/`!=` compare the field's value against a JSON-coerced
 /// query; `=~`/`!~` match a regex against the field's string form; `>`/`>=`/`<`/
 /// `<=` order it against the query (see [`Matcher::Cmp`]).

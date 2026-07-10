@@ -10,6 +10,7 @@ pub fn cmd_update(
     id: &str,
     fields: &[String],
     new_field: bool,
+    guard: &[String],
 ) -> Result<(), DynError> {
     let mut ops = parse_field_ops(fields)?;
     // Display names map onto their canonical storage keys: a renamed `state+=x`
@@ -23,7 +24,7 @@ pub fn cmd_update(
     // canonicalize keys through the pairs-aware variant.
     canonicalize_field_pairs(&mut ops.append, workflow)?;
     canonicalize_field_pairs(&mut ops.subtract, workflow)?;
-    let outcome = crate::action::write::update(store, id, &ops, new_field)?;
+    let outcome = crate::action::write::update(store, id, &ops, new_field, guard)?;
     if outcome.written.is_empty() {
         println!("`{id}` already up to date - no changes");
     } else {

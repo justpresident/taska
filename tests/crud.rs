@@ -675,6 +675,76 @@ fn empty_value_unsets_an_optional_field_like_null() {
 }
 
 #[test]
+fn conditional_update_claims_atomically_and_exits_3_on_loss() {
+    // `--if` is a compare-and-swap: two agents race to claim one task, exactly one
+    // wins, and the loser fails with exit code 3 and a clear message - even though
+    // its intended end-state matches (it must not read as a silent no-op).
+    let dir = fresh_dir("claim");
+    init_repo(&dir);
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "t", &format!("{STATUS_FIELD}=todo")]);
+
+    let claim = |d: &std::path::Path| {
+        run(
+            ta_bin(),
+            d,
+            &[
+                "update",
+                "t",
+                &format!("{STATUS_FIELD}=in_progress"),
+                "--if",
+                &format!("{STATUS_FIELD}=todo"),
+            ],
+        )
+    };
+
+    // First agent claims while the task is `todo`: succeeds.
+    let first = claim(&dir);
+    assert!(
+        first.status.success(),
+        "first claim wins: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    // Second agent claims the same target: loses - exit 3, clear message.
+    let second = claim(&dir);
+    assert_eq!(second.status.code(), Some(3), "lost claim exits 3");
+    assert!(
+        String::from_utf8_lossy(&second.stderr).contains("does not meet"),
+        "clear failure message: {second:?}"
+    );
+
+    // The lost claim changed nothing.
+    let shown = ta(&dir, &["show", "t", "--format", "json"]);
+    assert!(
+        shown.contains(&format!("\"{STATUS_FIELD}\":\"in_progress\"")),
+        "state unchanged by the lost claim: {shown}"
+    );
+
+    // A conditional delete honors the guard the same way.
+    let bad = run(
+        ta_bin(),
+        &dir,
+        &["delete", "t", "--if", &format!("{STATUS_FIELD}=todo")],
+    );
+    assert_eq!(bad.status.code(), Some(3), "wrong-condition delete exits 3");
+    ta(
+        &dir,
+        &[
+            "delete",
+            "t",
+            "--if",
+            &format!("{STATUS_FIELD}=in_progress"),
+        ],
+    );
+    let gone = run(ta_bin(), &dir, &["show", "t"]);
+    assert!(
+        !gone.status.success(),
+        "conditional delete removed the task"
+    );
+}
+
+#[test]
 fn field_value_from_file_and_stdin() {
     let dir = fresh_dir("field-input");
     init_repo(&dir);

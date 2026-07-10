@@ -213,3 +213,68 @@ fn dep_tree_returns_the_requested_columns_per_node() {
     assert_eq!(cells.get("title"), Some(&json!("Parent task")));
     assert_eq!(cells.get(STATUS_KEY), Some(&json!("todo")));
 }
+
+#[test]
+fn conditional_write_is_an_atomic_compare_and_swap() {
+    use taska::schema::FieldOps;
+    let store = provision("guard");
+    create(&store, "t", "Task", "todo");
+
+    // A set-status op, the way a frontend hands `write::update` canonical fields.
+    let claim = |status: &str| FieldOps {
+        set: std::iter::once((STATUS_KEY.to_string(), json!(status))).collect(),
+        append: vec![],
+        subtract: vec![],
+        raw: Map::new(),
+    };
+    let todo = || vec![format!("{STATUS_KEY}=todo")];
+
+    // Guard holds (status is todo): the claim applies.
+    let ok = action::write::update(&store, "t", &claim("in_progress"), false, &todo()).unwrap();
+    assert_eq!(ok.written.len(), 1, "claim applied while guard held");
+
+    // Second claim with the SAME guard loses - status is now in_progress. Even
+    // though the intended end-state matches (a would-be no-op), losing the race is
+    // surfaced as an error carrying exit code 3, not a silent "already up to date".
+    let Err(err) = action::write::update(&store, "t", &claim("in_progress"), false, &todo()) else {
+        panic!("the second claim must fail its guard");
+    };
+    let coded = err
+        .downcast_ref::<taska::error::CodedError>()
+        .expect("a precondition failure is a CodedError");
+    assert_eq!(coded.code(), 3, "precondition failure exits 3");
+
+    // The failed write appended nothing - state is unchanged.
+    let after = action::read(&store).unwrap();
+    assert_eq!(
+        after.state["t"].custom_fields.get(STATUS_KEY),
+        Some(&json!("in_progress")),
+        "lost claim left state untouched"
+    );
+
+    // Guarding a task that doesn't exist is a plain error, NOT a coded precondition.
+    let Err(missing) = action::write::update(&store, "ghost", &claim("x"), false, &todo()) else {
+        panic!("guarding a missing task must error");
+    };
+    assert!(
+        missing.downcast_ref::<taska::error::CodedError>().is_none(),
+        "not-found is exit 1, not the precondition code"
+    );
+
+    // Conditional delete honors the guard: wrong condition fails (3), right removes.
+    let Err(del_err) = action::write::delete(&store, "t", &todo()) else {
+        panic!("delete with a failing guard must error");
+    };
+    assert_eq!(
+        del_err
+            .downcast_ref::<taska::error::CodedError>()
+            .unwrap()
+            .code(),
+        3
+    );
+    action::write::delete(&store, "t", &[format!("{STATUS_KEY}=in_progress")]).unwrap();
+    assert!(
+        !action::read(&store).unwrap().state.contains_key("t"),
+        "conditional delete removed the task once its guard held"
+    );
+}
