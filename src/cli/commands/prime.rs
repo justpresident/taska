@@ -119,7 +119,7 @@ fn write_commands(f: &PrimeFacts, ex: &PrimeExamples) -> String {
         ),
         (
             format!("ta update <id> {sf}={}", ex.claim),
-            "set a field: = replace, += append, -= remove".to_string(),
+            "set a field: = set, += append, -= remove, field= clears".to_string(),
         ),
         (
             format!("ta update <id> {sf}={}", f.done_status),

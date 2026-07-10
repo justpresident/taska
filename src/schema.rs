@@ -795,6 +795,9 @@ pub fn coerce_event_fields<S: BuildHasher>(
     state: &HashMap<String, TaskState, S>,
     config: &Config,
 ) {
+    // "empty means unset": an empty-string set-value clears an optional field
+    // before any coercion, so a now-null value skips the loop below.
+    blank_optional_to_unset(events, state, config);
     if config.task_types.types.is_empty() {
         return;
     }
@@ -827,6 +830,52 @@ pub fn coerce_event_fields<S: BuildHasher>(
             };
             if let Some(coerced) = coerce_value(value, &kind, raw.get(key)) {
                 event.payload.insert(key.to_string(), coerced);
+            }
+        }
+    }
+}
+
+/// "Empty means unset": rewrite an empty-string set-value to the `null` unset
+/// marker, so `field=""` clears the field on replay - EXCEPT a field declared
+/// `required` for the task's type, which keeps `""` (a required field can't be
+/// absent). This makes "set to empty" and "unset" the same for optional and
+/// undeclared fields (and for every field in a schema-less store), so callers
+/// never need the raw `null`, and it mirrors the filter side ([`crate::action`]'s
+/// `field=` matches an absent/empty field). Runs on Create/Update payloads before
+/// coercion, so a now-`null` value is left untouched by the coercion loop.
+fn blank_optional_to_unset<S: BuildHasher>(
+    events: &mut [MutationEvent],
+    state: &HashMap<String, TaskState, S>,
+    config: &Config,
+) {
+    for event in events.iter_mut() {
+        if !matches!(event.op, OpType::Create | OpType::Update) {
+            continue;
+        }
+        // The task's (possibly re-typed) type decides which fields are required;
+        // resolve it exactly as the coercion loop does.
+        let type_name = event
+            .payload
+            .get(TASK_TYPE_KEY)
+            .or_else(|| {
+                state
+                    .get(&event.task_id)
+                    .and_then(|t| t.custom_fields.get(TASK_TYPE_KEY))
+            })
+            .and_then(Value::as_str);
+        let required: BTreeSet<&str> = type_name
+            .and_then(|n| config.task_types.types.get(n))
+            .map(|def| {
+                def.fields
+                    .iter()
+                    .filter(|(_, schema)| schema.required())
+                    .map(|(name, _)| declared_field_key(name, &config.workflow.status_field))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (key, value) in &mut event.payload {
+            if value.as_str() == Some("") && !required.contains(key.as_str()) {
+                *value = Value::Null;
             }
         }
     }
@@ -1325,6 +1374,54 @@ nums = "array<int>"
         let mut untouched = events.clone();
         coerce_event_fields(&mut untouched, &raw, &HashMap::new(), &Config::default());
         assert_eq!(untouched[0].payload, before);
+    }
+
+    #[test]
+    fn empty_string_unsets_optional_fields_but_keeps_required() {
+        let config: Config = toml::from_str(
+            r#"
+[task_types.bug.fields]
+summary = { type = "string", required = true }
+note = "string"
+"#,
+        )
+        .unwrap();
+        let payload: Map<String, Value> = [
+            (TASK_TYPE_KEY, serde_json::json!("bug")),
+            ("summary", serde_json::json!("")),
+            ("note", serde_json::json!("")),
+            ("free", serde_json::json!("")), // undeclared -> treated as optional
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let mut events = vec![MutationEvent::new(OpType::Create, "t", payload)];
+        coerce_event_fields(&mut events, &Map::new(), &HashMap::new(), &config);
+        let p = &events[0].payload;
+        // A required field keeps the empty string (it can't be absent).
+        assert_eq!(p["summary"], serde_json::json!(""), "required blank kept");
+        // Optional and undeclared blanks become the `null` unset marker, which
+        // replay removes - so `field=""` clears them.
+        assert_eq!(p["note"], Value::Null, "optional blank -> unset");
+        assert_eq!(p["free"], Value::Null, "undeclared blank -> unset");
+
+        // A schema-less store has no required fields, so every blank unsets.
+        let mut untyped = vec![MutationEvent::new(
+            OpType::Update,
+            "t",
+            std::iter::once(("x".to_string(), serde_json::json!(""))).collect(),
+        )];
+        coerce_event_fields(
+            &mut untyped,
+            &Map::new(),
+            &HashMap::new(),
+            &Config::default(),
+        );
+        assert_eq!(
+            untyped[0].payload["x"],
+            Value::Null,
+            "no schema: blank unsets"
+        );
     }
 
     #[test]

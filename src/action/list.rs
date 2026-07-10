@@ -232,17 +232,32 @@ impl Criterion {
     /// set/array, `deps`, a relationship type - one per element). The positive
     /// forms (`=`/`=~`/comparisons) pass if ANY candidate matches; the negated
     /// forms (`!=`/`!~`) are their logical NOT, so they pass when NONE does - and
-    /// thus also when the field is empty or absent.
+    /// thus also when the field is absent. The one wrinkle is the empty-string `=`
+    /// query (see [`eq_matches`]): it also matches an absent/empty field, so its
+    /// negation `field!=` conversely FAILS on an absent field.
     fn matches(&self, task: &TaskState, ctx: &FilterCtx) -> bool {
         let values = field_values(task, &self.field, ctx);
         match &self.matcher {
-            Matcher::Eq(q) => values.iter().any(|v| v == q),
-            Matcher::Ne(q) => !values.iter().any(|v| v == q),
+            Matcher::Eq(q) => eq_matches(&values, q),
+            Matcher::Ne(q) => !eq_matches(&values, q),
             Matcher::Re(re) => values.iter().any(|v| re.is_match(&value_string(v))),
             Matcher::NotRe(re) => !values.iter().any(|v| re.is_match(&value_string(v))),
             Matcher::Cmp(op, q) => values.iter().any(|v| cmp_holds(*op, v, q)),
         }
     }
+}
+
+/// Whether the field's candidate `values` satisfy an equality query `q`. Usually
+/// "some candidate equals `q`", but an EMPTY-STRING query also matches a field with
+/// no candidates - an absent (unset) or empty field - so `field=` treats "unset"
+/// and `""` as the same. Every other query is unchanged: `owner=alice` still fails
+/// on an absent field. Mirrors the write side, where `field=""` clears an optional
+/// field (so after `ta update t owner=`, `ta list owner=` finds `t`).
+fn eq_matches(values: &[Value], q: &Value) -> bool {
+    if values.is_empty() {
+        return q.as_str() == Some("");
+    }
+    values.iter().any(|v| v == q)
 }
 
 /// Whether a single candidate `v <op> q` holds under the shared [`cmp_json`]
@@ -478,6 +493,12 @@ mod tests {
         assert!(matches("owner!~x"), "absent field passes !~");
         assert!(!matches("owner=bob"), "absent field fails =");
 
+        // "empty means unset": an empty-string `=` query matches an absent field,
+        // and its negation `!=` therefore fails on absent. Non-empty queries are
+        // unaffected (the assertions above still hold).
+        assert!(matches("owner="), "absent field matches empty =");
+        assert!(!matches("owner!="), "absent field fails empty !=");
+
         // Parse errors: no operator, empty field, bad regex.
         assert!(compile_criterion("nooperator").is_err());
         assert!(compile_criterion("=value").is_err());
@@ -486,6 +507,26 @@ mod tests {
         // The first operator wins, so a regex value may contain operators.
         let (field, _, value) = split_criterion("title=~a=b").unwrap();
         assert_eq!((field, value), ("title", "a=b"));
+    }
+
+    #[test]
+    fn empty_query_treats_absent_and_blank_alike() {
+        let blank = task_rel("b", BLOCKER, &[], &[("owner", serde_json::json!(""))]);
+        let set = task_rel("s", BLOCKER, &[], &[("owner", serde_json::json!("alice"))]);
+        let types = renamed_config().relationships.types;
+        let ctx = FilterCtx {
+            types: &types,
+            rev: None,
+        };
+        let m = |task: &TaskState, s: &str| compile_criterion(s).unwrap().matches(task, &ctx);
+
+        // A literally-empty field matches `=` and fails `!=`, exactly like an
+        // absent one - so "unset" and `""` are indistinguishable to the filter.
+        assert!(m(&blank, "owner="), "blank field matches empty =");
+        assert!(!m(&blank, "owner!="), "blank field fails empty !=");
+        // A set, non-empty field is the opposite: fails `=`, matches `!=`.
+        assert!(!m(&set, "owner="), "set field fails empty =");
+        assert!(m(&set, "owner!="), "set field matches empty !=");
     }
 
     #[test]

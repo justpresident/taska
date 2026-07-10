@@ -648,6 +648,33 @@ fn null_value_unsets_a_field() {
 }
 
 #[test]
+fn empty_value_unsets_an_optional_field_like_null() {
+    // Design A: `field=` (empty) clears an optional field just like `field=null`,
+    // so callers never need the raw `null` - and the empty-string FILTER then
+    // finds the cleared task, keeping select and update consistent.
+    let dir = fresh_dir("empty-unset");
+    init_renamed_open(&dir);
+    ta(
+        &dir,
+        &["create", "x", "owner=bob", &format!("{STATUS_FIELD}=open")],
+    );
+    // Clearing with an empty value removes the (optional) field, same as null.
+    ta(&dir, &["update", "x", "owner="]);
+    let json = ta(&dir, &["show", "x", "--format", "json"]);
+    assert!(
+        !json.contains("owner"),
+        "owner unset by empty value: {json}"
+    );
+
+    // Select agrees with update: the empty-string filter matches the cleared task.
+    let listed = ta(&dir, &["list", "owner=", "--columns", "id"]);
+    assert!(
+        listed.lines().any(|l| l.trim() == "x"),
+        "empty filter matches the unset field: {listed}"
+    );
+}
+
+#[test]
 fn field_value_from_file_and_stdin() {
     let dir = fresh_dir("field-input");
     init_repo(&dir);
