@@ -30,16 +30,33 @@ const BASELINE_PATH: &str = ".taska/baseline.jsonl";
 /// missing git repo warns rather than failing, so `ta init` still works in a
 /// plain directory.
 pub fn setup(repo_root: &Path) -> Result<(), DynError> {
-    ensure_gitattribute(repo_root, MUTATIONS_PATH, LOG_DRIVER)?;
-    ensure_gitattribute(repo_root, BASELINE_PATH, BASELINE_DRIVER)?;
+    match detect_scm(repo_root) {
+        Some((Scm::Git, _)) => {
+            ensure_gitattribute(repo_root, MUTATIONS_PATH, LOG_DRIVER)?;
+            ensure_gitattribute(repo_root, BASELINE_PATH, BASELINE_DRIVER)?;
 
-    if register_drivers(repo_root) {
-        println!("Configured git merge drivers for the taska event log");
-    } else {
-        eprintln!(
-            "warning: git merge drivers not configured (not a git repository?); \
-             run `git init`, then `ta init` again to enable safe .taska merges"
-        );
+            if register_drivers(repo_root) {
+                println!("Configured git merge drivers for the taska event log");
+            } else {
+                eprintln!(
+                    "warning: git merge drivers not configured (not a git repository?); \
+                     run `git init`, then `ta init` again to enable safe .taska merges"
+                );
+            }
+        }
+        Some((Scm::Mercurial, _)) => {
+            eprintln!(
+                "warning: mercurial repository detected; taska's merge protection \
+                 currently supports only git - merging concurrent .taska edits in hg \
+                 can corrupt the task log"
+            );
+        }
+        None => {
+            eprintln!(
+                "warning: git merge drivers not configured (not a git repository?); \
+                 run `git init`, then `ta init` again to enable safe .taska merges"
+            );
+        }
     }
     Ok(())
 }

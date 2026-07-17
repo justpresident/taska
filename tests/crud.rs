@@ -196,18 +196,35 @@ fn init_outside_git_is_quiet_and_actionable() {
 
 #[test]
 fn store_commands_auto_register_drivers_when_gitattributes_present() {
-    // The trap: `ta init` BEFORE `git init` (the fresh-clone state looks the
-    // same) writes `.gitattributes` but can't register the per-clone driver
-    // *definitions* - a git merge would text-merge the log. Because the committed
-    // `.gitattributes` already declares the drivers, the next store command heals
-    // the clone SILENTLY rather than nagging: the registered command is a
-    // taska-owned constant, so auto-registering it can't run anything the repo
-    // chose.
+    // Fresh-clone simulation: the repo has `.gitattributes` committed (via `ta init`),
+    // but a new clone lacks the per-clone driver *definitions* - a git merge would
+    // text-merge the log. Because the committed `.gitattributes` already declares the
+    // drivers, the next store command heals the clone SILENTLY rather than nagging:
+    // the registered command is a taska-owned constant, so auto-registering it can't
+    // run anything the repo chose.
     let dir = fresh_dir("scm-health");
-    run(ta_bin(), &dir, &["init"]);
     init_repo(&dir);
+    ta(&dir, &["init"]);
 
-    // The drivers are not yet in local config...
+    // Simulate a fresh clone by unsetting the drivers (`.gitattributes` stays
+    // committed and present, but local config has no driver definitions).
+    git(
+        &dir,
+        &["config", "--unset", "merge.taska-merge-driver.driver"],
+    );
+    git(
+        &dir,
+        &["config", "--unset", "merge.taska-merge-driver.name"],
+    );
+    git(
+        &dir,
+        &["config", "--unset", "merge.taska-baseline-keep-ours.driver"],
+    );
+    git(
+        &dir,
+        &["config", "--unset", "merge.taska-baseline-keep-ours.name"],
+    );
+
     let pre = run(
         "git",
         &dir,
