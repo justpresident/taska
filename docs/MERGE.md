@@ -43,6 +43,15 @@ Merging two diverged logs is a **rebase, not a CRDT union**. Git invokes the
 driver `ta git-merge %O %A %B` (registered in *local* git config + `.gitattributes`
 by `ta init`). `%A` is *ours* (the branch merged into), `%B` is *theirs*.
 
+The same core also backs **Mercurial** (and Sapling): `ta init` writes a
+`[merge-patterns]`/`[merge-tools]` block to the per-clone `.hg/hgrc` so hg invokes
+`ta hg-merge $base $local $other $output` (`premerge = False`, so hg never
+text-merges the JSONL). hg passes ours (`$local`) and the destination (`$output`)
+as separate files, unlike git's in-place `%A`; everything below is otherwise
+identical. Because hg has no committed half (no `.gitattributes` equivalent), the
+whole registration is per-clone - every clone must run `ta init` (a store command
+also silently re-writes the block if it's missing).
+
 1. **Fork.** `fork = max(seq in the common ancestor %O)`. Everything `<= fork` is
    shared history; everything `> fork` is a branch's concurrent work.
 2. **Keep ours' shared tail.** Take ours' events `<= fork`.

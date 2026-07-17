@@ -7,8 +7,9 @@
 //! writing: the clean uncommitted trailing run of targets is truncated, while
 //! committed or buried targets are reversed by appended compensations tagged
 //! `_undoes=<seq>` (the mark that records an original as undone). `apply` writes
-//! that log. Takes a concrete [`FileStore`]: it inspects git
-//! (`committed_mutation_count`) and rewrites the log via `replace_mutations`.
+//! that log. Takes a concrete [`FileStore`]: it inspects the SCM
+//! ([`crate::scm::committed_mutation_count`], git or hg) and rewrites the log via
+//! `replace_mutations`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -145,7 +146,9 @@ pub fn plan(
 
     // Truncate the maximal trailing run of selected events within the writable
     // region; compensate the rest.
-    let committed_count = committed_mutation_count(store);
+    let committed_count = store
+        .repo_root()
+        .map_or(0, crate::scm::committed_mutation_count);
     let mut p = n;
     while p > 0 && selected_set.contains(&mutations[p - 1].seq) {
         p -= 1;
@@ -322,31 +325,6 @@ fn select_targets(
 pub fn apply(store: &FileStore, plan: &UndoPlan) -> Result<(), DynError> {
     store.replace_mutations(&plan.new_log)?;
     Ok(())
-}
-
-/// Count non-empty lines in the git-committed `mutations.jsonl` (`HEAD:` blob).
-/// Returns 0 when the file is not committed yet or there is no `HEAD`, which the
-/// caller treats as "nothing committed", so every event is safe to truncate.
-/// The `./` prefix makes the blob path relative to the store's parent (`-C`)
-/// rather than the repo root, so a store NESTED below the root counts its
-/// committed events instead of reading as all-uncommitted (which would make
-/// undo truncate shared history).
-fn committed_mutation_count(store: &FileStore) -> usize {
-    let Some(repo_root) = store.repo_root() else {
-        return 0;
-    };
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(["show", "HEAD:./.taska/mutations.jsonl"])
-        .output();
-    match output {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .count(),
-        _ => 0,
-    }
 }
 
 /// Produce DRAFT events (seq 0; the caller assigns real seqs) that transform the

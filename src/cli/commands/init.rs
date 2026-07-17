@@ -1,5 +1,5 @@
-//! `ta init` - provision the store, register the git merge drivers, and sync the
-//! agent-integration block in CLAUDE.md / AGENTS.md.
+//! `ta init` - provision the store, register the merge drivers (git or
+//! mercurial), and sync the agent-integration block in CLAUDE.md / AGENTS.md.
 
 use crate::action::init::{init, AgentFileStatus, StoreInit};
 use crate::error::DynError;

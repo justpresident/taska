@@ -23,6 +23,13 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # Classic Mercurial (not on the runner image by default) so the hg
+      # merge-tool e2e theme (tests/mercurial.rs) actually runs instead of
+      # self-skipping. Its gate keys off the "Mercurial Distributed SCM" banner,
+      # which the apt `mercurial` package's `hg` reports.
+      - name: Install Mercurial
+        run: sudo apt-get update && sudo apt-get install -y mercurial
+
       - name: Run tests
         run: cargo test --all --all-features
 
@@ -53,6 +60,11 @@ jobs:
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+
+      # Mercurial too, so the hg merge-tool paths are exercised (and covered)
+      # rather than skipped during the coverage run.
+      - name: Install Mercurial
+        run: sudo apt-get update && sudo apt-get install -y mercurial
 
       # cargo-llvm-cov merges the per-process .profraw files (the e2e suite spawns
       # the `ta` binary ~2000 times) via `llvm-profdata merge --sparse` - the C++

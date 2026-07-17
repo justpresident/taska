@@ -1,5 +1,5 @@
-//! `init` action: provision the store, register the git merge drivers, and sync
-//! the agent-integration block in `CLAUDE.md` / `AGENTS.md`.
+//! `init` action: provision the store, register the merge drivers (git or
+//! mercurial), and sync the agent-integration block in `CLAUDE.md` / `AGENTS.md`.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::error::DynError;
-use crate::git;
+use crate::scm;
 use crate::storage::FileStore;
 
 /// Whether `init` reused an existing store or created a new one (with its path).
@@ -57,27 +57,31 @@ const BLOCK_VERSION: u32 = 5;
 /// the FIRST is created (`AGENTS.md` - the emerging cross-tool standard).
 const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 
-/// Provision the store idempotently, (re)register the git merge driver, and sync
-/// the agent-integration block.
+/// Provision the store idempotently, (re)register the merge drivers (git or
+/// mercurial), and sync the agent-integration block.
 ///
 /// Reuse a discoverable store (so re-running from anywhere in the repo is
 /// idempotent), else create one at the SCM root - committed there, the store
 /// travels with the repo and every clone's walk-up discovery finds it; only a
-/// plain directory (no SCM above) keeps it at the cwd. The driver is always
+/// plain directory (no SCM above) keeps it at the cwd. The drivers are always
 /// (re)registered, and the integration block is always re-synced, so re-running
 /// is how a clone installs both.
 ///
-/// With `commit`, the store, `.gitattributes`, and any agent file this run wrote
-/// are committed as one path-scoped commit so the store is version-controlled
-/// from the first command; it no-ops cleanly outside a git repo or when nothing
-/// changed (see [`git::commit_paths`]).
+/// With `commit`, the store, the SCM's committed registration files (git's
+/// `.gitattributes`; nothing for mercurial, whose registration lives in the
+/// untracked `.hg/hgrc`), and any agent file this run wrote are committed as one
+/// path-scoped commit so the store is version-controlled from the first command;
+/// it no-ops cleanly outside a repo or when nothing changed (see
+/// [`scm::commit_paths`]). Works under both git and mercurial - the commit helper
+/// dispatches by the detected SCM, and [`scm::committed_registration_paths`]
+/// contributes only what that SCM actually writes.
 pub fn init(commit: bool) -> Result<InitOutcome, DynError> {
     let (base_dir, store_outcome) = if let Ok(existing) = FileStore::discover() {
         let dir = existing.base_dir;
         (dir.clone(), StoreInit::Reused(dir))
     } else {
         let cwd = std::env::current_dir()?;
-        let root = git::scm_root(&cwd).map(Path::to_path_buf).unwrap_or(cwd);
+        let root = scm::scm_root(&cwd).map(Path::to_path_buf).unwrap_or(cwd);
         let dir = root.join(".taska");
         (dir.clone(), StoreInit::Created(dir))
     };
@@ -90,7 +94,7 @@ pub fn init(commit: bool) -> Result<InitOutcome, DynError> {
         .repo_root()
         .ok_or("could not determine repository root from the .taska directory")?
         .to_path_buf();
-    git::setup(&repo_root)?;
+    scm::setup(&repo_root)?;
 
     // The block is config-AGNOSTIC (durable bare commands + working habits +
     // pointers to `ta prime`/`--help`), so it needs nothing from the store and
@@ -103,7 +107,8 @@ pub fn init(commit: bool) -> Result<InitOutcome, DynError> {
     // into the commit. A fresh store's message says "Initialize"; a re-init that
     // has something to commit says "Update".
     let commit = if commit {
-        let mut paths = vec![store.base_dir, repo_root.join(".gitattributes")];
+        let mut paths = vec![store.base_dir];
+        paths.extend(scm::committed_registration_paths(&repo_root));
         paths.extend(
             agent_files
                 .iter()
@@ -119,7 +124,7 @@ pub fn init(commit: bool) -> Result<InitOutcome, DynError> {
             StoreInit::Created(_) => "Initialize taska store",
             StoreInit::Reused(_) => "Update taska store",
         };
-        git::commit_paths(&repo_root, &paths, message)
+        scm::commit_paths(&repo_root, &paths, message)
     } else {
         None
     };

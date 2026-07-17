@@ -29,12 +29,12 @@ pub mod config;
 pub mod engine;
 pub mod error;
 pub mod format;
-pub mod git;
 pub mod graph;
 pub mod merge;
 pub mod migrate;
 pub mod model;
 pub mod schema;
+pub mod scm;
 pub mod storage;
 
 #[cfg(test)]

@@ -66,8 +66,8 @@ fn render_conflicts(conflicts: Option<&[ConflictItem]>) {
         }
     }
     println!(
-        "\nThe tentative merge is already written to the log. To accept it, `git add` \
-         the files and commit; to pick differently, edit the log or re-merge with a \
+        "\nThe tentative merge is already written to the log. To accept it, stage the \
+         files and commit; to pick differently, edit the log or re-merge with a \
          different `on_conflict` strategy."
     );
 }

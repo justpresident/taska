@@ -84,6 +84,8 @@ $ cargo install --path taska
 
 Run `ta init` once per clone (inside a git repository) to create the `.taska/` store and register the merge driver in your **local** git config. It also commits the new store, `.gitattributes`, and the agent-integration block in one commit, so the store is version-controlled from the first command (pass `--no-commit` to skip that and stage nothing). Run from a subdirectory, it creates the store at the repo root (an existing store anywhere up the tree is reused).
 
+**Mercurial (and Sapling) are supported too:** in an `hg` repo, `ta init` registers the same merge protection as hg merge tools in `.hg/hgrc` (`ta hg-merge`) and commits the store, exactly as it does under git. Because Mercurial has no committed equivalent of `.gitattributes`, that registration is entirely per-clone - run `ta init` in every clone (any `ta` command also re-registers it silently if it's missing).
+
 In the session below, only the lowercase verbs (`create`, `dep`, `list`, ...) are literal taska syntax. Everything else is yours - task ids like `migrate-db` and fields like `status=open priority=3` are arbitrary, and taska defines none of them:
 
 ```console

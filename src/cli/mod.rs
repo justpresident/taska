@@ -381,6 +381,31 @@ enum Commands {
         #[arg(default_value = "")]
         path: String,
     },
+    /// Mercurial event-log merge-tool entrypoint (invoked by hg, not humans)
+    #[command(name = "hg-merge", hide = true)]
+    HgMerge {
+        /// `$base` - the common ancestor version.
+        base: String,
+        /// `$local` - our version (input only; hg writes to `$output`).
+        local: String,
+        /// `$other` - their version.
+        other: String,
+        /// `$output` - where the merged result is written; its parent is the
+        /// store dir, which locates the store (and its conflict policy/marker).
+        output: String,
+    },
+    /// Mercurial baseline merge-tool entrypoint (invoked by hg, not humans)
+    #[command(name = "hg-merge-baseline", hide = true)]
+    HgMergeBaseline {
+        /// `$base` - the common ancestor version.
+        base: String,
+        /// `$local` - our version, copied to `$output` (keep-ours).
+        local: String,
+        /// `$other` - their version (inspected only, for the divergence warning).
+        other: String,
+        /// `$output` - where our baseline is written.
+        output: String,
+    },
 }
 
 /// Whether `p` is a regular, executable file.
@@ -648,6 +673,37 @@ pub fn run() -> Result<(), DynError> {
             incoming,
             path: _,
         } => merge::execute_git_merge_baseline(&ancestor, &current, &incoming),
+        Commands::HgMerge {
+            base,
+            local,
+            other,
+            output,
+        } => {
+            // The store owning `$output` supplies the conflict policy and marker
+            // location, same as the git driver resolves via `%P`.
+            let store = merge_driver_store(&output);
+            let on_conflict = store
+                .as_ref()
+                .map(|s| s.config().merge.on_conflict)
+                .unwrap_or_default();
+            let marker = store
+                .as_ref()
+                .map(|s| s.base_dir.join("merge-conflict.json"));
+            merge::execute_hg_merge(
+                &base,
+                &local,
+                &other,
+                &output,
+                on_conflict,
+                marker.as_deref(),
+            )
+        }
+        Commands::HgMergeBaseline {
+            base,
+            local,
+            other,
+            output,
+        } => merge::execute_hg_merge_baseline(&base, &local, &other, &output),
 
         // Reviewing a surfaced conflict must work even if the config is currently
         // invalid, so it resolves the store without the validation gate.
@@ -694,15 +750,15 @@ pub fn run() -> Result<(), DynError> {
 }
 
 /// Heal-or-warn on SCM merge protection before every store-backed command.
-/// `ensure_scm_health` silently re-registers this clone's merge drivers when
-/// `.gitattributes` already declares them (the per-clone definitions a fresh
-/// clone lacks); the residual warning printed here covers only what it can't fix
-/// (missing `.gitattributes` entries, a failed registration, or an unsupported
-/// SCM), each pointing at its remedy. Warning-only, unlike the enforce gates:
-/// the store itself is healthy, it's the clone's merge protection that may be
-/// incomplete.
+/// `ensure_scm_health` silently re-registers this clone's merge drivers (git's
+/// per-clone config once `.gitattributes` declares them; mercurial's whole
+/// `.hg/hgrc` block, which has no committed half); the residual warning printed
+/// here covers only what it can't fix (missing `.gitattributes` entries, or a
+/// failed git-config / `.hg/hgrc` write), each pointing at its remedy.
+/// Warning-only, unlike the enforce gates: the store itself is healthy, it's the
+/// clone's merge protection that may be incomplete.
 fn warn_scm_health(store: &FileStore) {
-    if let Some(warning) = store.repo_root().and_then(crate::git::ensure_scm_health) {
+    if let Some(warning) = store.repo_root().and_then(crate::scm::ensure_scm_health) {
         eprintln!("warning: {warning}");
     }
 }
@@ -828,7 +884,9 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
         | Commands::Resolve { .. }
         | Commands::Repair { .. }
         | Commands::GitMerge { .. }
-        | Commands::GitMergeBaseline { .. } => {
+        | Commands::GitMergeBaseline { .. }
+        | Commands::HgMerge { .. }
+        | Commands::HgMergeBaseline { .. } => {
             unreachable!("non-store commands are handled before dispatch")
         }
     }

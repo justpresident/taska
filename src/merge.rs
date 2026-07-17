@@ -1,4 +1,10 @@
-//! Git custom merge drivers for the event log and its baseline.
+//! Custom merge drivers for the event log and its baseline.
+//!
+//! Both **git** (`execute_git_merge*`) and **mercurial/Sapling**
+//! (`execute_hg_merge*`) are supported over one SCM-agnostic 3-way core
+//! (`merge_logs`); the only difference is the driver contract - git rewrites ours
+//! (`%A`) in place, hg writes a separate `$output` - so the entrypoints differ
+//! solely in which path receives the result.
 //!
 //! The log is a *sequence*, not a timestamp-keyed CRDT. Merging two diverged
 //! branches is a **rebase**: keep our events, restack the other branch's
@@ -31,7 +37,8 @@ use crate::model::{edge_rel, edge_target, MutationEvent, OpType, TaskState, REL_
 
 /// `ta git-merge %O %A %B` - reconcile diverged mutation logs into `current`.
 ///
-/// (Git's `%A` = "ours"; `incoming` is `%B` = "theirs".) `marker_path`, when
+/// (Git's `%A` = "ours"; `incoming` is `%B` = "theirs".) Git rewrites `%A` in
+/// place, so `current` is BOTH our input and the destination. `marker_path`, when
 /// known, is where a surfaced conflict is recorded for `ta resolve`.
 pub fn execute_git_merge(
     ancestor: &str,
@@ -40,9 +47,47 @@ pub fn execute_git_merge(
     on_conflict: OnConflict,
     marker_path: Option<&Path>,
 ) -> Result<(), DynError> {
+    merge_logs(
+        ancestor,
+        current,
+        incoming,
+        current,
+        on_conflict,
+        marker_path,
+    )
+}
+
+/// `ta hg-merge $base $local $other $output` - reconcile diverged mutation logs.
+///
+/// Mercurial passes ours (`$local`) and the destination (`$output`) as SEPARATE
+/// files (unlike git's in-place `%A`), so the merge writes to `output`, not over
+/// `local`. Semantics are otherwise identical to [`execute_git_merge`]. This also
+/// serves Sapling, which invokes merge tools the same way.
+pub fn execute_hg_merge(
+    base: &str,
+    local: &str,
+    other: &str,
+    output: &str,
+    on_conflict: OnConflict,
+    marker_path: Option<&Path>,
+) -> Result<(), DynError> {
+    merge_logs(base, local, other, output, on_conflict, marker_path)
+}
+
+/// The SCM-agnostic 3-way merge: read the ancestor, ours (`ours_path`) and theirs
+/// (`theirs_path`), reconcile, and write the result to `output_path` (which may or
+/// may not equal `ours_path`, depending on the SCM's driver contract).
+fn merge_logs(
+    ancestor: &str,
+    ours_path: &str,
+    theirs_path: &str,
+    output_path: &str,
+    on_conflict: OnConflict,
+    marker_path: Option<&Path>,
+) -> Result<(), DynError> {
     let anc = read_log(ancestor)?;
-    let ours = read_log(current)?;
-    let theirs = read_log(incoming)?;
+    let ours = read_log(ours_path)?;
+    let theirs = read_log(theirs_path)?;
 
     // The last sequence number both branches share. Everything above it on each
     // side is that branch's concurrent work since the fork.
@@ -107,7 +152,7 @@ pub fn execute_git_merge(
         &plan,
         fork,
     );
-    write_log(current, &merged)?;
+    write_log(output_path, &merged)?;
 
     if on_conflict == OnConflict::Surface && !plan.conflicts.is_empty() {
         if let Some(path) = marker_path {
@@ -115,7 +160,7 @@ pub fn execute_git_merge(
         }
         eprintln!(
             "taska: {} event-log merge conflict(s); a tentative merge (keeping ours) was \
-             written but flagged. Review with `ta resolve`, then `git add` and commit.",
+             written but flagged. Review with `ta resolve`, then stage the file and commit.",
             plan.conflicts.len()
         );
         return Err(format!("{} unresolved merge conflict(s)", plan.conflicts.len()).into());
@@ -218,9 +263,38 @@ pub fn execute_git_merge_baseline(
     current: &str,
     incoming: &str,
 ) -> Result<(), DynError> {
+    warn_baseline_divergence(ancestor, current, incoming)?;
+    // Leaving `current` as-is keeps ours (git rewrites `%A` in place).
+    Ok(())
+}
+
+/// `ta hg-merge-baseline $base $local $other $output` - keep our baseline.
+///
+/// Same keep-ours policy as [`execute_git_merge_baseline`], but hg's `$output` is
+/// a separate file from ours (`$local`), so we must materialize ours into it
+/// (a byte copy read-then-write, which is safe even if the paths coincide). A
+/// failed read of `$local` propagates rather than defaulting to empty: writing an
+/// empty baseline would DISCARD ours (the opposite of keep-ours), so we fail the
+/// merge and leave `$output` untouched instead.
+pub fn execute_hg_merge_baseline(
+    base: &str,
+    local: &str,
+    other: &str,
+    output: &str,
+) -> Result<(), DynError> {
+    warn_baseline_divergence(base, local, other)?;
+    let ours_bytes = std::fs::read(local)?;
+    std::fs::write(output, ours_bytes)?;
+    Ok(())
+}
+
+/// Warn when a baseline task looks like it was compacted past its fork: unchanged
+/// from the ancestor on our side but different on theirs. Shared by both baseline
+/// drivers; reads only, never rewrites.
+fn warn_baseline_divergence(ancestor: &str, ours: &str, theirs: &str) -> Result<(), DynError> {
     let base = index_baseline(read_baseline(ancestor)?);
-    let ours = index_baseline(read_baseline(current)?);
-    let theirs = index_baseline(read_baseline(incoming)?);
+    let ours = index_baseline(read_baseline(ours)?);
+    let theirs = index_baseline(read_baseline(theirs)?);
 
     for (id, base_task) in &base {
         if let (Some(our_task), Some(their_task)) = (ours.get(id), theirs.get(id)) {
@@ -232,8 +306,6 @@ pub fn execute_git_merge_baseline(
             }
         }
     }
-
-    // Leaving `current` as-is keeps ours.
     Ok(())
 }
 
@@ -1368,5 +1440,69 @@ mod tests {
         let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > 1).collect();
         let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Latest);
         assert!(plan.conflicts.is_empty());
+    }
+
+    /// A unique scratch dir under the system temp dir (not the repo tree).
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("taska-merge-unit").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn hg_merge_writes_to_output_and_leaves_local_untouched() {
+        // hg supplies ours (`$local`) and the destination (`$output`) as SEPARATE
+        // files, unlike git's in-place `%A`. The merge must write the union to
+        // `output` and never touch `local`.
+        let dir = scratch("hg-out");
+        let path = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        let (anc, local, other, output) =
+            (path("base"), path("local"), path("other"), path("output"));
+
+        let base = ev(1, 0, OpType::Create, "base", &[]);
+        write_log(&anc, std::slice::from_ref(&base)).unwrap();
+        write_log(
+            &local,
+            &[base.clone(), ev(2, 1, OpType::Create, "ours", &[])],
+        )
+        .unwrap();
+        write_log(&other, &[base, ev(2, 1, OpType::Create, "theirs", &[])]).unwrap();
+
+        execute_hg_merge(&anc, &local, &other, &output, OnConflict::Ours, None).unwrap();
+
+        // Output holds the restacked union of both concurrent creates.
+        let merged = read_log(&output).unwrap();
+        let state = Engine::materialize_state(Vec::new(), merged, DONE_STATUS);
+        for id in ["base", "ours", "theirs"] {
+            assert!(state.contains_key(id), "missing {id} in merged output");
+        }
+        // `local` (ours) is left exactly as it was.
+        assert_eq!(
+            read_log(&local).unwrap().len(),
+            2,
+            "hg merge must not rewrite $local"
+        );
+    }
+
+    #[test]
+    fn hg_merge_baseline_keeps_ours_by_copying_local_to_output() {
+        let dir = scratch("hg-baseline");
+        let path = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        let (base, local, other, output) =
+            (path("base"), path("local"), path("other"), path("output"));
+
+        // Ours keeps a task; the ancestor/theirs are empty (no divergence warning).
+        std::fs::write(&local, "{\"id\":\"keepme\"}\n").unwrap();
+        std::fs::write(&base, "").unwrap();
+        std::fs::write(&other, "").unwrap();
+
+        execute_hg_merge_baseline(&base, &local, &other, &output).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            std::fs::read_to_string(&local).unwrap(),
+            "baseline keep-ours must materialize $local into $output verbatim"
+        );
     }
 }

@@ -264,7 +264,7 @@ fn store_commands_auto_register_drivers_when_gitattributes_present() {
 }
 
 #[test]
-fn plain_dir_stays_quiet_and_mercurial_warns_unsupported() {
+fn plain_dir_stays_quiet_and_mercurial_registers_silently() {
     // No SCM at all: deliberate plain-dir use - store commands don't nag
     // (`ta init` already warned once at setup time).
     let dir = fresh_dir("scm-none");
@@ -276,13 +276,23 @@ fn plain_dir_stays_quiet_and_mercurial_warns_unsupported() {
         "no SCM -> no nagging"
     );
 
-    // Mercurial detection is a directory stat - no hg binary needed.
+    // Mercurial detection is a directory stat - no hg binary needed. Because hg
+    // has no committed half (the whole registration lives in the untracked,
+    // per-clone .hg/hgrc), a store command silently writes the merge tools there
+    // rather than warning.
     fs::create_dir(dir.join(".hg")).unwrap();
     let out = run(ta_bin(), &dir, &["list"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("mercurial") && stderr.contains("only git"),
-        "hg warning: {stderr}"
+        !stderr.contains("warning:"),
+        "hg merge tools should register silently: {stderr}"
+    );
+    let hgrc = fs::read_to_string(dir.join(".hg/hgrc")).unwrap();
+    assert!(
+        hgrc.contains("[merge-tools]")
+            && hgrc.contains("hg-merge $base $local $other $output")
+            && hgrc.contains(".taska/mutations.jsonl = taska-merge"),
+        "hgrc registers the taska merge tools: {hgrc}"
     );
 }
 
