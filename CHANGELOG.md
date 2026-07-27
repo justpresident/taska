@@ -7,24 +7,48 @@ git log.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-27
+
+This release adds coordination primitives for agent and human workflows: a
+blocking watch command, atomic conditional writes, explicit mutation cursors,
+Mercurial/Sapling merge-driver support, and clearer automation-facing failures.
+
 ### Added
 - **`ta watch`** streams task mutations: `ta watch [criteria] --since SEQ` blocks
-  until a task matching the (list-grammar) filter is created, updated, or deleted
-  past `SEQ`, then prints a per-task diff of only the changed lines and exits 0.
-  `--holdout` (default 10s) batches a burst before printing; `--timeout` (default
-  9m) bounds the wait, after which it prints `No updates yet` to stderr and
-  exits 1. Built for two agents coordinating through one store (e.g. an
-  implementer and a reviewer ping-ponging a task's status). `--format json` emits
-  structured removed/added deltas per task.
-- **`ta status --current`** prints the store's current high-water mutation `seq`
-  without materializing state - the cursor to seed a `ta watch --since` loop
-  (`{"seq":N}` with `--format json`; `0` on an empty log).
+  until a task matching the list-grammar filter is created, updated, or deleted
+  past `SEQ`, then prints only the changed `-`/`+` lines and exits 0. `--holdout`
+  batches bursts, `--timeout` bounds the wait, and `--format json` emits
+  structured removed/added deltas.
+- **Atomic conditional writes with `--if`.** `ta update` and `ta delete` now accept
+  repeatable `--if COND` guards using the same criteria grammar as `ta list`.
+  Guards are checked under the store lock, so racing agents can claim work safely;
+  an unmet guard exits 3 without appending anything.
+- **Mutation cursors in CLI output.** `ta create`, `ta update`, `ta edit`,
+  `ta delete`, and `ta undo` print `[seq:N]` for the resulting high-water event,
+  and `ta status --current` prints the current cursor directly (`{"seq":N}` with
+  `--format json`).
+- **Mercurial and Sapling merge-driver support.** `ta init` registers managed hg
+  merge tools in `.hg/hgrc`, the hidden `hg-merge` entrypoints share the same
+  event-log merge core as git, and undo now detects committed history through the
+  active SCM.
+- **Automation-friendly exit codes.** General errors exit 1, schema/typo-guard
+  rejections exit 2, and failed `--if` preconditions exit 3.
 
 ### Changed
-- **`ta undo`'s preview is a line-level diff.** Instead of dumping the whole
-  before and after state on each side, it shows only the lines that change - a
-  reverted appended note prints just that one `- notes: ...` line, not the entire
-  field. The diff renderer is shared with `ta watch`.
+- **Empty values clear optional fields.** `field=` now unsets optional or
+  undeclared fields, and `ta list field=` matches absent or empty values; required
+  schema fields keep the literal empty string.
+- **`ta undo` preview is a line-level diff.** Instead of dumping the whole before
+  and after record, it shows only the lines that change. The diff renderer is
+  shared with `ta watch`.
+- **Structured output rendering is lazy and consistent.** `status`, `prime`, and
+  `dep` subcommands now build only the selected `--format` representation while
+  preserving the existing JSON/JSONL contracts.
+
+### Fixed
+- `ta init` no longer creates `.gitattributes` when no supported SCM is present.
+- `ta watch` handles very large `--since` values without overflowing during the
+  retained-log cursor check.
 
 ## [1.1.0] - 2026-06-27
 
