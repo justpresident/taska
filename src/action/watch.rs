@@ -44,7 +44,7 @@ pub fn poll(
     // oldest retained event, those events were folded into the baseline and can't
     // be diffed. A once-in-a-store-lifetime edge; error rather than mislead.
     if let Some(first) = muts.first() {
-        if since + 1 < first.seq {
+        if since < first.seq.saturating_sub(1) {
             return Err(format!(
                 "cursor seq {since} predates the retained log (oldest is {}); those \
                  events were compacted - re-sync with `ta status --current`",
@@ -98,4 +98,37 @@ pub fn poll(
         }
     }
     Ok(updates)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
+mod tests {
+    use super::*;
+    use crate::model::{MutationEvent, OpType};
+    use crate::storage::EventStore;
+    use crate::test_support::InMemoryStore;
+
+    #[test]
+    fn compaction_watermark_handles_boundary_and_large_cursor() {
+        let store = InMemoryStore::default();
+        let mut event = MutationEvent::new(OpType::Create, "a", serde_json::Map::new());
+        event.seq = 10;
+        store.compact(&[], &[event]).unwrap();
+
+        assert!(
+            poll(&store, &[], false, false, 8).is_err(),
+            "cursor before the retained window is rejected"
+        );
+        assert_eq!(
+            poll(&store, &[], false, false, 9).unwrap().len(),
+            1,
+            "cursor exactly before the oldest retained event can be diffed"
+        );
+        assert!(
+            poll(&store, &[], false, false, u64::MAX)
+                .unwrap()
+                .is_empty(),
+            "a huge cursor is a clean no-op, not an overflow panic"
+        );
+    }
 }
