@@ -240,3 +240,100 @@ fn task_type_schemas_validate_and_the_discriminator_maps_canonically() {
     let validate = run(ta_bin(), &dir, &["config", "validate"]);
     assert!(!validate.status.success(), "validate reports it");
 }
+
+/// Replace the store's `[task_types]` declaration with `block` and return what
+/// `ta config validate` says about it.
+fn validate_with(dir: &Path, block: &str) -> String {
+    let cfg_path = dir.join(".taska/config.toml");
+    let base = fs::read_to_string(&cfg_path).unwrap();
+    fs::write(&cfg_path, format!("{base}\n{block}\n")).unwrap();
+    let out = run(ta_bin(), dir, &["config", "validate"]);
+    fs::write(&cfg_path, base).unwrap();
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+#[test]
+fn transitions_must_be_total_reachable_and_speak_the_enum() {
+    let dir = fresh_dir("config-transitions");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+
+    // The reference workflow: linear with an implement <-> review cycle, and a
+    // reopen edge out of done. Accepted.
+    let good = "[task_types.wf]\nfields = { status = { type = \"enum\", \
+                values = [\"todo\", \"implement\", \"review\", \"closed\"], \
+                transitions = { todo = [\"implement\"], implement = [\"review\"], \
+                review = [\"implement\", \"closed\"], closed = [\"todo\"] } } }";
+    assert!(
+        validate_with(&dir, good).contains("Config OK"),
+        "a cyclic workflow is a legal shape"
+    );
+
+    // A state left out would be terminal by ACCIDENT, so omission is an error
+    // and the fix is spelled out.
+    let missing = validate_with(
+        &dir,
+        "[task_types.wf]\nfields = { status = { type = \"enum\", \
+         values = [\"todo\", \"closed\"], transitions = { todo = [\"closed\"] } } }",
+    );
+    assert!(
+        missing.contains("no entry for state(s) `closed`") && missing.contains("`closed = []`"),
+        "totality is enforced and the remedy named: {missing}"
+    );
+
+    // Every state must be able to finish: a subgraph that loops forever without
+    // reaching done_status declares tasks that can never be completed.
+    let stranded = validate_with(
+        &dir,
+        "[task_types.wf]\nfields = { status = { type = \"enum\", \
+         values = [\"todo\", \"implement\", \"review\", \"closed\"], \
+         transitions = { todo = [\"implement\"], implement = [\"review\"], \
+         review = [\"implement\"], closed = [] } } }",
+    );
+    assert!(
+        stranded.contains("cannot reach `closed`")
+            && stranded.contains("`todo`")
+            && stranded.contains("`review`"),
+        "the stranded cycle is reported in full: {stranded}"
+    );
+
+    // A typo can only ever be a config error, never a silently weaker workflow.
+    let typo = validate_with(
+        &dir,
+        "[task_types.wf]\nfields = { status = { type = \"enum\", \
+         values = [\"todo\", \"closed\"], \
+         transitions = { todo = [\"clsoed\"], closed = [] } } }",
+    );
+    assert!(
+        typo.contains("target `clsoed` is not one of the declared values"),
+        "unknown target rejected: {typo}"
+    );
+
+    // Reachability is a STATUS notion; it needs done_status to be declarable.
+    let unreachable_done = validate_with(
+        &dir,
+        "[task_types.wf]\nfields = { status = { type = \"enum\", \
+         values = [\"todo\", \"shipped\"], \
+         transitions = { todo = [\"shipped\"], shipped = [] } } }",
+    );
+    assert!(
+        unreachable_done.contains("done_status` is `closed`, which is not one of the declared"),
+        "a done_status outside the enum is one clear problem, not per-state spam: \
+         {unreachable_done}"
+    );
+
+    // A state machine needs a single current state to move out of.
+    let non_enum = validate_with(
+        &dir,
+        "[task_types.wf]\nfields = { title = { type = \"string\", \
+         transitions = { a = [\"b\"] } } }",
+    );
+    assert!(
+        non_enum.contains("`transitions` only applies to the scalar enum kind"),
+        "non-enum rejected: {non_enum}"
+    );
+}

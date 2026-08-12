@@ -8,6 +8,8 @@
 //! THIS store's config, so a renamed status field or a freshly declared type
 //! shows up immediately.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
 use crate::action::status::status_summary;
@@ -29,6 +31,11 @@ pub struct FieldFacts {
     /// The declared default value, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
+    /// The declared state machine over an enum field: what each value may
+    /// change into (empty = freely settable). An agent that can't see this
+    /// only learns the workflow by tripping the write gate.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub transitions: BTreeMap<String, Vec<String>>,
 }
 
 /// One declared task type.
@@ -201,6 +208,7 @@ fn build_facts(config: &Config, summary: &StatusSummary) -> PrimeFacts {
                     required: schema.required(),
                     values: schema.values().to_vec(),
                     default: schema.default_value().cloned(),
+                    transitions: schema.transitions().cloned().unwrap_or_default(),
                 })
                 .collect(),
         })

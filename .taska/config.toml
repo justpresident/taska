@@ -110,9 +110,26 @@ duplicates  = { kind = "info" }
 # (whole-task: every violation reported in one error). Field kinds: string,
 # bool, int, uint, float, datetime, enum, any, array<T>, set<T>. Long-form
 # constraints: required, default (stamped at create, healed onto writes,
-# substituted at read), min/max, pattern, min_len/max_len, min_items/max_items.
+# substituted at read), min/max, pattern, min_len/max_len, min_items/max_items,
+# transitions (enum only).
 # This file is TOML 1.1: a long-form field reads best as a multi-line inline
 # table (trailing comma allowed).
+#
+# An enum field can carry `transitions` - a state machine enforced on write. The
+# map must be total (every declared value is a key; a terminal state is `[]`),
+# and every status must reach done_status. This repo's three statuses are left
+# unconstrained on purpose: with todo/in_progress/closed, every restriction
+# worth writing (blocking todo -> closed) just gets in the way on trivial work,
+# and anything looser is a complete graph that enforces nothing. A longer flow
+# is where this earns its keep:
+#   status = { type = "enum", values = ["todo", "plan", "implement", "review", "closed"],
+#              transitions = {
+#                todo      = ["plan"],
+#                plan      = ["implement", "review"],
+#                implement = ["review"],
+#                review    = ["implement", "closed"],
+#                closed    = ["todo"],
+#              } },
 #
 # This repo's roadmap uses a single type: `ta create <id> type=task title=... notes=...`.
 [task_types.task]

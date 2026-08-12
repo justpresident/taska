@@ -503,3 +503,145 @@ fn constraints_and_defaults_full_circle() {
         "store fully conforms"
     );
 }
+
+/// Declare `wf` with the cyclic review workflow: todo -> plan -> implement,
+/// implement <-> review, review -> closed, closed reopens to todo.
+fn declare_workflow(dir: &Path) {
+    let cfg_path = dir.join(".taska/config.toml");
+    let mut cfg = fs::read_to_string(&cfg_path).unwrap();
+    cfg.push_str(
+        "\n[task_types.wf]\nfields = {\n  \
+         status = { type = \"enum\", \
+         values = [\"todo\", \"plan\", \"implement\", \"review\", \"closed\"], \
+         transitions = { todo = [\"plan\"], plan = [\"implement\", \"review\"], \
+         implement = [\"review\"], review = [\"implement\", \"closed\"], \
+         closed = [\"todo\"] } },\n}\n",
+    );
+    fs::write(&cfg_path, cfg).unwrap();
+}
+
+/// The status of `id`, read back through `ta show`.
+fn status_of(dir: &Path, id: &str) -> String {
+    let json = ta(
+        dir,
+        &["show", id, "--columns", "status", "--format", "json"],
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    parsed[0]["status"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn write_gate_walks_a_declared_status_workflow_including_its_cycle() {
+    let dir = fresh_dir("transitions-walk");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    declare_workflow(&dir);
+
+    // `default_status` seeds the entry state - create doesn't declare one.
+    ta(&dir, &["create", "t", "type=wf"]);
+    assert_eq!(status_of(&dir, "t"), "todo");
+
+    // Skipping ahead is rejected, with the legal moves named. Exit 2 (schema),
+    // not 1, so an agent can branch on the KIND of failure.
+    let out = run(ta_bin(), &dir, &["update", "t", "status=closed"]);
+    assert_eq!(out.status.code(), Some(2), "illegal transition exits 2");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("can't go `todo` -> `closed`") && stderr.contains("allowed from `todo`"),
+        "names the move and the way out: {stderr}"
+    );
+    assert_eq!(status_of(&dir, "t"), "todo", "rejected write left no trace");
+
+    // The declared path, including bouncing implement <-> review twice - the
+    // whole point of a cyclic workflow.
+    for next in [
+        "plan",
+        "implement",
+        "review",
+        "implement",
+        "review",
+        "closed",
+    ] {
+        ta(&dir, &["update", "t", &format!("status={next}")]);
+        assert_eq!(status_of(&dir, "t"), next);
+    }
+
+    // `closed = ["todo"]` - reopening is declared, so it is allowed, but only
+    // to the one declared target.
+    let out = run(ta_bin(), &dir, &["update", "t", "status=review"]);
+    assert_eq!(out.status.code(), Some(2), "closed -> review undeclared");
+    ta(&dir, &["update", "t", "status=todo"]);
+    assert_eq!(status_of(&dir, "t"), "todo", "reopen honoured");
+}
+
+#[test]
+fn transitions_gate_only_actual_changes_of_a_declared_field() {
+    let dir = fresh_dir("transitions-scope");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // Grandfathered: a task carrying a status the workflow never mentions.
+    ta(&dir, &["create", "old", "type=wf", "status=archived"]);
+    declare_workflow(&dir);
+
+    // Create is not a transition - there is no prior value to move out of, so
+    // any declared state is a legal starting point.
+    ta(&dir, &["create", "mid", "type=wf", "status=review"]);
+    assert_eq!(status_of(&dir, "mid"), "review");
+
+    // An unknown prior value is unconstrained, or grandfathered data could
+    // never be repaired onto the workflow.
+    ta(&dir, &["update", "old", "status=plan"]);
+    assert_eq!(status_of(&dir, "old"), "plan");
+    // ...and from there the workflow applies as usual.
+    let out = run(ta_bin(), &dir, &["update", "old", "status=todo"]);
+    assert_eq!(out.status.code(), Some(2), "back under the workflow");
+
+    // A write that doesn't touch the status is untouched by the gate, even
+    // though `review` -> `review` would be no move at all.
+    ta(&dir, &["update", "mid", "note=hello", "--new-field"]);
+    assert_eq!(status_of(&dir, "mid"), "review");
+
+    // A workflow hangs off the task TYPE, so on the lax rungs of the migration
+    // ladder an untyped task has none to enforce.
+    ta(&dir, &["config", "set", "workflow.untyped_tasks", "allow"]);
+    ta(&dir, &["create", "free", "status=review"]);
+    ta(&dir, &["update", "free", "status=todo"]);
+    assert_eq!(status_of(&dir, "free"), "todo");
+}
+
+#[test]
+fn transitions_apply_to_any_enum_field_not_just_status() {
+    let dir = fresh_dir("transitions-any-field");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    let cfg_path = dir.join(".taska/config.toml");
+    let mut cfg = fs::read_to_string(&cfg_path).unwrap();
+    // `stage` is a plain enum: it gets a state machine, but NOT the status
+    // field's reachability rule - `final` is terminal and never reaches
+    // done_status, which is fine for a non-status field.
+    cfg.push_str(
+        "\n[task_types.doc]\nfields = {\n  \
+         stage = { type = \"enum\", values = [\"draft\", \"edit\", \"final\"], \
+         transitions = { draft = [\"edit\"], edit = [\"draft\", \"final\"], final = [] } },\n}\n",
+    );
+    fs::write(&cfg_path, cfg).unwrap();
+    ta(&dir, &["config", "validate"]);
+
+    ta(&dir, &["create", "d", "type=doc", "stage=draft"]);
+    let out = run(ta_bin(), &dir, &["update", "d", "stage=final"]);
+    assert_eq!(out.status.code(), Some(2), "draft -> final is not declared");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("`stage` can't go `draft` -> `final`"),
+        "names the offending field, not just the status"
+    );
+    ta(&dir, &["update", "d", "stage=edit"]);
+    ta(&dir, &["update", "d", "stage=final"]);
+
+    // `final = []` is terminal: nothing leaves it.
+    let out = run(ta_bin(), &dir, &["update", "d", "stage=edit"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("`final` is terminal"),
+        "terminal states say so"
+    );
+}

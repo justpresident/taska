@@ -32,7 +32,7 @@ This mode allows having structure and avoid simple mistakes without any overhead
 
 #### Hard enforcement
 
-When you do want real schema guarantees, taska supports defining hard schemas that tasks have to conform to. Declare per-task-type schemas in the `[task_types]` block in config.yml: It supports all typed fields you can think about (`string`, `int`, `uint`, `enum`, `datetime`, `array<T>`, `set<T>`, ...), required fields, and closed types - enforced on every write, with every violation reported in one error. Tasks stay schema-agnostic until you declare a type. This gives you as much strictness and flexibility as a standard database schema.
+When you do want real schema guarantees, taska supports defining hard schemas that tasks have to conform to. Declare per-task-type schemas in the `[task_types]` block in config.yml: It supports all typed fields you can think about (`string`, `int`, `uint`, `enum`, `datetime`, `array<T>`, `set<T>`, ...), required fields, closed types, and **workflows** - an enum field can declare the moves it allows, turning a status into a state machine - all enforced on every write, with every violation reported in one error. Tasks stay schema-agnostic until you declare a type. This gives you as much strictness and flexibility as a standard database schema.
 
 ### An append-only log, not a snapshot
 
@@ -222,6 +222,26 @@ fields = {
   estimate = { type = "uint", min = 1, max = 13 },
 }
 
+# WORKFLOWS. An enum field can declare `transitions` - the values each value may
+# move to - enforced on every write (a rejected move exits 2). Cycles are a
+# supported shape: that is how `implement <-> review` bounces until review
+# passes. The map must be TOTAL (every declared value is a key) and a terminal
+# state is written `state = []`, so no state is ever frozen by accident; for the
+# STATUS field every state must additionally reach `done_status`, or its tasks
+# could never be completed. Creating a task, setting a previously-absent value,
+# and unsetting are not transitions, so they pass through.
+[task_types.feature]
+fields = {
+  status = { type = "enum", values = ["todo", "plan", "implement", "review", "closed"],
+             transitions = {
+               todo      = ["plan"],
+               plan      = ["implement", "review"],
+               implement = ["review"],
+               review    = ["implement", "closed"],
+               closed    = ["todo"],              # reopen, or [] to seal
+             } },
+}
+
 [display]
 # Columns for list/ready (and the field order used by --format json).
 # "id" and "deps" are built-ins; any other name is a task field. Override per
@@ -299,7 +319,7 @@ The `--if` guard on `update`/`delete` is evaluated **in the same locked step** t
 | --- | --- |
 | `0` | Success |
 | `1` | Program error (bad input, task not found, I/O, …) |
-| `2` | Schema validation - the write violates a `[task_types]` schema, or introduces an undeclared field name (the typo guard). Fix the fields and retry |
+| `2` | Schema validation - the write violates a `[task_types]` schema, makes a status/enum move the type's `transitions` workflow doesn't allow, or introduces an undeclared field name (the typo guard). Fix the fields and retry |
 | `3` | An `--if` precondition wasn't met - the write was rejected, not applied |
 
 (`ta watch` also exits `1` on timeout with no match.)

@@ -282,3 +282,60 @@ fn conditional_write_is_an_atomic_compare_and_swap() {
         "conditional delete removed the task once its guard held"
     );
 }
+
+#[test]
+fn status_transitions_are_enforced_by_the_action_layer_not_the_cli() {
+    // The workflow gate is domain law, so a frontend that never touches `cli`
+    // still can't write its way around it - and the exit-code taxonomy travels
+    // as a typed error, not as a printed string.
+    use taska::error::{CodedError, ExitCode};
+    use taska::schema::FieldOps;
+
+    let set_status = |value: &str| {
+        let mut set = Map::new();
+        set.insert(STATUS_KEY.to_string(), json!(value));
+        FieldOps {
+            set,
+            append: Vec::new(),
+            subtract: Vec::new(),
+            raw: Map::new(),
+        }
+    };
+
+    let dir = std::env::temp_dir()
+        .join("taska-action-test")
+        .join("transitions");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".taska")).unwrap();
+    let mut config = taska::config::default_toml();
+    config.push_str(
+        "\n[task_types.wf]\nfields = { status = { type = \"enum\", \
+         values = [\"todo\", \"review\", \"closed\"], \
+         transitions = { todo = [\"review\"], review = [\"todo\", \"closed\"], \
+         closed = [] } } }\n",
+    );
+    std::fs::write(dir.join(".taska/config.toml"), config).unwrap();
+    let store = FileStore::provision(dir.join(".taska")).unwrap();
+
+    let mut payload = Map::new();
+    payload.insert("task_type".to_string(), json!("wf"));
+    payload.insert(STATUS_KEY.to_string(), json!("todo"));
+    action::write::create(&store, "t", payload, &Map::new(), false).unwrap();
+
+    let Err(err) = action::write::update(&store, "t", &set_status("closed"), false, &[]) else {
+        panic!("todo -> closed is not a declared move");
+    };
+    assert_eq!(
+        err.downcast_ref::<CodedError>().map(CodedError::code),
+        Some(ExitCode::Schema),
+        "carries the schema exit code: {err}"
+    );
+
+    // The declared move goes through the same call.
+    action::write::update(&store, "t", &set_status("review"), false, &[]).unwrap();
+    let session = action::read(&store).unwrap();
+    assert_eq!(
+        session.state["t"].custom_fields[STATUS_KEY],
+        json!("review")
+    );
+}

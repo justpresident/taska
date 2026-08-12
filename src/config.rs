@@ -153,7 +153,8 @@ close_time = "{close_time}"
 # (whole-task: every violation reported in one error). Field kinds: string,
 # bool, int, uint, float, datetime, enum, any, array<T>, set<T>. Long-form
 # constraints: required, default (stamped at create, healed onto writes,
-# substituted at read), min/max, pattern, min_len/max_len, min_items/max_items.
+# substituted at read), min/max, pattern, min_len/max_len, min_items/max_items,
+# transitions (enum only - see below).
 # This file is TOML 1.1: `fields` reads best as one multi-line inline table
 # (trailing comma allowed), one line per field. Example:
 # [task_types.bug]
@@ -163,6 +164,26 @@ close_time = "{close_time}"
 #   tags     = "array<string>",
 #   severity = {{ type = "enum", values = ["low", "medium", "high"], required = true, default = "low" }},
 #   estimate = {{ type = "uint", min = 1, max = 13 }},
+# }}
+#
+# WORKFLOWS. An enum field can declare `transitions` - the values each value may
+# change into - turning it into a state machine enforced on every write (a
+# rejected move exits 2). Cycles are fine: that is how `implement <-> review`
+# works. The map must be TOTAL (every declared value present as a key), and a
+# terminal state is written `state = []` rather than left out, so no state is
+# ever frozen by accident. For the STATUS field every state must additionally
+# reach `workflow.done_status`, or tasks could never be completed. Creating a
+# task, setting a previously-absent value, and unsetting are not transitions.
+# [task_types.feature]
+# fields = {{
+#   status = {{ type = "enum", values = ["todo", "plan", "implement", "review", "{done_status}"],
+#              transitions = {{
+#                todo      = ["plan"],
+#                plan      = ["implement", "review"],
+#                implement = ["review"],
+#                review    = ["implement", "{done_status}"],   # bounce until review passes
+#                {done_status}    = ["todo"],                  # reopen, or [] to seal
+#              }} }},
 # }}
 "#,
         min_keep = MIN_KEEP_EVENTS,
@@ -733,6 +754,17 @@ impl FieldSchema {
         }
     }
 
+    /// The declared state machine over this field's enum values: what each
+    /// value may change into. Empty (the shorthand, and any field that doesn't
+    /// declare one) means the field is freely settable.
+    #[must_use]
+    pub fn transitions(&self) -> Option<&BTreeMap<String, Vec<String>>> {
+        match self {
+            Self::Short(_) => None,
+            Self::Full(spec) => (!spec.transitions.is_empty()).then_some(&spec.transitions),
+        }
+    }
+
     /// Whether every task of the type must carry this field.
     #[must_use]
     pub const fn required(&self) -> bool {
@@ -836,6 +868,19 @@ pub struct FieldSpec {
     /// Allowed values when the (element) kind is `enum`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,
+    /// State machine over an `enum` field: the values each value may change
+    /// INTO. Empty (the default) leaves the field freely settable.
+    ///
+    /// Declared next to the `values` it references, so validation is total and
+    /// local. The map must cover every declared value - a terminal state is
+    /// written `state = []`, never left out, since an omission would silently
+    /// freeze it. Cycles are a supported workflow shape (`implement <-> review`).
+    ///
+    /// Enforced on write by `schema::enforce_transitions` against the value the
+    /// field held BEFORE the write; setting a previously-absent value, creating
+    /// a task, and unsetting are not transitions and pass through.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub transitions: BTreeMap<String, Vec<String>>,
     /// Whether every task of this type must carry the field.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub required: bool,
@@ -1138,9 +1183,143 @@ impl Config {
                         if let Some(spec) = schema.spec() {
                             Self::collect_field_spec_problems(&ctx, spec, &kind, schema, problems);
                         }
+                        // Reachability is a STATUS-field notion (every state
+                        // must be able to complete); other enums have no
+                        // equivalent of `done_status`.
+                        let done = (field == &w.status_field && !w.done_status.is_empty())
+                            .then_some(w.done_status.as_str());
+                        Self::collect_transitions_problems(&ctx, schema, &kind, done, problems);
                     }
                 }
             }
+        }
+    }
+
+    /// A `transitions` state machine must be declared on a scalar `enum`, speak
+    /// only that enum's vocabulary, and be TOTAL - every declared value present
+    /// as a key, a terminal state spelled `state = []`. Totality is what keeps
+    /// an omission from silently freezing a state.
+    ///
+    /// `done` carries the `[workflow] done_status` when this field IS the status
+    /// field, which additionally requires every state to REACH it: a workflow
+    /// with a stranded subgraph (`implement <-> review` and no way out) declares
+    /// tasks that can never be completed. Other enums have no such notion.
+    fn collect_transitions_problems(
+        ctx: &str,
+        schema: &FieldSchema,
+        kind: &FieldKind,
+        done: Option<&str>,
+        problems: &mut Vec<String>,
+    ) {
+        let Some(transitions) = schema.transitions() else {
+            return;
+        };
+        // `array<enum>`/`set<enum>` hold a COLLECTION of values - there is no
+        // single current state to move out of.
+        if !matches!(kind, FieldKind::Enum) {
+            problems.push(format!(
+                "{ctx}: `transitions` only applies to the scalar enum kind (declared `{}`)",
+                schema.kind_str()
+            ));
+            return;
+        }
+        let values = schema.values();
+        if values.is_empty() {
+            // The missing `values` list is already reported; checking the
+            // vocabulary against nothing would bury it in noise.
+            return;
+        }
+        let known = |state: &String| values.contains(state);
+        for (from, targets) in transitions {
+            if !known(from) {
+                problems.push(format!(
+                    "{ctx}.transitions: state `{from}` is not one of the declared values ({})",
+                    values.join(", ")
+                ));
+            }
+            let mut seen = BTreeSet::new();
+            for to in targets {
+                if !known(to) {
+                    problems.push(format!(
+                        "{ctx}.transitions.{from}: target `{to}` is not one of the declared \
+                         values ({})",
+                        values.join(", ")
+                    ));
+                } else if !seen.insert(to) {
+                    problems.push(format!("{ctx}.transitions.{from}: duplicate target `{to}`"));
+                }
+            }
+        }
+        // Totality: an omitted state would be terminal by accident.
+        let missing: Vec<&str> = values
+            .iter()
+            .filter(|v| !transitions.contains_key(*v))
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            problems.push(format!(
+                "{ctx}.transitions: no entry for state(s) {} - every declared value needs one \
+                 (write `{} = []` to make a state terminal)",
+                missing
+                    .iter()
+                    .map(|s| format!("`{s}`"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                missing[0]
+            ));
+        }
+        if let Some(done) = done {
+            Self::collect_reachability_problems(ctx, values, transitions, done, problems);
+        }
+    }
+
+    /// Every declared status must reach `done_status` by some path, or tasks in
+    /// it can never be completed. Walks the graph BACKWARDS from `done_status`
+    /// (a reverse reachability flood), so one traversal settles every state.
+    fn collect_reachability_problems(
+        ctx: &str,
+        values: &[String],
+        transitions: &BTreeMap<String, Vec<String>>,
+        done: &str,
+        problems: &mut Vec<String>,
+    ) {
+        if !values.iter().any(|v| v == done) {
+            // Every state would report as stranded; the real fault is upstream.
+            problems.push(format!(
+                "{ctx}.transitions: `[workflow] done_status` is `{done}`, which is not one of \
+                 the declared values ({}) - no task of this type could ever be done",
+                values.join(", ")
+            ));
+            return;
+        }
+        // Reverse adjacency: who can step INTO each state.
+        let mut incoming: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (from, targets) in transitions {
+            for to in targets {
+                incoming.entry(to.as_str()).or_default().push(from.as_str());
+            }
+        }
+        let mut reaches_done: BTreeSet<&str> = BTreeSet::new();
+        let mut queue = vec![done];
+        while let Some(state) = queue.pop() {
+            if !reaches_done.insert(state) {
+                continue;
+            }
+            if let Some(sources) = incoming.get(state) {
+                queue.extend(sources.iter().copied());
+            }
+        }
+        let stranded: Vec<String> = values
+            .iter()
+            .filter(|v| !reaches_done.contains(v.as_str()))
+            .map(|v| format!("`{v}`"))
+            .collect();
+        if !stranded.is_empty() {
+            problems.push(format!(
+                "{ctx}.transitions: state(s) {} cannot reach `{done}` - a task in them could \
+                 never be done",
+                stranded.join(", ")
+            ));
         }
     }
 
@@ -1642,6 +1821,47 @@ max_items = 2
 
         cfg.compaction.keep_events = MIN_KEEP_EVENTS;
         assert!(cfg.validate().is_ok(), "exactly the floor is allowed");
+    }
+
+    #[test]
+    fn transition_reachability_follows_paths_not_direct_edges() {
+        let workflow = |transitions: &str| {
+            let toml = format!(
+                r#"
+[workflow]
+done_status = "done"
+[task_types.t.fields.status]
+type = "enum"
+values = ["todo", "left", "right", "done"]
+transitions = {transitions}
+"#
+            );
+            toml::from_str::<Config>(&toml).unwrap().validate()
+        };
+
+        // A diamond: neither branch touches `done` directly, both reach it via
+        // a path. Reachability is transitive, so this is legal.
+        assert!(
+            workflow(
+                r#"{ todo = ["left", "right"], left = ["done"], right = ["left"], done = [] }"#
+            )
+            .is_ok(),
+            "a multi-hop path to done_status counts"
+        );
+
+        // Sever the only exit: `right` and `left` now loop between themselves,
+        // so three of the four states can never finish.
+        let err = workflow(
+            r#"{ todo = ["left", "right"], left = ["right"], right = ["left"], done = [] }"#,
+        )
+        .unwrap_err()
+        .to_string();
+        // Every stranded state named at once, in `values` order - and
+        // `done` absent from the list, since done_status reaches itself.
+        assert!(
+            err.contains("state(s) `todo`, `left`, `right` cannot reach `done`"),
+            "{err}"
+        );
     }
 
     #[test]

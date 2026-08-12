@@ -68,7 +68,38 @@ fn describe_type(t: &TypeFacts, status_field: &str) -> String {
         parts.join("; ")
     };
     let close = if t.closed { "" } else { " (does not close)" };
-    format!("  - `{}`{close}: {body}", t.name)
+    // A declared workflow is per-type and appears nowhere else in the primer -
+    // an agent that can't see it discovers it by tripping the write gate. That
+    // includes the status field, which `fields()` above skips.
+    let workflows = t
+        .fields
+        .iter()
+        .filter(|f| !f.transitions.is_empty())
+        .map(|f| {
+            // Walk `values`, not the map: the author wrote the enum in workflow
+            // order, and a total map (config validation enforces it) has an entry
+            // for every value - so the chain reads start-to-end instead of
+            // alphabetically. Anything unlisted trails behind, defensively.
+            let arrows = f
+                .values
+                .iter()
+                .chain(f.transitions.keys().filter(|from| !f.values.contains(from)))
+                .filter_map(|from| f.transitions.get(from).map(|targets| (from, targets)))
+                .map(|(from, targets)| {
+                    if targets.is_empty() {
+                        format!("{from} -> (terminal)")
+                    } else {
+                        format!("{from} -> {}", targets.join(" | "))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            format!("    `{}` transitions (enforced on write): {arrows}", f.name)
+        });
+    std::iter::once(format!("  - `{}`{close}: {body}", t.name))
+        .chain(workflows)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Align a `(command, comment)` cheat-sheet: pad commands to a common width so

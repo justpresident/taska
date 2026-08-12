@@ -309,6 +309,7 @@ pub fn vet_events<S: BuildHasher>(
         }
     }
     enforce_schemas(&preview, config)?;
+    enforce_transitions(&preview, state, config)?;
     Ok(out)
 }
 
@@ -484,6 +485,90 @@ fn enforce_schemas(
         if !violations.is_empty() {
             return Err(CodedError::schema(format!(
                 "task `{id}` does not conform to its task-type schema:\n  - {}",
+                violations.join("\n  - ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The workflow gate tail of [`vet_events`]: every declared `transitions` state
+/// machine, checked against the value each field held BEFORE the batch.
+///
+/// Runs AFTER [`enforce_schemas`], so a value outside the enum is reported by
+/// the schema gate - the clearer error - rather than as an illegal transition.
+/// Like that gate it is inert while `[task_types]` declares nothing, and it
+/// folds every violation on a task into one error.
+///
+/// **Not a transition, so not gated:** creating a task (no prior value),
+/// setting a previously-absent field, unsetting one, and a write that leaves
+/// the value unchanged. A prior value outside the declared enum is left
+/// unconstrained too - otherwise grandfathered data could never be repaired.
+/// Only writes routed through [`vet_events`] are gated; `undo`, the merge
+/// drivers, `resolve`, and `repair` reconcile history rather than advance a
+/// workflow, and deliberately bypass it.
+fn enforce_transitions<S: BuildHasher>(
+    preview: &HashMap<String, Option<Map<String, Value>>>,
+    state: &HashMap<String, TaskState, S>,
+    config: &Config,
+) -> Result<(), DynError> {
+    if config.task_types.types.is_empty() {
+        return Ok(());
+    }
+    for (id, fields) in preview {
+        // A task deleted by this batch has no resulting state to move into.
+        let (Some(fields), Some(before)) = (fields.as_ref(), state.get(id)) else {
+            continue;
+        };
+        // The effective type after the write: the payload's discriminator wins
+        // over the current one, matching `schema_default_stamps`.
+        let Some(def) = fields
+            .get(TASK_TYPE_KEY)
+            .or_else(|| before.custom_fields.get(TASK_TYPE_KEY))
+            .and_then(Value::as_str)
+            .and_then(|name| config.task_types.types.get(name))
+        else {
+            continue;
+        };
+        let mut violations = Vec::new();
+        for (name, schema) in &def.fields {
+            let Some(transitions) = schema.transitions() else {
+                continue;
+            };
+            let key = declared_field_key(name, &config.workflow.status_field);
+            let (Some(old), Some(new)) = (
+                before.custom_fields.get(key).and_then(Value::as_str),
+                fields.get(key).and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            if old == new {
+                continue;
+            }
+            // An unknown prior value can't have a declared way out; let the
+            // write correct it rather than stranding the task.
+            let Some(allowed) = transitions.get(old) else {
+                continue;
+            };
+            if !allowed.iter().any(|target| target == new) {
+                let options = if allowed.is_empty() {
+                    format!("`{old}` is terminal")
+                } else {
+                    format!(
+                        "allowed from `{old}`: {}",
+                        allowed
+                            .iter()
+                            .map(|t| format!("`{t}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                violations.push(format!("`{name}` can't go `{old}` -> `{new}` ({options})"));
+            }
+        }
+        if !violations.is_empty() {
+            return Err(CodedError::schema(format!(
+                "task `{id}` violates its task-type workflow:\n  - {}",
                 violations.join("\n  - ")
             )));
         }
@@ -1634,6 +1719,53 @@ required = true
             .collect(),
         );
         assert!(vet_events(&[retype_fixed], &existing, &config).is_ok());
+    }
+
+    #[test]
+    fn transitions_gate_resolves_a_renamed_status_display_name() {
+        use crate::test_support::names::STATUS_FIELD;
+        use crate::test_support::{state, task};
+        // Same display-vs-canonical boundary as the schema gate: the workflow is
+        // declared under the DISPLAY name, the prior value is read from the
+        // CANONICAL key. Getting this wrong would silently disable the gate on
+        // every store that renames its status field.
+        let config: Config = toml::from_str(&format!(
+            r#"
+[workflow]
+status_field = "{STATUS_FIELD}"
+done_status = "done"
+[task_types.job.fields.{STATUS_FIELD}]
+type = "enum"
+values = ["todo", "doing", "done"]
+transitions = {{ todo = ["doing"], doing = ["done"], done = [] }}
+"#
+        ))
+        .unwrap();
+        assert!(config.validate().is_ok(), "the workflow itself is legal");
+        let existing = state(&[task(
+            "j",
+            &[],
+            &[
+                (TASK_TYPE_KEY, serde_json::json!("job")),
+                (STATUS_KEY, serde_json::json!("todo")), // canonical storage key
+            ],
+        )]);
+        let hop = |to: &str| {
+            MutationEvent::new(
+                OpType::Update,
+                "j",
+                std::iter::once((STATUS_KEY.to_string(), serde_json::json!(to))).collect(),
+            )
+        };
+        let err = vet_events(&[hop("done")], &existing, &config).unwrap_err();
+        assert!(
+            err.to_string().contains("can't go `todo` -> `done`"),
+            "the renamed field is still gated: {err}"
+        );
+        assert!(
+            vet_events(&[hop("doing")], &existing, &config).is_ok(),
+            "the declared move still passes"
+        );
     }
 
     #[test]
