@@ -26,6 +26,7 @@ use crate::storage::EventStore;
 pub mod compact;
 pub mod config;
 pub mod dep;
+pub mod edit;
 pub mod init;
 pub mod list;
 pub mod prime;

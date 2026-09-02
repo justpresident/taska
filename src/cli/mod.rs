@@ -14,7 +14,6 @@
 //! on the [`EventStore`] abstraction rather than the concrete [`FileStore`],
 //! so they can be exercised against any store.
 
-use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -24,11 +23,10 @@ use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::{Map, Value};
 
 use crate::config::Config;
-use crate::engine::Engine;
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs};
 use crate::merge;
-use crate::model::{MutationEvent, TaskState, RESERVED_FIELD_KEYS};
+use crate::model::RESERVED_FIELD_KEYS;
 use crate::storage::{EventStore, FileStore};
 
 mod commands;
@@ -198,11 +196,17 @@ enum Commands {
     /// `vi`) as TOML (default) or JSON (`--json`). Save to apply the diff: a
     /// changed or added field is set, a deleted field is unset. On a syntax,
     /// naming, or schema error the message prints to stderr and you're offered to
-    /// re-edit the same file. Relationships are managed with `ta dep`, not here.
+    /// re-edit the same file. Missing editable fields are prefilled as `""`
+    /// (unset). With `--create`, a new task starts from that template and an
+    /// existing id is rejected. Relationships are managed with `ta dep`, not
+    /// here.
     #[command(visible_alias = "ed")]
     Edit {
         #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         id: String,
+        /// Create a new task; fail if the id already exists.
+        #[arg(long)]
+        create: bool,
         /// Edit as pretty-printed JSON instead of TOML.
         #[arg(long, conflicts_with = "toml")]
         json: bool,
@@ -863,7 +867,12 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             store, &criteria, open, ready, since, timeout, holdout, &output,
         ),
         Commands::Show { ids, display } => cmd_show(store, &ids, &display, &store.config().display),
-        Commands::Edit { id, json, toml: _ } => cmd_edit(store, &id, json),
+        Commands::Edit {
+            id,
+            create,
+            json,
+            toml: _,
+        } => cmd_edit(store, &id, create, json),
         Commands::Status { current, output } => cmd_status(store, current, &output),
         Commands::Prime { output } => cmd_prime(store, &output),
         Commands::Undo {
@@ -890,18 +899,6 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             unreachable!("non-store commands are handled before dispatch")
         }
     }
-}
-
-/// Materialize via the engine using the store's own workflow config (only the
-/// `close_time` computation needs `status_field`/`done_status`), so callers don't
-/// repeat those two arguments at every replay site.
-pub(crate) fn replay(
-    store: &impl EventStore,
-    baseline: Vec<TaskState>,
-    mutations: Vec<MutationEvent>,
-) -> HashMap<String, TaskState> {
-    let w = &store.config().workflow;
-    Engine::materialize_state(baseline, mutations, &w.done_status)
 }
 
 /// Render a read's [`Warning`](crate::action::Warning)s into user-facing message
@@ -1022,20 +1019,35 @@ fn field_value(key: &str, val: &str) -> Result<Value, DynError> {
 }
 
 /// Ask the user to confirm a destructive action. `force` (from `--force`) skips
-/// the prompt. The prompt goes to stderr so stdout stays clean for piping; reads
-/// a `y/N` line from stdin and defaults to no.
+/// the prompt. The prompt goes to stderr so stdout stays clean for piping.
 pub(crate) fn confirm(prompt: &str, force: bool) -> Result<bool, DynError> {
     if force {
         return Ok(true);
     }
-    eprint!("{prompt} [y/N] ");
+    confirm_with_default(prompt, false)
+}
+
+/// Ask a yes/no question with an explicit default used for an empty response.
+///
+/// EOF (a closed stdin, or Ctrl-D) is NOT an empty response: it means the user
+/// can't answer, so it always declines regardless of `default_yes`. A
+/// default-yes prompt that took EOF as agreement would loop forever on any
+/// caller that re-asks - and Ctrl-D is the universal abort.
+pub(crate) fn confirm_with_default(prompt: &str, default_yes: bool) -> Result<bool, DynError> {
+    let choices = if default_yes { "[Y/n]" } else { "[y/N]" };
+    eprint!("{prompt} {choices} ");
     std::io::Write::flush(&mut std::io::stderr())?;
     let mut line = String::new();
-    std::io::stdin().read_line(&mut line)?;
-    Ok(matches!(
-        line.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
+    if std::io::stdin().read_line(&mut line)? == 0 {
+        eprintln!();
+        return Ok(false);
+    }
+    let answer = line.trim().to_ascii_lowercase();
+    Ok(if answer.is_empty() {
+        default_yes
+    } else {
+        matches!(answer.as_str(), "y" | "yes")
+    })
 }
 
 #[cfg(test)]

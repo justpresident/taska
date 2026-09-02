@@ -339,3 +339,77 @@ fn status_transitions_are_enforced_by_the_action_layer_not_the_cli() {
         json!("review")
     );
 }
+
+/// A `FieldOps` setting one arbitrary field, for seeding the store's vocabulary.
+fn set_owner(owner: &str) -> taska::schema::FieldOps {
+    let mut set = Map::new();
+    set.insert("owner".to_string(), json!(owner));
+    taska::schema::FieldOps {
+        set,
+        append: Vec::new(),
+        subtract: Vec::new(),
+        raw: Map::new(),
+    }
+}
+
+/// The `edit` FORM drives through the public action API with no cli in sight -
+/// the guard that its conventions (what a save means) are the domain's, not the
+/// terminal frontend's. A TUI or MCP frontend gets the same form and the same
+/// answers; all this test supplies is a parsed field map.
+#[test]
+fn drives_the_edit_form_through_the_action_api_only() {
+    use taska::action::edit::{EditForm, EditMode, Preview};
+
+    let store = provision("edit_form");
+    create(&store, "seed", "Seed", "todo");
+    create(&store, "t", "Target", "todo");
+    // `owner` enters the store's vocabulary through another task, so it appears
+    // on `t`'s form as a blank placeholder rather than a value.
+    action::write::update(&store, "seed", &set_owner("bob"), true, &[]).unwrap();
+
+    let form = EditForm::open(&store, "t", false).unwrap();
+    assert!(matches!(form.mode(), EditMode::Update));
+    assert_eq!(form.template["title"], json!("Target"));
+    assert_eq!(
+        form.template["owner"],
+        json!(""),
+        "a field this task has no value for shows as the unset placeholder"
+    );
+
+    // A save that touches nothing is not a write, even though the form is full
+    // of lines the task doesn't actually store.
+    let Preview::Ready { set, .. } = form
+        .preview(&form.template.clone(), store.config())
+        .unwrap()
+    else {
+        panic!("a full form is not an empty document");
+    };
+    assert!(set.is_empty(), "an untouched form writes nothing: {set:?}");
+
+    // Deleting the placeholder line has nothing to unset; changing the title is
+    // the only real write.
+    let mut saved = form.template.clone();
+    saved.remove("owner");
+    saved.insert("title".to_string(), json!("Renamed"));
+    let Preview::Ready { set, new_fields } = form.preview(&saved, store.config()).unwrap() else {
+        panic!("expected a payload");
+    };
+    assert!(new_fields.is_empty());
+    assert_eq!(set["title"], json!("Renamed"));
+    assert_eq!(
+        set.len(),
+        1,
+        "the deleted placeholder is not a write: {set:?}"
+    );
+
+    let written = form.apply(&store, set, false).unwrap().written;
+    assert_eq!(written.len(), 1);
+    let session = action::read(&store).unwrap();
+    assert_eq!(session.state["t"].custom_fields["title"], json!("Renamed"));
+
+    // An emptied document is the discard, never "unset every field".
+    assert!(matches!(
+        form.preview(&Map::new(), store.config()).unwrap(),
+        Preview::Empty
+    ));
+}

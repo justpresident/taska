@@ -14,6 +14,7 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 use crate::action::materialize;
+use crate::config::Config;
 use crate::error::{CodedError, DynError};
 use crate::model::{MutationEvent, OpType, TaskState, STATUS_KEY};
 use crate::schema::{
@@ -43,25 +44,11 @@ pub struct WriteOutcome {
 pub fn create(
     store: &impl EventStore,
     id: &str,
-    mut payload: Map<String, Value>,
+    payload: Map<String, Value>,
     raw: &Map<String, Value>,
     allow_new_fields: bool,
 ) -> Result<WriteOutcome, DynError> {
-    let workflow = &store.config().workflow;
-    if !workflow.default_status.is_empty() && !payload.contains_key(STATUS_KEY) {
-        payload.insert(
-            STATUS_KEY.to_string(),
-            Value::String(workflow.default_status.clone()),
-        );
-    }
-    // The declared schema defaults (same convention: an explicit value - or null -
-    // in the payload wins over the default).
-    let stamps = schema_default_stamps(None, &payload, &BTreeSet::default(), store.config());
-    for (key, value) in stamps {
-        payload.insert(key, value);
-    }
-
-    let draft = MutationEvent::new(OpType::Create, id, payload);
+    let draft = create_draft(store.config(), id, payload);
     let config = store.config().clone();
     let new_fields = RefCell::new(Vec::new());
     let written = store.append_checked(&|baseline, log| {
@@ -78,6 +65,30 @@ pub fn create(
         written,
         new_fields: new_fields.into_inner(),
     })
+}
+
+/// The stamped `Create` draft for a CANONICAL payload, without appending it.
+///
+/// The single owner of create's stamping choreography: the workflow default
+/// status (unless the payload already names it - even as JSON `null`, the
+/// explicit-unset convention) and then the task type's schema defaults. A
+/// frontend that wants to show create's diagnostics BEFORE taking the store lock
+/// (the `edit` form's preview) drafts through here, so what it validates is the
+/// event [`create`] would really append.
+pub fn create_draft(config: &Config, id: &str, mut payload: Map<String, Value>) -> MutationEvent {
+    let workflow = &config.workflow;
+    if !workflow.default_status.is_empty() && !payload.contains_key(STATUS_KEY) {
+        payload.insert(
+            STATUS_KEY.to_string(),
+            Value::String(workflow.default_status.clone()),
+        );
+    }
+    // The declared schema defaults (same convention: an explicit value - or null -
+    // in the payload wins over the default).
+    for (key, value) in schema_default_stamps(None, &payload, &BTreeSet::default(), config) {
+        payload.insert(key, value);
+    }
+    MutationEvent::new(OpType::Create, id, payload)
 }
 
 /// Apply CANONICAL field ops to an existing task, returning the events actually

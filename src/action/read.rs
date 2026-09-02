@@ -13,7 +13,8 @@ use crate::config::Config;
 use crate::engine::Engine;
 use crate::error::DynError;
 use crate::model::TaskState;
-use crate::schema::{canonical_field_pairs, schema_conformance_report, substitute_schema_defaults};
+use crate::schema;
+use crate::schema::{schema_conformance_report, substitute_schema_defaults};
 use crate::storage::EventStore;
 
 /// A read of the store: the materialized, display-shaped task state plus any
@@ -103,15 +104,8 @@ pub fn read(store: &impl EventStore) -> Result<Session, DynError> {
 /// state materialized at a cursor WITHOUT the timestamp/computed-column injection,
 /// which would otherwise pollute a diff with non-mutation "changes".
 pub(crate) fn rename_to_display(state: &mut HashMap<String, TaskState>, config: &Config) {
-    for (display, canonical) in canonical_field_pairs(&config.workflow) {
-        if display == canonical {
-            continue;
-        }
-        for task in state.values_mut() {
-            if let Some(value) = task.custom_fields.remove(canonical) {
-                task.custom_fields.insert(display.clone(), value);
-            }
-        }
+    for task in state.values_mut() {
+        schema::rename_to_display(&mut task.custom_fields, &config.workflow);
     }
 }
 

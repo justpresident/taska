@@ -108,6 +108,27 @@ pub fn canonicalize_fields(
     Ok(())
 }
 
+/// Rename a field map's CANONICAL storage keys to their configured DISPLAY
+/// names - the read-side inverse of [`canonicalize_fields`], over the same
+/// shared [`canonical_field_pairs`] list.
+///
+/// Anything that shows a task's fields to a user goes through here (the read
+/// pipeline's per-task rename, the `edit` form), so a store that renames
+/// `status` to `state` presents that one spelling everywhere.
+pub fn rename_to_display(
+    fields: &mut Map<String, Value>,
+    workflow: &crate::config::WorkflowConfig,
+) {
+    for (display, canonical) in canonical_field_pairs(workflow) {
+        if display == canonical {
+            continue;
+        }
+        if let Some(value) = fields.remove(canonical) {
+            fields.insert(display.clone(), value);
+        }
+    }
+}
+
 /// [`canonicalize_fields`] for the ordered `(field, value)` operand lists.
 ///
 /// Renames each pair's display key to its canonical storage key in place
@@ -727,6 +748,22 @@ pub fn known_field_names<S: BuildHasher>(
         for key in task.custom_fields.keys() {
             names.insert(key.clone());
         }
+    }
+    names
+}
+
+/// The known field vocabulary a user may set directly, in CANONICAL keys.
+///
+/// This is [`known_field_names`] minus the reserved/computed names it includes
+/// for typo detection. Editor-style frontends use it to offer every available
+/// field without exposing ids, timestamps, graph columns, or relationships.
+pub fn editable_field_names<S: BuildHasher>(
+    state: &HashMap<String, TaskState, S>,
+    config: &Config,
+) -> BTreeSet<String> {
+    let mut names = known_field_names(state, config);
+    for reserved in reserved_field_names(config) {
+        names.remove(&reserved);
     }
     names
 }

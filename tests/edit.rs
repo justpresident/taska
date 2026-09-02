@@ -56,6 +56,277 @@ fn show_json(dir: &Path, id: &str) -> String {
 }
 
 #[test]
+fn edit_create_creates_a_missing_task() {
+    let dir = setup("edit_create_creates_a_missing_task");
+    let ed = editor_script(
+        &dir,
+        "ed.sh",
+        "#!/bin/sh\nprintf 'title = \"Created in editor\"\\npriority = 2\\n' > \"$1\"\n",
+    );
+
+    let out = run_edit(&dir, &["edit", "new", "--create"], &ed, "", &[]);
+    assert!(
+        out.status.success(),
+        "edit --create failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Created task `new`"));
+    let json = show_json(&dir, "new");
+    assert!(json.contains("\"title\":\"Created in editor\""));
+    assert!(json.contains("\"priority\":2"));
+}
+
+#[test]
+fn edit_create_empty_save_does_not_create() {
+    let dir = setup("edit_create_empty_save_does_not_create");
+    // TRUNCATE the file - an editor that saves nothing at all.
+    let ed = editor_script(&dir, "ed.sh", "#!/bin/sh\n: > \"$1\"\n");
+
+    let out = run_edit(&dir, &["edit", "new", "--create"], &ed, "", &[]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("Empty file - discarded"),
+        "an emptied file is the documented discard: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    let show = run(ta_bin(), &dir, &["show", "new"]);
+    assert!(
+        !show.status.success(),
+        "empty save must not create the task"
+    );
+}
+
+#[test]
+fn edit_create_comments_only_save_does_not_create() {
+    let dir = setup("edit_create_comments_only_save_does_not_create");
+    // A file with bytes but no FIELDS is just as empty - it must not create a
+    // task with zero fields.
+    let ed = editor_script(
+        &dir,
+        "ed.sh",
+        "#!/bin/sh\nprintf '# everything commented out\\n' > \"$1\"\n",
+    );
+
+    let out = run_edit(&dir, &["edit", "ghost", "--create"], &ed, "", &[]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("Empty file - discarded"),
+        "a fieldless save is a discard: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    let show = run(ta_bin(), &dir, &["show", "ghost"]);
+    assert!(
+        !show.status.success(),
+        "no task may be created: {}",
+        String::from_utf8_lossy(&show.stdout)
+    );
+}
+
+#[test]
+fn edit_create_keeps_the_default_status_when_the_line_is_gone() {
+    let dir = setup("edit_create_keeps_the_default_status");
+    // The editor replaces the whole template (a select-all retype, or simply
+    // deleting the prefilled `status` line). The workflow default must still be
+    // stamped - a statusless task is invisible to every status filter.
+    let ed = editor_script(
+        &dir,
+        "ed.sh",
+        "#!/bin/sh\nprintf 'title = \"Created in editor\"\\n' > \"$1\"\n",
+    );
+
+    let out = run_edit(&dir, &["edit", "fresh", "--create"], &ed, "", &[]);
+    assert!(
+        out.status.success(),
+        "edit --create failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json = show_json(&dir, "fresh");
+    assert!(
+        json.contains("\"status\":\"todo\""),
+        "default status must survive an omitted line: {json}"
+    );
+    assert!(
+        ta(&dir, &["list", "--open"]).contains("fresh"),
+        "the task must be reachable by a status filter"
+    );
+}
+
+#[test]
+fn edit_blanking_a_field_unsets_it() {
+    let dir = setup("edit_blanking_a_field_unsets_it");
+    ta(&dir, &["create", "b1", "title=A", "owner=bob"]);
+    // `""` is the repository's unset value everywhere else, so it must work in
+    // the editor too - the way to suppress a value without deleting the line.
+    let ed = editor_script(
+        &dir,
+        "ed.sh",
+        "#!/bin/sh\nout=$(sed 's/^owner = .*/owner = \"\"/' \"$1\")\nprintf '%s\\n' \"$out\" > \"$1\"\n",
+    );
+
+    let out = run_edit(&dir, &["edit", "b1"], &ed, "", &[]);
+    assert!(
+        out.status.success(),
+        "edit failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json = show_json(&dir, "b1");
+    assert!(
+        !json.contains("bob"),
+        "blanked field should be unset: {json}"
+    );
+}
+
+#[test]
+fn edit_deleting_a_template_only_line_writes_nothing() {
+    let dir = setup("edit_deleting_a_template_only_line_writes_nothing");
+    ta(&dir, &["create", "seed", "title=Seed", "owner=bob"]);
+    ta(&dir, &["create", "t", "title=T"]);
+    let before = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    // `owner` is in the template (another task uses it) but this task stores no
+    // value for it, so deleting the line has nothing to unset.
+    let ed = editor_script(
+        &dir,
+        "ed.sh",
+        "#!/bin/sh\nout=$(grep -v '^owner' \"$1\")\nprintf '%s\\n' \"$out\" > \"$1\"\n",
+    );
+
+    let out = run_edit(&dir, &["edit", "t"], &ed, "", &[]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("No changes"),
+        "nothing to write must report no change, not a seq: {stdout}"
+    );
+    assert!(
+        !stdout.contains("[seq:0]"),
+        "a write that never happened has no seq: {stdout}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap(),
+        before,
+        "the log must be untouched"
+    );
+}
+
+#[test]
+fn edit_eof_at_the_reedit_prompt_discards() {
+    let dir = setup("edit_eof_at_the_reedit_prompt_discards");
+    ta(&dir, &["create", "t", "title=A"]);
+    // An always-broken editor with NO stdin: EOF at the re-edit prompt must
+    // discard, not re-launch the editor forever.
+    let ed = editor_script(
+        &dir,
+        "ed.sh",
+        "#!/bin/sh\nprintf 'broke = = =\\n' > \"$1\"\n",
+    );
+
+    let out = run_edit(&dir, &["edit", "t"], &ed, "", &[]);
+    assert!(out.status.success(), "a clean discard is not an error");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("Discarded"),
+        "EOF declines the re-edit: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        show_json(&dir, "t").contains("\"title\":\"A\""),
+        "task unchanged"
+    );
+}
+
+#[test]
+fn edit_create_prefills_the_schema_template() {
+    let dir = fresh_dir("edit_create_prefills_the_schema_template");
+    init_renamed(&dir);
+    let capture = dir.join("opened.toml");
+    let ed = editor_script(&dir, "ed.sh", "#!/bin/sh\ncp \"$1\" \"$CAPTURE\"\n");
+
+    let out = run_edit(
+        &dir,
+        &["edit", "new", "--create"],
+        &ed,
+        "",
+        &[("CAPTURE", capture.to_str().unwrap())],
+    );
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("not created"));
+
+    let opened = fs::read_to_string(capture).unwrap();
+    for expected in [
+        "body = \"\"",
+        "headline = \"\"",
+        "kind = \"story\"",
+        "rank = \"\"",
+        "state = \"backlog\"",
+    ] {
+        assert!(
+            opened.contains(expected),
+            "missing `{expected}` in editor template:\n{opened}"
+        );
+    }
+    // Assert on the parsed KEYS: a `starts_with` line scan both over-matches a
+    // longer field name and misses a key emitted anywhere but at line start.
+    let keys: toml::Table = toml::from_str(&opened).unwrap();
+    for computed in ["id", "deps", "made_at", "touched_at", "shipped_at", "needs"] {
+        assert!(
+            !keys.contains_key(computed),
+            "computed/relationship field `{computed}` must not be editable:\n{opened}"
+        );
+    }
+}
+
+#[test]
+fn edit_prefills_fields_known_from_other_tasks() {
+    let dir = setup("edit_prefills_fields_known_from_other_tasks");
+    ta(&dir, &["create", "seed", "title=Seed", "owner=bob"]);
+    ta(&dir, &["create", "target", "title=Target"]);
+    let capture = dir.join("opened.toml");
+    let ed = editor_script(&dir, "ed.sh", "#!/bin/sh\ncp \"$1\" \"$CAPTURE\"\n");
+
+    let out = run_edit(
+        &dir,
+        &["edit", "target"],
+        &ed,
+        "",
+        &[("CAPTURE", capture.to_str().unwrap())],
+    );
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("No changes"));
+
+    let opened = fs::read_to_string(capture).unwrap();
+    assert!(opened.contains("title = \"Target\""));
+    assert!(opened.contains("status = \"todo\""));
+    assert!(opened.contains("owner = \"\""));
+    assert!(opened.contains("type = \"\""));
+}
+
+#[test]
+fn edit_missing_without_create_still_errors() {
+    let dir = setup("edit_missing_without_create_still_errors");
+    let out = run(ta_bin(), &dir, &["edit", "missing"]);
+
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no task `missing`"));
+}
+
+#[test]
+fn edit_create_rejects_an_existing_task() {
+    let dir = setup("edit_create_rejects_an_existing_task");
+    ta(&dir, &["create", "existing", "title=Original"]);
+    let ed = editor_script(
+        &dir,
+        "ed.sh",
+        "#!/bin/sh\nprintf 'title = \"Changed\"\\n' > \"$1\"\n",
+    );
+
+    let out = run_edit(&dir, &["edit", "existing", "--create"], &ed, "", &[]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("task `existing` already exists"));
+    assert!(show_json(&dir, "existing").contains("\"title\":\"Original\""));
+}
+
+#[test]
 fn edit_changes_a_field() {
     let dir = fresh_dir("edit_changes_a_field");
     init_renamed_open(&dir);
@@ -144,8 +415,9 @@ fn edit_reedits_after_syntax_error() {
         &["create", "t5", "title=A", &format!("{STATUS_FIELD}=todo")],
     );
     let counter = dir.join("count");
-    // First save is broken TOML; after the user answers `y`, the second save is
-    // valid - exercising the re-edit loop on the SAME file.
+    // First save is broken TOML; an empty RESPONSE (a bare newline - EOF instead
+    // would decline) accepts the default `yes`, then the second save is valid -
+    // exercising the re-edit loop on the SAME file.
     let ed = editor_script(
         &dir,
         "ed.sh",
@@ -157,7 +429,7 @@ fn edit_reedits_after_syntax_error() {
         &dir,
         &["edit", "t5"],
         &ed,
-        "y\n",
+        "\n",
         &[("COUNTER", counter.to_str().unwrap())],
     );
     assert!(
@@ -168,6 +440,10 @@ fn edit_reedits_after_syntax_error() {
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("invalid TOML"),
         "diagnostic on stderr"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("[Y/n]"),
+        "re-edit prompt defaults to yes"
     );
     assert!(
         show_json(&dir, "t5").contains("\"in_progress\""),
