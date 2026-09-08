@@ -413,15 +413,18 @@ enum Commands {
 }
 
 /// Whether `p` is a regular, executable file.
-/// Whether `p` is a regular, executable file.
 #[cfg(unix)]
 fn is_executable_file(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
+
+/// Whether `p` is a regular file - the whole test on a platform with no
+/// executable bit. `is_ok_and` hands the `Metadata` over by value while
+/// `is_file` borrows it, so this takes a closure rather than the method path.
 #[cfg(not(unix))]
 fn is_executable_file(p: &Path) -> bool {
-    std::fs::metadata(p).is_ok_and(std::fs::Metadata::is_file)
+    std::fs::metadata(p).is_ok_and(|m| m.is_file())
 }
 
 /// The distinct real `ta` binaries reachable via `path` (a `PATH` value), as
