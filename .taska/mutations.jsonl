@@ -393,3 +393,5 @@
 {"seq":393,"timestamp":"2026-09-08T21:43:51.457594750Z","op":"AddEdge","task_id":"show-hn","rel":"depends_on","target":"demo-cast"}
 {"seq":394,"timestamp":"2026-09-08T21:44:17.089113439Z","op":"Update","task_id":"readme-status-stale","status":"in_progress"}
 {"seq":395,"timestamp":"2026-09-08T21:44:30.302284426Z","op":"Update","task_id":"readme-status-stale","status":"closed"}
+{"seq":396,"timestamp":"2026-09-08T21:44:46.334757944Z","op":"Update","task_id":"changelog-unreleased-backfill","status":"in_progress"}
+{"seq":397,"timestamp":"2026-09-08T21:44:46.425819629Z","op":"Update","task_id":"changelog-unreleased-backfill","status":"closed"}

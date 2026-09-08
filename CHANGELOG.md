@@ -7,6 +7,25 @@ git log.
 
 ## [Unreleased]
 
+### Added
+- **Per-type status transition workflows.** An `enum` field can declare
+  `transitions` - the values each value may move into - turning a status into a
+  state machine enforced on every write. Linear flows and cycles are both
+  expressible; `implement <-> review` bouncing until review passes is the
+  motivating case. The map must cover every declared value (a terminal state is
+  written `state = []`, never omitted), and for the status field every state must
+  still reach `done_status`, so no task can be stranded. A rejected move exits 2.
+- **`ta edit --create`** opens the same editor form for an absent id - a template
+  of every known editable field with the required task type and applicable
+  defaults prefilled - and rejects an id that already exists before the editor
+  opens.
+
+### Changed
+- The edit form moved out of the CLI into the frontend-agnostic `action::edit`,
+  so what a form contains and what a save means are domain decisions any frontend
+  inherits. The CLI handler keeps only the temp file, the `$EDITOR` launch,
+  TOML/JSON serialization, and the prompts.
+
 ## [1.2.0] - 2026-07-27
 
 This release adds coordination primitives for agent and human workflows: a
