@@ -5,55 +5,19 @@
 [![Crates.io](https://img.shields.io/crates/v/taska.svg)](https://crates.io/crates/taska)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-A local-first, **git-native** task & dependency tracker for human and agent workflows. Tasks live in an append-only event log inside your repository, and concurrent edits on different branches are reconciled **automatically** by a custom git merge driver - no database, no daemon, no manual sync step.
+**Task tracking that lives in your repo and merges like code.**
 
-## What it does better than other in-repo task managers
+Tasks are an append-only JSONL log inside your repository. A custom git merge
+driver reconciles concurrent edits **per field**, so you and your coding agents
+can work on separate branches and both sets of changes survive the merge.
 
-### Everything is configurable!
+No database. No daemon. No git hooks. No remote required. Works entirely offline,
+for humans and agents alike.
 
-No assumptions about your workflow. Only a bare minimum of fields is fixed - `id` and `deps`. Everything else is arbitrary `key=value` fields that you define yourself. By default`status=closed` means the task is done, but you can re-configure both the field name and the value that means the task is done - name it `closed`, `done`, or whatever you get used to; taska mandates no fixed schema, so you grow your own conventions. This design principle leads to simple and flexible SQL-like select and update syntax:
-```
-ta list owner=alice severity>5 notes=~exception
-ta update some-task-id notes+="all done, ready for review" owner=review_agent
-```
-
-### Task schema enforcement
-
-#### Soft enforcement
-
-By default, right after you initialize taska, no schema is defined. The columns you define for your first task becomes a soft-enforced schema. The goal of this mode is to prevent you from typos and unintentional violation of your project's rules and concepts. If you have a `priority` field in your tasks and you accidentally mistype it as `pirority`, taska will deny the update with an error:
-```
-- undeclared field `pirority` (task type `task` is closed; did you mean `priority`?; declared fields: notes, priority, status, title)
-````
-
-But if you really want to add a new field that didn't exist before in other tasks you just need to add `--new-field` to your create or update command once. After that this field name becomes known and you don't need to use this flag in further commands.
-
-This mode allows having structure and avoid simple mistakes without any overhead. All fields are optional, but at least you avoid usual mess with each task defining its own field names.
-
-#### Hard enforcement
-
-When you do want real schema guarantees, taska supports defining hard schemas that tasks have to conform to. Declare per-task-type schemas in the `[task_types]` block in config.yml: It supports all typed fields you can think about (`string`, `int`, `uint`, `enum`, `datetime`, `array<T>`, `set<T>`, ...), required fields, closed types, and **workflows** - an enum field can declare the moves it allows, turning a status into a state machine - all enforced on every write, with every violation reported in one error. Tasks stay schema-agnostic until you declare a type. This gives you as much strictness and flexibility as a standard database schema.
-
-### An append-only log, not a snapshot
-
-The append-only log is inspired by how high-performance KV stores like Cassandra absorb concurrent updates from tens of thousands of clients. Raw speed isn't the goal for a task tracker, but the same design earns its keep here for a different reason. Most trackers store the **current state** of each task - a row in a database, a line in a YAML file - and *overwrite* it on every change; taska stores the opposite: an **append-only log of every change** (`create`, `update`, `delete`, ...) in `.taska/mutations.jsonl`. The state you see is *replayed* from that log on demand; it is never written down.
-
-That single choice is the whole point, because it is what makes git work *for* you instead of against you:
-
-- **Branches actually merge.** Two people (or two agents) on separate branches each *append* their events, so merging is just unioning two lists - which taska's git merge driver does cleanly and **per-field**. Two overwritten *snapshots*, by contrast, can only collide. The log is the reason concurrent edits reconcile instead of clobbering each other: no database to keep in sync, no manual sync step, no tasks silently dropped or "resurrected" after deletion.
-- **Full history, for free.** Every change is in the log, so you can see exactly how a task reached its current state - and a delete is just another event, so it stays deleted.
-- **One-pass reconstruction.** Barely noticable, but nice side-effect of this design is that the whole dependency graph is rebuilt in a single sweep of the event log - no separate load-then-resolve step usually needed for state-storing task managers - blazing fast and friendlier to cache than a two-pass walk over a full graph.
-
-When the event log eventually grows large enough that replaying it gets slow(~ million of updates, see [compaction](docs/MERGE.md#compaction-and-the-baseline)), you can compact it - the same move Cassandra makes with its SSTables. Compaction folds the old prefix of the log into `baseline.jsonl`, a snapshot of the dependency graph in its final state. That file never produces merge conflicts, because it is built only from old, settled events. The smaller `mutations.jsonl` holds the recent events and is the one the merge driver reconciles.
-
-See [docs/MERGE.md](docs/MERGE.md) for the detailed design: the event log and `seq` model, the merge/rebase algorithm, revert handling, per-field conflict resolution, and compaction.
-
-### Non-intrusive
-
-No git hooks, no agent session hooks, no `settings.json` edits, and no remote required. It works entirely offline - prototype locally, review an agent's branch before merging, and push when *you* decide. The only file taska touches outside `.taska/` is a small, clearly-marked integration block that `ta init` keeps in sync in `AGENTS.md`/`CLAUDE.md` (delimited by `<!-- BEGIN/END TASKA INTEGRATION -->` - safe to edit around or delete; `ta prime` prints the full guide on demand).
-
-The default setup installs a custom merge driver - via `.gitattributes` - for **only** the two files taska manages: `.taska/mutations.jsonl` (the event log) and `.taska/baseline.jsonl` (the checkpoint). Unlike a git hook, it runs only for those files; taska never touches anything else during your merge conflict resolutions.
-
+<!-- DEMO SLOT: replace this comment with ![demo](docs/demo.gif) once the cast is
+     recorded. Run `vhs docs/demo.tape` (see the task `demo-cast`). Do not commit
+     the image reference before the file exists - a broken image on the first
+     screen is worse than none. -->
 
 ## Install
 
@@ -127,6 +91,70 @@ $ ta list --format jsonl
 ```
 
 Your first `ta init` commits `.taska/` and `.gitattributes` for you; commit later `.taska/` changes along with the code they describe - they travel with the repo. The merge-driver *definitions*, however, live in per-clone local git config: a fresh clone (or a late `git init`) re-registers them automatically on the next `ta` command, since the committed `.gitattributes` already declares them. taska warns on stderr only if `.gitattributes` itself is missing the entries - then run `ta init` to restore them.
+
+## Why taska?
+
+Three ways a repo tracks its work, and what each costs:
+
+| | Markdown TODO files | Database-backed trackers | **taska** |
+|---|---|---|---|
+| **Storage** | Prose, scattered across files | A database plus an exported file, kept in sync | One append-only JSONL log; state is *replayed*, never stored |
+| **Concurrent branches** | Textual merge conflicts | The export can drift from the database | A git merge driver reconciles them **per field** |
+| **Dependencies** | By hand, if at all | Supported | Typed DAG, cycle-checked, with `ta list --ready` |
+| **Querying** | `grep` | SQL or a CLI | `ta list owner=alice priority>3 notes=~timeout` |
+| **Setup footprint** | None | git hooks, agent session hooks, a generated instruction block | Two `.gitattributes` lines and one delimited block. No hooks |
+| **Offline** | Yes | Often needs a push to synchronize | Fully offline - push when *you* decide |
+| **For agents** | Unstructured context bloat | JSON output | JSON/NDJSON, `--ready`, and an exit-code taxonomy to branch on |
+
+The sections below are the long version of that last column.
+
+## Design decisions
+
+### Everything is configurable!
+
+No assumptions about your workflow. Only a bare minimum of fields is fixed - `id` and `deps`. Everything else is arbitrary `key=value` fields that you define yourself. By default`status=closed` means the task is done, but you can re-configure both the field name and the value that means the task is done - name it `closed`, `done`, or whatever you get used to; taska mandates no fixed schema, so you grow your own conventions. This design principle leads to simple and flexible SQL-like select and update syntax:
+```
+ta list owner=alice severity>5 notes=~exception
+ta update some-task-id notes+="all done, ready for review" owner=review_agent
+```
+
+### Task schema enforcement
+
+#### Soft enforcement
+
+By default, right after you initialize taska, no schema is defined. The columns you define for your first task becomes a soft-enforced schema. The goal of this mode is to prevent you from typos and unintentional violation of your project's rules and concepts. If you have a `priority` field in your tasks and you accidentally mistype it as `pirority`, taska will deny the update with an error:
+```
+- undeclared field `pirority` (task type `task` is closed; did you mean `priority`?; declared fields: notes, priority, status, title)
+````
+
+But if you really want to add a new field that didn't exist before in other tasks you just need to add `--new-field` to your create or update command once. After that this field name becomes known and you don't need to use this flag in further commands.
+
+This mode allows having structure and avoid simple mistakes without any overhead. All fields are optional, but at least you avoid usual mess with each task defining its own field names.
+
+#### Hard enforcement
+
+When you do want real schema guarantees, taska supports defining hard schemas that tasks have to conform to. Declare per-task-type schemas in the `[task_types]` block in config.yml: It supports all typed fields you can think about (`string`, `int`, `uint`, `enum`, `datetime`, `array<T>`, `set<T>`, ...), required fields, closed types, and **workflows** - an enum field can declare the moves it allows, turning a status into a state machine - all enforced on every write, with every violation reported in one error. Tasks stay schema-agnostic until you declare a type. This gives you as much strictness and flexibility as a standard database schema.
+
+### An append-only log, not a snapshot
+
+The append-only log is inspired by how high-performance KV stores like Cassandra absorb concurrent updates from tens of thousands of clients. Raw speed isn't the goal for a task tracker, but the same design earns its keep here for a different reason. Most trackers store the **current state** of each task - a row in a database, a line in a YAML file - and *overwrite* it on every change; taska stores the opposite: an **append-only log of every change** (`create`, `update`, `delete`, ...) in `.taska/mutations.jsonl`. The state you see is *replayed* from that log on demand; it is never written down.
+
+That single choice is the whole point, because it is what makes git work *for* you instead of against you:
+
+- **Branches actually merge.** Two people (or two agents) on separate branches each *append* their events, so merging is just unioning two lists - which taska's git merge driver does cleanly and **per-field**. Two overwritten *snapshots*, by contrast, can only collide. The log is the reason concurrent edits reconcile instead of clobbering each other: no database to keep in sync, no manual sync step, no tasks silently dropped or "resurrected" after deletion.
+- **Full history, for free.** Every change is in the log, so you can see exactly how a task reached its current state - and a delete is just another event, so it stays deleted.
+- **One-pass reconstruction.** Barely noticable, but nice side-effect of this design is that the whole dependency graph is rebuilt in a single sweep of the event log - no separate load-then-resolve step usually needed for state-storing task managers - blazing fast and friendlier to cache than a two-pass walk over a full graph.
+
+When the event log eventually grows large enough that replaying it gets slow(~ million of updates, see [compaction](docs/MERGE.md#compaction-and-the-baseline)), you can compact it - the same move Cassandra makes with its SSTables. Compaction folds the old prefix of the log into `baseline.jsonl`, a snapshot of the dependency graph in its final state. That file never produces merge conflicts, because it is built only from old, settled events. The smaller `mutations.jsonl` holds the recent events and is the one the merge driver reconciles.
+
+See [docs/MERGE.md](docs/MERGE.md) for the detailed design: the event log and `seq` model, the merge/rebase algorithm, revert handling, per-field conflict resolution, and compaction.
+
+### Non-intrusive
+
+No git hooks, no agent session hooks, no `settings.json` edits, and no remote required. It works entirely offline - prototype locally, review an agent's branch before merging, and push when *you* decide. The only file taska touches outside `.taska/` is a small, clearly-marked integration block that `ta init` keeps in sync in `AGENTS.md`/`CLAUDE.md` (delimited by `<!-- BEGIN/END TASKA INTEGRATION -->` - safe to edit around or delete; `ta prime` prints the full guide on demand).
+
+The default setup installs a custom merge driver - via `.gitattributes` - for **only** the two files taska manages: `.taska/mutations.jsonl` (the event log) and `.taska/baseline.jsonl` (the checkpoint). Unlike a git hook, it runs only for those files; taska never touches anything else during your merge conflict resolutions.
+
 
 ## How it works
 
