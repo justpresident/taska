@@ -7,6 +7,28 @@ git log.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-08
+
+Delivers the Windows binary 1.3.0 announced: that build failed on a
+`cfg(not(unix))` branch nothing had ever compiled. Linux and macOS are unchanged
+from 1.3.0.
+
+### Added
+- **Prebuilt Windows binaries.** `x86_64-pc-windows-msvc` joins the release
+  matrix as a `.tar.gz` like every other target, so `ta self-update` works there
+  too. `scripts/install.sh` still needs a POSIX shell and points Windows users at
+  the release archive.
+
+### Fixed
+- **`ta` compiles on Windows.** The `cfg(not(unix))` arm of the PATH-shadowing
+  check passed `std::fs::Metadata::is_file` to `Result::is_ok_and` as a function
+  path, but `is_ok_and` hands the value over by move while `is_file` borrows it,
+  so the arm never type-checked. No prebuilt Windows binary existed before now,
+  so no shipped binary was affected - but `cargo install taska` on Windows failed
+  on 1.3.0 and earlier.
+- CI builds for Windows on every push, so this class of breakage now fails on a
+  push instead of at release time.
+
 ## [1.3.0] - 2026-09-08
 
 Workflow enforcement for multi-agent handoff, an editor path for brand-new
@@ -24,10 +46,6 @@ tasks, and a Windows binary.
   of every known editable field with the required task type and applicable
   defaults prefilled - and rejects an id that already exists before the editor
   opens.
-- **Prebuilt Windows binaries.** `x86_64-pc-windows-msvc` joins the release
-  matrix as a `.tar.gz` like every other target, so `ta self-update` works there
-  too. `scripts/install.sh` still needs a POSIX shell and points Windows users at
-  the release archive.
 - **`ta prime` reports declared transitions**, so an agent reads a field's state
   machine up front instead of discovering it by tripping the write gate.
 
