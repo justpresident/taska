@@ -1,2 +1,5 @@
 .claude
 target
+
+# Scratch release notes (docs/crate_release_process.md step 13) - never committed.
+docs/release-notes-*.md
