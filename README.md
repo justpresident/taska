@@ -14,10 +14,9 @@ can work on separate branches and both sets of changes survive the merge.
 No database. No daemon. No git hooks. No remote required. Works entirely offline,
 for humans and agents alike.
 
-<!-- DEMO SLOT: replace this comment with ![demo](docs/demo.gif) once the cast is
-     recorded. Run `vhs docs/demo.tape` (see the task `demo-cast`). Do not commit
-     the image reference before the file exists - a broken image on the first
-     screen is worse than none. -->
+<!-- DEMO SLOT: replace this comment with ![demo](docs/demo.gif) once recorded
+     (`vhs docs/demo.tape`). Never add the image reference before the file
+     exists - a broken image on the first screen is worse than none. -->
 
 ## Install
 
@@ -170,7 +169,7 @@ Each event carries a store-minted, strictly increasing `seq`. That sequence - no
 
 ## Collaboration & merging
 
-Because the log is plain git-tracked JSONL, two people (or two agent branches) can edit tasks independently. When their branches merge, git invokes taska's merge driver, which:
+Because the log is plain version-controlled JSONL, two people (or two agent branches) can edit tasks independently. When their branches merge, git (or Mercurial/Sapling, which registers the same driver as an hg merge tool) invokes taska's merge driver, which:
 
 1. Replays each branch's events since the fork.
 2. Lets **non-overlapping** changes through untouched - different tasks, different fields, even different fields of the *same* task all merge cleanly.
@@ -312,7 +311,7 @@ Because the times are folded into the baseline at compaction, they survive even 
 |---|---|
 | `ta init` | Create the store, register the git merge drivers, and write/refresh a small, **config-agnostic** agent-integration block in `AGENTS.md` (created if neither it nor `CLAUDE.md` exists) and any existing `CLAUDE.md` - bare command shapes + durable working habits + pointers to `ta prime` (for this store's schema and ready-to-run examples) and `ta <command> --help`. Marker-delimited and idempotent; run once per clone. Commits the store, `.gitattributes`, and the block it wrote in one commit (`--no-commit` to skip), skipping any gitignored path |
 | `ta create <id> [field=value ...]` | Create a task with arbitrary fields. A field name no task uses yet is rejected (with a did-you-mean) unless `--new-field` - so a typo like `titel` can't silently spawn a phantom column. The first task on an empty store is exempt (it seeds the vocabulary) |
-| `ta update <id> <field=value \| field+=value ...> [--if COND ...]` | `=` sets a field; `+=` appends to a text field (one entry per line). Mix both in one command. Appends merge conflict-free (concurrent appends accumulate). Introducing a never-before-seen field name needs `--new-field`, same as `create`. `--if COND` (repeatable, same grammar as `ta list`) applies the write ONLY if the task currently matches every condition - an atomic compare-and-swap checked under the store lock, so two agents can race to claim a task (`--if status=todo`) and exactly one wins; the loser exits **3** (see [Exit codes](#exit-codes)) |
+| `ta update <id> <field=value \| field+=value \| field-=value ...> [--if COND ...]` | `=` sets a field; `+=` accumulates - appending to a text field (one entry per line), adding to a declared numeric field, inserting into a declared `set<...>`; `-=` subtracts or removes an element. Mix them in one command. Accumulating writes merge conflict-free (concurrent `points+=2` and `points+=3` land as `+5`). Introducing a never-before-seen field name needs `--new-field`, same as `create`. `--if COND` (repeatable, same grammar as `ta list`) applies the write ONLY if the task currently matches every condition - an atomic compare-and-swap checked under the store lock, so two agents can race to claim a task (`--if status=todo`) and exactly one wins; the loser exits **3** (see [Exit codes](#exit-codes)) |
 | `ta edit <id> [--create] [--json \| --toml]` | Open a task's fields in `$VISUAL`/`$EDITOR` (`vi` fallback), as TOML by default or JSON with `--json`. The document includes every known editable field: stored values and applicable defaults are prefilled, while unset fields use `""` (taska's null/unset value); computed and relationship columns are excluded. Without `--create`, the id must exist; with `--create`, the id must not exist. Saving applies schema-checked field changes through the same write paths as `update`/`create`; deleting a **stored** field's line unsets it (a template-only line has no value behind it, so removing it writes nothing - blank it with `""` to suppress a default), a save carrying no fields at all discards, an unchanged save writes nothing, and an existing id with `--create` fails before the editor opens. Validation failures offer to reopen the same file and default to yes (EOF/Ctrl-D discards); new field names are confirmed interactively. Relationships remain managed by `ta dep` |
 | `ta dep add <task> <type>=<target> ...` | Add typed relationship edge(s); each `type` must be declared in `[relationships]` (e.g. `ta dep add api depends_on=db relates_to=ui`). A `hierarchy` type like `has_subtask` makes a parent/child edge that gates like a blocker but renders distinctly. Rejects a second blocking edge between the same pair, or a second parent for a task |
 | `ta dep remove <task> <type>=<target> ...` | Remove typed edge(s); a type's configured `inverse` name works too (`ta dep remove db blocks=api` removes `api depends_on db`) |
@@ -375,7 +374,7 @@ Human output is **colored** when stdout is a terminal, and **consistently across
 | `field!=value` | not equal |
 | `field=~regex` | regex over the value's string form (perl/bash spelling) |
 | `field!~regex` | regex that does not match |
-| `field>value` * `>=` * `<` * `<=` | ordering - numbers numerically, strings/dates lexicographically; a cross-type compare never matches |
+| `field>value`, `field>=value`, `field<value`, `field<=value` | ordering - numbers numerically, strings/dates lexicographically; a cross-type compare never matches |
 
 `field` may be a task field, `id`, `deps` (a target under any relationship type), a relationship type or inverse name (`depends_on=db`, `subtask_of=epic`, `blocks=api`), or a computed column (`unblocks`, `blocked_by`, `subtasks`).
 
