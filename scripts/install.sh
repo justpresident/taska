@@ -66,7 +66,7 @@ sha256() { # sha256 <file> -> hex on stdout, or non-zero if no tool
 detect_target() {
   case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
-      die "Windows is not covered by the prebuilt binaries - use WSL, or 'cargo install ${CRATE}'" ;;
+      die "this installer needs a POSIX shell - on Windows, download ta-<tag>-x86_64-pc-windows-msvc.tar.gz from https://github.com/${REPO}/releases/latest, or use WSL, or 'cargo install ${CRATE}'" ;;
   esac
   local os arch
   case "$(uname -s)" in

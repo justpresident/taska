@@ -21,13 +21,15 @@ for humans and agents alike.
 
 ## Install
 
-### **The quick way - a prebuilt `ta` for Linux/macOS, no Rust toolchain needed**:
+### **The quick way - a prebuilt `ta`, no Rust toolchain needed**:
 
 ```console
 $ curl -fsSL https://raw.githubusercontent.com/justpresident/taska/master/scripts/install.sh | bash
 ```
 
 It picks the right binary for your OS/arch from the [latest release](https://github.com/justpresident/taska/releases/latest), verifies its checksum, installs to `/usr/local/bin` (or `~/.local/bin` if that isn't writable), and - if that directory isn't on your `PATH` - adds it to your shell's rc file (`.zshrc`/`.bashrc`/`.bash_profile`/`config.fish`/`.profile`, detected from `$SHELL`). Prefer to read before you pipe? It's [`scripts/install.sh`](scripts/install.sh).
+
+The installer needs a POSIX shell, so it covers Linux and macOS (x86_64 and ARM64). **On Windows**, download `ta-<tag>-x86_64-pc-windows-msvc.tar.gz` from the [latest release](https://github.com/justpresident/taska/releases/latest), extract it (`tar -xzf`, built into Windows 10+) and put `ta.exe` on your `PATH` - `ta self-update` handles upgrades from there.
 
 **Or, with Rust installed, from crates.io**:
 

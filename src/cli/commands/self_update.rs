@@ -18,14 +18,15 @@ const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
 /// The release-asset target triple for this platform, matching what the release
 /// workflow ships (static musl on Linux `x86_64`/`aarch64`, both arches on
-/// macOS). `None` means there's no prebuilt binary - the caller falls back to
-/// `cargo install`.
+/// macOS, MSVC on Windows `x86_64`). `None` means there's no prebuilt binary -
+/// the caller falls back to `cargo install`.
 fn release_target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => Some("x86_64-unknown-linux-musl"),
         ("linux", "aarch64") => Some("aarch64-unknown-linux-musl"),
         ("macos", "x86_64") => Some("x86_64-apple-darwin"),
         ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+        ("windows", "x86_64") => Some("x86_64-pc-windows-msvc"),
         _ => None,
     }
 }
@@ -86,9 +87,10 @@ pub fn cmd_self_update(check: bool, force: bool) -> Result<(), DynError> {
 
     // The release workflow nests the binary as `<asset-stem>/ta` (see
     // .github/workflows/release.yml); derive that path from the asset's own name
-    // so the tag is never a second source of truth.
+    // so the tag is never a second source of truth. EXE_SUFFIX is "" everywhere
+    // except Windows, where the archived binary is `ta.exe`.
     let stem = asset.name.strip_suffix(".tar.gz").unwrap_or(&asset.name);
-    let bin_path_in_archive = format!("{stem}/{BIN}");
+    let bin_path_in_archive = format!("{stem}/{BIN}{}", std::env::consts::EXE_SUFFIX);
 
     // `--force` re-downloads even at the same version by claiming we're older.
     let current = if force { "0.0.0" } else { CURRENT };
@@ -137,6 +139,7 @@ mod tests {
             "aarch64-unknown-linux-musl",
             "x86_64-apple-darwin",
             "aarch64-apple-darwin",
+            "x86_64-pc-windows-msvc",
         ];
         if let Some(t) = release_target() {
             assert!(shipped.contains(&t), "unshipped target {t}");
@@ -148,11 +151,19 @@ mod tests {
 
     #[test]
     fn bin_path_is_derived_from_the_asset_name() {
-        // Mirrors the derivation in `cmd_self_update`: <asset-stem>/ta.
+        // Mirrors the derivation in `cmd_self_update`: <asset-stem>/ta, plus the
+        // platform's EXE_SUFFIX (empty everywhere but Windows).
         let asset = "ta-v1.0.0-x86_64-unknown-linux-musl.tar.gz";
         let stem = asset.strip_suffix(".tar.gz").unwrap_or(asset);
+        let suffix = std::env::consts::EXE_SUFFIX;
         assert_eq!(
-            format!("{stem}/{BIN}"),
+            format!("{stem}/{BIN}{suffix}"),
+            format!("ta-v1.0.0-x86_64-unknown-linux-musl/ta{suffix}")
+        );
+        // The archive layout is uniform, so only the binary's own name varies.
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            format!("{stem}/{BIN}{suffix}"),
             "ta-v1.0.0-x86_64-unknown-linux-musl/ta"
         );
     }

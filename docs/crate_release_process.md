@@ -139,19 +139,21 @@ crates.io - the two halves are independent.
 ## Attach the prebuilt binaries
 
 14. Publishing the release in the previous step triggers
-    `.github/workflows/release.yml`, which builds three binaries on their native
+    `.github/workflows/release.yml`, which builds five binaries on their native
     runners and attaches them to this release:
 
     | Target | Runner | Asset |
     |---|---|---|
     | `x86_64-unknown-linux-musl` | `ubuntu-latest` | static Linux binary (any distro, any glibc) |
+    | `aarch64-unknown-linux-musl` | `ubuntu-24.04-arm` | static Linux ARM64 |
     | `x86_64-apple-darwin` | `macos-15-intel` | macOS Intel |
     | `aarch64-apple-darwin` | `macos-15` | macOS Apple Silicon |
+    | `x86_64-pc-windows-msvc` | `windows-latest` | Windows x86_64 (`ta.exe`) |
 
     Each is a `ta-vX.Y.Z-<target>.tar.gz` (holding the stripped `ta` + `README.md`
     + `LICENSE`) with a sibling `.sha256`. Watch the run finish
-    (`gh run watch` / Actions tab) and confirm **all six assets** (three archives
-    + three checksums) are attached to the release. The binaries are stripped and
+    (`gh run watch` / Actions tab) and confirm **all ten assets** (five archives
+    + five checksums) are attached to the release. The binaries are stripped and
     fat-LTO'd via `[profile.release]` in `Cargo.toml` - nothing to do per target.
 
 15. **If CI is unavailable**, build the binaries by hand from the tagged tree and

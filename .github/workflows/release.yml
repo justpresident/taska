@@ -46,6 +46,13 @@ jobs:
           # macOS Apple Silicon, built native on the arm runner (plain macos-15).
           - os: macos-15
             target: aarch64-apple-darwin
+          # Windows x86_64 (MSVC, the default host toolchain on the runner). The
+          # asset is a .tar.gz like every other target rather than a .zip: it
+          # keeps ONE asset contract for `ta self-update` (which unpacks tar.gz
+          # via compression-flate2), and Windows 10+ ships bsdtar, so `tar -xzf`
+          # works out of the box.
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
 
     steps:
       - name: Resolve tag
@@ -78,7 +85,10 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }} --bin ta
 
       # Archive: ta + README + LICENSE as ta-<tag>-<target>.tar.gz, plus a sibling
-      # .sha256. The binary is already stripped via [profile.release].
+      # .sha256. The binary is already stripped via [profile.release]. Windows
+      # builds `ta.exe`, so the copy is suffix-aware; the archive layout
+      # (<stem>/<bin>) is identical on every target, which is what lets
+      # self-update derive the nested path from the asset name alone.
       - name: Package
         id: package
         shell: bash
@@ -87,10 +97,18 @@ jobs:
           name="ta-${{ steps.tag.outputs.name }}-${{ matrix.target }}"
           staging="$name"
           mkdir "$staging"
-          cp "target/${{ matrix.target }}/release/ta" "$staging/"
+          exe=""
+          case "${{ matrix.target }}" in *-windows-*) exe=".exe" ;; esac
+          cp "target/${{ matrix.target }}/release/ta$exe" "$staging/"
           cp README.md LICENSE "$staging/"
           tar czf "$name.tar.gz" "$staging"
-          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          # macOS has shasum but not sha256sum; Git Bash on the Windows runner is
+          # the other way round. Take whichever exists.
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          else
+            sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
           echo "archive=$name.tar.gz" >> "$GITHUB_OUTPUT"
 
       # Upload via the `gh` CLI (a Go binary preinstalled on the runners) rather
