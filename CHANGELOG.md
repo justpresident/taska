@@ -7,6 +7,11 @@ git log.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-08
+
+Workflow enforcement for multi-agent handoff, an editor path for brand-new
+tasks, and a Windows binary.
+
 ### Added
 - **Per-type status transition workflows.** An `enum` field can declare
   `transitions` - the values each value may move into - turning a status into a
@@ -19,6 +24,12 @@ git log.
   of every known editable field with the required task type and applicable
   defaults prefilled - and rejects an id that already exists before the editor
   opens.
+- **Prebuilt Windows binaries.** `x86_64-pc-windows-msvc` joins the release
+  matrix as a `.tar.gz` like every other target, so `ta self-update` works there
+  too. `scripts/install.sh` still needs a POSIX shell and points Windows users at
+  the release archive.
+- **`ta prime` reports declared transitions**, so an agent reads a field's state
+  machine up front instead of discovering it by tripping the write gate.
 
 ### Changed
 - The edit form moved out of the CLI into the frontend-agnostic `action::edit`,
