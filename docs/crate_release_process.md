@@ -99,8 +99,15 @@ crates.io - the two halves are independent.
    Release v0.3.0
    MSG
    ```
-10. Tag **that** commit so the tag and the published version agree:
+10. Tag **that** commit so the tag and the published version agree. Check first
+    that the tag does not already exist - locally *or* on the remote - and never
+    move or recreate one that does: a pushed tag is what the release assets,
+    `install.sh` and `ta self-update` resolve through, and crates.io versions are
+    immutable, so the answer to "that release was wrong" is always a new patch
+    version, never a moved tag.
     ```bash
+    git rev-parse -q --verify v0.3.0 && echo "EXISTS locally - stop"
+    git ls-remote --exit-code --tags origin v0.3.0 && echo "EXISTS on remote - stop"
     git tag v0.3.0
     ```
 11. Push the commit and the tag:
