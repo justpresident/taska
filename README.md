@@ -366,7 +366,9 @@ Dates work for free: the computed timestamps are RFC 3339 strings, so a lexicogr
 
 ## Status
 
-taska is early (`0.x`) and the on-disk format may still evolve before `1.0`. The event log and merge model are the stable core; planned work includes optional schema validation, task archiving, richer queries, and built-in grooming prompts for agents.
+taska is stable and in daily use - this repository's own backlog has been tracked in it since the first commit. The event log, merge model, and CLI surface follow semantic versioning, and `1.0` set the on-disk format floor: a store written by any `1.x` is readable by every later `1.x`, and a format change ships with a migration pass (`ta repair --migrate`).
+
+Your tasks stay readable without taska. `.taska/mutations.jsonl` is one JSON event per line and `.taska/baseline.jsonl` a snapshot of settled state - both plain, documented in [docs/MERGE.md](docs/MERGE.md), and greppable with `jq`. There is no database to export from and nothing to migrate out of if you stop using it.
 
 ## License
 
