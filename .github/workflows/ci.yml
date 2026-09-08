@@ -40,6 +40,31 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  windows:
+    name: Windows build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows
+
+      # The release workflow ships a Windows binary, so the `cfg(not(unix))`
+      # branches have to compile on every push. Without this job they were only
+      # ever compiled at release time, which is how a type error in one of them
+      # (`is_ok_and` hands `Metadata` over by value; `is_file` borrows) survived
+      # to a release build. Build only - the e2e suite makes POSIX assumptions
+      # that are their own piece of work.
+      - name: Build
+        run: cargo build --locked --bin ta
+
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
