@@ -78,8 +78,9 @@ crates.io - the two halves are independent.
 
 ## Bump and verify the artifact
 
-7. Decide the new version from the review above (pre-1.0 semver: breaking changes
-   bump the **minor**, features/fixes bump the **patch**). Bump `version` in
+7. Decide the new version from the review above (semver, now that the project is
+   `1.x`: breaking changes bump the **major**, backwards-compatible features the
+   **minor**, fixes the **patch**). Bump `version` in
    `Cargo.toml`, then run `cargo build` so `Cargo.lock` picks up the new `taska`
    version.
 8. Verify the package on a **clean** tree (do not use `--allow-dirty` - it would
