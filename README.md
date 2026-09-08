@@ -15,8 +15,9 @@ No database. No daemon. No git hooks. No remote required. Works entirely offline
 for humans and agents alike.
 
 <!-- DEMO SLOT: replace this comment with ![demo](docs/demo.gif) once recorded
-     (`vhs docs/demo.tape`). Never add the image reference before the file
-     exists - a broken image on the first screen is worse than none. -->
+     (see docs/demo.script for the one-liner). Never add the image reference
+     before the file exists - a broken image on the first screen is worse than
+     none. -->
 
 ## Install
 

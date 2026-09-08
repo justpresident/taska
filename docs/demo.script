@@ -1,0 +1,99 @@
+# The README demo, driven by scriptty - a PTY demo engine that simulates typing
+# independently of how the program echoes it: https://crates.io/crates/scriptty
+#
+#   cargo install scriptty
+#   cargo build                                   # or --release
+#   TA="$PWD/target/debug/ta" bash docs/demo-setup.sh
+#   scriptty --script docs/demo.script --command bash -- --rcfile /tmp/taska-demo/.demo-bashrc -i
+#
+# Record it by running that under asciinema and converting with agg:
+#   asciinema rec docs/demo.cast -c "scriptty --script docs/demo.script \
+#       --command bash -- --rcfile /tmp/taska-demo/.demo-bashrc -i"
+#   agg docs/demo.cast docs/demo.gif
+#
+# Every step waits on the shell prompt rather than a fixed sleep, so the demo
+# can't race a slow machine and needs no retiming when output changes.
+
+expect "$ "
+
+type "# two tasks, and a dependency between them"
+key Enter
+expect "$ "
+wait 400ms
+type "ta create migrate-db title='Run DB migration' status=open owner=alice"
+key Enter
+expect "$ "
+
+type "ta create deploy-api title='Deploy the API' status=open owner=bob"
+key Enter
+expect "$ "
+
+type "ta dep add deploy-api depends_on=migrate-db"
+key Enter
+expect "$ "
+
+wait 600ms
+type "# --ready computes what is actually actionable: deploy-api is blocked"
+key Enter
+expect "$ "
+wait 400ms
+type "ta list --ready"
+key Enter
+expect "$ "
+wait 1500ms
+
+type "git add -A && git commit -qm 'track the backlog'"
+key Enter
+expect "$ "
+
+wait 600ms
+type "# an agent picks up the migration on its own branch"
+key Enter
+expect "$ "
+wait 400ms
+type "git checkout -q -b agent/migrate && ta update migrate-db status=closed"
+key Enter
+expect "$ "
+type "git commit -qam 'agent: migration done'"
+key Enter
+expect "$ "
+
+wait 600ms
+type "# meanwhile, on main, you reassign that same task"
+key Enter
+expect "$ "
+wait 400ms
+type "git checkout -q main && ta update migrate-db owner=carol"
+key Enter
+expect "$ "
+type "git commit -qam 'main: reassign'"
+key Enter
+expect "$ "
+
+wait 800ms
+type "# no database, no daemon, no human: git merges the task log"
+key Enter
+expect "$ "
+wait 400ms
+type "git merge agent/migrate -m 'merge agent branch'"
+key Enter
+expect "$ "
+wait 1500ms
+
+type "# both edits survived - status from the agent, owner from you"
+key Enter
+expect "$ "
+wait 400ms
+type "ta show migrate-db"
+key Enter
+expect "$ "
+wait 2500ms
+
+type "# and closing the migration unblocked the deploy"
+key Enter
+expect "$ "
+wait 400ms
+type "ta list --ready"
+key Enter
+expect "$ "
+wait 3s
