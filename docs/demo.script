@@ -30,8 +30,13 @@
 # terminal only wraps sooner than necessary; pinning it WIDER is what produces
 # the overwriting redraw - so record in a terminal at least 80 columns wide.
 #
-# The longest typed line here is 70 characters plus the 2-character prompt, so it
-# fits 80 columns with room to spare - keep it that way when editing.
+# One command per line - no `&&` chaining - so each step is its own prompt, and
+# the branch shown in the prompt visibly changes on the checkout rather than
+# being buried mid-line.
+#
+# Budget the width: the prompt is "(branch) $ ", so on `agent/migrate` it costs
+# 18 columns, leaving 62 for the command. The longest line here is 69 characters
+# and runs on `main` (a 9-column prompt) - check both when editing.
 #
 # Every step waits on the shell prompt rather than a fixed sleep, so the demo
 # can't race a slow machine and needs no retiming when output changes.
@@ -63,7 +68,10 @@ key Enter
 expect "$ "
 wait 1500ms
 
-type "git add -A && git commit -qm 'track the backlog'"
+type "git add -A"
+key Enter
+expect "$ "
+type "git commit -qm 'track the backlog'"
 key Enter
 expect "$ "
 
@@ -72,7 +80,11 @@ show "\e[90m# an agent picks up the migration on its own branch\e[0m"
 key Enter
 expect "$ "
 wait 400ms
-type "git checkout -q -b agent/migrate && ta update migrate-db status=closed"
+type "git checkout -q -b agent/migrate"
+key Enter
+expect "$ "
+wait 600ms
+type "ta update migrate-db status=closed"
 key Enter
 expect "$ "
 type "git commit -qam 'agent: migration done'"
@@ -84,7 +96,11 @@ show "\e[90m# meanwhile, on main, you reassign that same task\e[0m"
 key Enter
 expect "$ "
 wait 400ms
-type "git checkout -q main && ta update migrate-db owner=carol"
+type "git checkout -q main"
+key Enter
+expect "$ "
+wait 600ms
+type "ta update migrate-db owner=carol"
 key Enter
 expect "$ "
 type "git commit -qam 'main: reassign'"

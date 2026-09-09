@@ -27,7 +27,19 @@ git config user.name "taska demo"
 
 # The shell the demo runs in: bare prompt, no history clutter, already in the repo.
 cat > "$DEMO_DIR/.demo-bashrc" <<RC
-PS1='\[\e[1;32m\]\$ \[\e[0m\]'
+# Which branch we are on is half the story this demo tells, so the prompt shows
+# it. Evaluated per prompt via \$(...), and silent outside a repo. Yellow is the
+# conventional colour for it and collides with nothing taska paints (cyan ids,
+# green status, grey cursor).
+_branch() {
+  local b
+  b=\$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || return 0
+  printf '(%s) ' "\$b"
+}
+# The trailing space of the prompt stays INSIDE the green span: with the reset
+# in between, the literal "\$ " is no longer contiguous and every
+# expect "\$ " in docs/demo.script stops matching.
+PS1='\[\e[33m\]\$(_branch)\[\e[0m\]\[\e[1;32m\]\$ \[\e[0m\]'
 unset PROMPT_COMMAND
 # A minimal PATH with exactly ONE \`ta\` on it. Inheriting the recorder's PATH
 # risks a second, older \`ta\` (a cargo-installed one, say), and taska warns
