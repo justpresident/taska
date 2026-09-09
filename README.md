@@ -14,10 +14,7 @@ can work on separate branches and both sets of changes survive the merge.
 No database. No daemon. No git hooks. No remote required. Works entirely offline,
 for humans and agents alike.
 
-<!-- DEMO SLOT: replace this comment with ![demo](docs/demo.gif) once recorded
-     (see docs/demo.script for the one-liner). Never add the image reference
-     before the file exists - a broken image on the first screen is worse than
-     none. -->
+![taska demo: two branches edit the same task, git merges both edits](https://raw.githubusercontent.com/justpresident/taska/master/docs/demo.gif)
 
 ## Install
 
