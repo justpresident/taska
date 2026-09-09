@@ -7,12 +7,24 @@
 #   bash docs/record-demo.sh              # -> docs/demo.gif
 #   bash docs/record-demo.sh --preview    # watch it, record nothing
 #
-# It needs scriptty with the PTY-sizing fix (--cols/--rows) plus asciinema and
-# agg, and tells you which is missing. Published scriptty 0.1.0 pins every PTY to
-# 80x24, so on any other terminal width a wrapping line redraws at the wrong
-# column and overwrites the line on screen:
+# It needs scriptty with the PTY-sizing fix (--cols/--rows) and the `\e` string
+# escape, plus asciinema and agg, and tells you which is missing:
 #
 #   cargo install --git https://github.com/justpresident/scriptty
+#
+# COLOUR. Three layers, so the eye can separate them:
+#   - the prompt is a bold green `$` (set in docs/demo-setup.sh), marking where
+#     each step begins;
+#   - narration is grey, and goes through `show` rather than `type` because
+#     `show` writes straight to the terminal and can therefore carry SGR codes -
+#     anything typed is echoed by bash in the default colour and cannot be
+#     styled. The cost is one blank line per narration line: `show` bypasses the
+#     program, so an Enter is needed to make bash draw the next prompt.
+#   - command output keeps taska's own colours (cyan ids, green status, dim for
+#     done), which is what should stand out.
+# Keep the prompt's trailing space INSIDE its colour span: with the reset in
+# between, the literal "$ " is no longer contiguous and `expect "$ "` stops
+# matching.
 #
 # The recording is pinned to 80x24. Pinning the PTY narrower than the real
 # terminal only wraps sooner than necessary; pinning it WIDER is what produces
@@ -25,7 +37,7 @@
 # can't race a slow machine and needs no retiming when output changes.
 expect "$ "
 
-type "# two tasks, and a dependency between them"
+show "\e[90m# two tasks, and a dependency between them\e[0m"
 key Enter
 expect "$ "
 wait 400ms
@@ -42,7 +54,7 @@ key Enter
 expect "$ "
 
 wait 600ms
-type "# --ready computes what is actually actionable: deploy-api is blocked"
+show "\e[90m# --ready computes what is actually actionable: deploy-api is blocked\e[0m"
 key Enter
 expect "$ "
 wait 400ms
@@ -56,7 +68,7 @@ key Enter
 expect "$ "
 
 wait 600ms
-type "# an agent picks up the migration on its own branch"
+show "\e[90m# an agent picks up the migration on its own branch\e[0m"
 key Enter
 expect "$ "
 wait 400ms
@@ -68,7 +80,7 @@ key Enter
 expect "$ "
 
 wait 600ms
-type "# meanwhile, on main, you reassign that same task"
+show "\e[90m# meanwhile, on main, you reassign that same task\e[0m"
 key Enter
 expect "$ "
 wait 400ms
@@ -80,7 +92,7 @@ key Enter
 expect "$ "
 
 wait 800ms
-type "# no database, no daemon, no human: git merges the task log"
+show "\e[90m# no database, no daemon, no human: git merges the task log\e[0m"
 key Enter
 expect "$ "
 wait 400ms
@@ -89,7 +101,7 @@ key Enter
 expect "$ "
 wait 1500ms
 
-type "# both edits survived - status from the agent, owner from you"
+show "\e[90m# both edits survived - status from the agent, owner from you\e[0m"
 key Enter
 expect "$ "
 wait 400ms
@@ -98,7 +110,7 @@ key Enter
 expect "$ "
 wait 2500ms
 
-type "# and closing the migration unblocked the deploy"
+show "\e[90m# and closing the migration unblocked the deploy\e[0m"
 key Enter
 expect "$ "
 wait 400ms

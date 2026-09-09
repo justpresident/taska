@@ -27,7 +27,7 @@ git config user.name "taska demo"
 
 # The shell the demo runs in: bare prompt, no history clutter, already in the repo.
 cat > "$DEMO_DIR/.demo-bashrc" <<RC
-PS1='\$ '
+PS1='\[\e[1;32m\]\$ \[\e[0m\]'
 unset PROMPT_COMMAND
 # A minimal PATH with exactly ONE \`ta\` on it. Inheriting the recorder's PATH
 # risks a second, older \`ta\` (a cargo-installed one, say), and taska warns

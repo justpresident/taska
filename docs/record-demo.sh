@@ -90,6 +90,19 @@ fi
 cannot size the PTY. Install one that does:
     cargo install --git https://github.com/justpresident/scriptty"
 
+# The narration is grey, which needs the `\e` string escape. A scriptty without
+# it renders the codes as literal text, so probe for it rather than trusting the
+# version: run a one-line script and look for a real ESC byte in the output.
+esc_probe="$(mktemp "${TMPDIR:-/tmp}/scriptty-esc.XXXXXX")"
+printf 'show "\\e[90mprobe\\e[0m"\n' > "$esc_probe"
+esc_ok=0
+"$SCRIPTTY_BIN" --script "$esc_probe" --command true 2>/dev/null | grep -q "$(printf '\033')\[90m" && esc_ok=1
+rm -f "$esc_probe"
+[ "$esc_ok" -eq 1 ] || die "this scriptty ($SCRIPTTY_BIN) does not support the \`\\e\` string
+escape, so the demo's grey narration would render as literal text. Install one
+that does:
+    cargo install --git https://github.com/justpresident/scriptty"
+
 if [ "$PREVIEW" -eq 0 ]; then
   command -v asciinema >/dev/null 2>&1 || die "asciinema not found - install it, or use --preview to just watch"
   command -v agg >/dev/null 2>&1 || die "agg not found (renders the cast to a GIF) - install with:
