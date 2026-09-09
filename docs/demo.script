@@ -1,19 +1,30 @@
 # The README demo, driven by scriptty - a PTY demo engine that simulates typing
-# independently of how the program echoes it: https://crates.io/crates/scriptty
+# independently of how the program echoes it: https://github.com/justpresident/scriptty
 #
-#   cargo install scriptty
+# Needs a scriptty with the PTY-sizing fix (--cols/--rows). Published 0.1.0 pins
+# every PTY to 80x24, so on any other terminal width a wrapping line redraws at
+# the wrong column and overwrites the line on screen.
+#
+#   cargo install --git https://github.com/justpresident/scriptty
 #   cargo build                                   # or --release
 #   TA="$PWD/target/debug/ta" bash docs/demo-setup.sh
-#   scriptty --script docs/demo.script --command bash -- --rcfile /tmp/taska-demo/.demo-bashrc -i
+#   scriptty --script docs/demo.script --cols 80 --rows 24 \
+#       --command bash -- --rcfile /tmp/taska-demo/.demo-bashrc -i
 #
 # Record it by running that under asciinema and converting with agg:
 #   asciinema rec docs/demo.cast -c "scriptty --script docs/demo.script \
-#       --command bash -- --rcfile /tmp/taska-demo/.demo-bashrc -i"
+#       --cols 80 --rows 24 --command bash -- --rcfile /tmp/taska-demo/.demo-bashrc -i"
 #   agg docs/demo.cast docs/demo.gif
+#
+# Record in a terminal at least 80 columns wide. Pinning the PTY narrower than
+# the real terminal only wraps sooner than necessary; pinning it WIDER is what
+# produces the overwriting redraw.
+#
+# The longest typed line here is 70 characters plus the 2-character prompt, so
+# it fits 80 columns with room to spare - keep it that way when editing.
 #
 # Every step waits on the shell prompt rather than a fixed sleep, so the demo
 # can't race a slow machine and needs no retiming when output changes.
-
 expect "$ "
 
 type "# two tasks, and a dependency between them"
