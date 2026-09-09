@@ -27,6 +27,34 @@ pub(crate) fn sgr(text: &str, code: &str, on: bool) -> String {
     }
 }
 
+/// The SGR codes this tool paints with, from the terminal's NAMED 16-color
+/// palette so a user's theme remaps them. Named rather than inlined because each
+/// is referenced from more than one renderer, and a task must look the same in
+/// every one of them.
+const SGR_ID: &str = "36"; // cyan
+const SGR_STATUS: &str = "32"; // green
+const SGR_DONE: &str = "2"; // dim - reserved for "this task is done/inactive"
+const SGR_GATING: &str = "1"; // bold
+/// Grey, for the `[seq:N]` cursor. Deliberately NOT `SGR_DONE`: dim carries the
+/// "inactive" meaning everywhere else, and a dim prefix on a fresh mutation would
+/// read as if the task it names were already closed.
+const SGR_SEQ: &str = "90"; // bright black / grey
+
+/// The `[seq:N]` cursor a write command prints - the value `ta watch --since`
+/// and `ta status --current` speak. Metadata about the log rather than about the
+/// task, so it is grey and stays out of the way of the line it prefixes.
+pub(crate) fn seq_tag(seq: u64, color: bool) -> String {
+    sgr(&format!("[seq:{seq}]"), SGR_SEQ, color)
+}
+
+/// A task id inside a prose line - a write command's confirmation - painted the
+/// same cyan the `id` column uses, so one task reads identically whether it turns
+/// up in `list`, `show`, `dep tree` or a `create` confirmation. The backticks
+/// stay outside the color so the id is still delimited once color is off.
+pub(crate) fn task_ref(id: &str, color: bool) -> String {
+    format!("`{}`", sgr(id, SGR_ID, color))
+}
+
 /// The workflow context every human task-renderer needs to color a row the SAME
 /// way: which display column is the status field (painted green), and the done
 /// values (a DONE task's whole row greys, overriding the column colors). Built
@@ -53,11 +81,11 @@ impl RowStyle<'_> {
         if column == DEPS_KEY {
             None
         } else if done {
-            Some("2") // dim / grey
+            Some(SGR_DONE)
         } else if column == ID_KEY {
-            Some("36") // cyan
+            Some(SGR_ID)
         } else if column == self.status_field {
-            Some("32") // green
+            Some(SGR_STATUS)
         } else {
             None
         }
@@ -86,7 +114,7 @@ pub(crate) fn paint_cell(
 /// edge on an active task would read as if the task itself were done.
 const fn group_sgr(gates: bool) -> Option<&'static str> {
     if gates {
-        Some("1") // bold
+        Some(SGR_GATING)
     } else {
         None // plain
     }

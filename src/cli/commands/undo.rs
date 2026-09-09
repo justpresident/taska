@@ -7,7 +7,7 @@
 use crate::action::undo::{apply, plan};
 use crate::cli::confirm;
 use crate::error::DynError;
-use crate::format::{render_state_diff, want_color};
+use crate::format::{render_state_diff, seq_tag, want_color};
 use crate::storage::FileStore;
 
 /// Undo event(s), walking back through real history.
@@ -63,6 +63,6 @@ pub fn cmd_undo(
         );
     }
     let seq = undo.last_seq();
-    println!("[seq:{seq}] Undone.");
+    println!("{} Undone.", seq_tag(seq, color));
     Ok(())
 }

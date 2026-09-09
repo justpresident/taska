@@ -934,3 +934,67 @@ fn dash_c_drives_a_store_in_another_directory() {
         String::from_utf8_lossy(&bad.stderr)
     );
 }
+
+#[test]
+fn every_mutation_reports_its_cursor() {
+    let dir = fresh_dir("mutation-cursor");
+    init_renamed_open(&dir);
+
+    // Every write prints the `[seq:N]` cursor `ta watch --since` and
+    // `ta status --current` speak, so an agent can chain them without a
+    // follow-up `status` call - and prints it the same way whichever verb wrote.
+    let seq_of = |out: &str| -> u64 {
+        let tag = out
+            .split("[seq:")
+            .nth(1)
+            .unwrap_or_else(|| panic!("no `[seq:N]` cursor in output: {out:?}"));
+        tag.split(']')
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("unparseable cursor in: {out:?}"))
+    };
+
+    let created = ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
+    let s_created = seq_of(&created);
+    let s_created_b = seq_of(&ta(&dir, &["create", "b", &format!("{STATUS_FIELD}=open")]));
+    assert!(s_created_b > s_created, "cursor advances: {created:?}");
+
+    // `dep add` is a write like any other, so it reports a cursor too.
+    let added = ta(&dir, &["dep", "add", "a", &format!("{BLOCKER}=b")]);
+    let s_added = seq_of(&added);
+    assert!(
+        s_added > s_created_b,
+        "dep add advances the cursor: {added:?}"
+    );
+
+    let updated = ta(&dir, &["update", "a", "note=x", "--new-field"]);
+    assert!(seq_of(&updated) > s_added, "update advances: {updated:?}");
+
+    let removed = ta(&dir, &["dep", "remove", "a", &format!("{BLOCKER}=b")]);
+    assert!(seq_of(&removed) > seq_of(&updated), "dep remove advances");
+
+    let deleted = ta(&dir, &["delete", "b"]);
+    assert!(seq_of(&deleted) > seq_of(&removed), "delete advances");
+
+    // A write that appends nothing has no cursor to report - the no-op branches
+    // must not invent one.
+    let noop_update = ta(&dir, &["update", "a", "note=x"]);
+    assert!(
+        !noop_update.contains("[seq:"),
+        "a no-op update reports no cursor: {noop_update:?}"
+    );
+    let noop_dep = ta(&dir, &["dep", "remove", "a", &format!("{BLOCKER}=b")]);
+    assert!(
+        !noop_dep.contains("[seq:"),
+        "a no-op dep remove reports no cursor: {noop_dep:?}"
+    );
+
+    // Coloring is gated on a TTY, so piped output stays escape-free - the same
+    // contract the read commands hold.
+    for out in [&created, &added, &updated, &removed, &deleted, &noop_update] {
+        assert!(
+            !out.contains('\x1b'),
+            "mutation output escape-free: {out:?}"
+        );
+    }
+}

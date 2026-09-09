@@ -21,6 +21,7 @@ use serde_json::{Map, Value};
 use crate::action::edit::{EditForm, EditMode, Preview};
 use crate::cli::{confirm, confirm_with_default};
 use crate::error::DynError;
+use crate::format::{seq_tag, task_ref, want_color};
 use crate::storage::EventStore;
 
 pub fn cmd_edit(
@@ -91,10 +92,12 @@ pub fn cmd_edit(
         return Ok(());
     };
     let seq = last.seq;
-    match mode {
-        EditMode::Update => println!("[seq:{seq}] Updated task `{id}`"),
-        EditMode::Create => println!("[seq:{seq}] Created task `{id}`"),
-    }
+    let color = want_color(false);
+    let verb = match mode {
+        EditMode::Update => "Updated task",
+        EditMode::Create => "Created task",
+    };
+    println!("{} {verb} {}", seq_tag(seq, color), task_ref(id, color));
     Ok(())
 }
 

@@ -109,7 +109,8 @@ pub fn cmd_dep_group(
 }
 
 /// Add or remove the `name=target` edges via [`crate::action::dep::apply_edges`],
-/// reporting how many stored edges changed.
+/// reporting how many stored edges changed - with the `[seq:N]` cursor every
+/// other mutation prints, since this is a write like any other.
 fn dep_write(
     store: &impl EventStore,
     task: &str,
@@ -119,10 +120,17 @@ fn dep_write(
     types: &BTreeMap<String, RelationshipDef>,
 ) -> Result<(), DynError> {
     let written = crate::action::dep::apply_edges(store, task, edges, op, types)?;
-    if written == 0 {
-        println!("no changes on `{task}`");
+    let color = crate::format::want_color(false);
+    if let Some(last) = written.last() {
+        println!(
+            "{} {verb} {} edge(s) on {}",
+            crate::format::seq_tag(last.seq, color),
+            written.len(),
+            crate::format::task_ref(task, color)
+        );
     } else {
-        println!("{verb} {written} edge(s) on `{task}`");
+        // Nothing was appended, so there is no cursor to report.
+        println!("no changes on {}", crate::format::task_ref(task, color));
     }
     Ok(())
 }

@@ -7,6 +7,18 @@ git log.
 
 ## [Unreleased]
 
+### Added
+- **`ta dep add` / `ta dep remove` report their `[seq:N]` cursor**, like every
+  other write. Chaining a dependency edit into `ta watch --since` no longer needs
+  a follow-up `ta status --current`.
+
+### Changed
+- **Write commands colour their output like the read commands do.** The task id
+  in a `create`/`update`/`delete`/`edit`/`dep` confirmation is painted the same
+  cyan the `id` column uses, and the `[seq:N]` cursor is grey so it stays out of
+  the way of the message. Colour remains gated on a TTY with `NO_COLOR` honoured,
+  so piped and redirected output is unchanged.
+
 ## [1.3.1] - 2026-09-08
 
 Delivers the Windows binary 1.3.0 announced: that build failed on a

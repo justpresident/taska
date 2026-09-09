@@ -47,7 +47,7 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
         &types,
     )
     .unwrap();
-    assert_eq!(written, 1, "one stored edge written");
+    assert_eq!(written.len(), 1, "one stored edge written");
 
     // status: the typed summary, computed from the graph.
     let outcome = action::status(&store).unwrap();

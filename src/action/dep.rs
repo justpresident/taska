@@ -35,7 +35,7 @@ pub fn apply_edges(
     edges: &[String],
     op: &OpType,
     types: &BTreeMap<String, RelationshipDef>,
-) -> Result<usize, DynError> {
+) -> Result<Vec<MutationEvent>, DynError> {
     let removing = matches!(op, OpType::RemoveEdge);
     let mut resolved: Vec<(String, String, String)> = Vec::new();
     for edge in edges {
@@ -66,7 +66,7 @@ pub fn apply_edges(
         }
         vet_events(&events, &state, &config)
     })?;
-    Ok(written.len())
+    Ok(written)
 }
 
 /// Reject blocker-edge additions that would break the structural invariants:
