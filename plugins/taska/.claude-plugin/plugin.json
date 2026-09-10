@@ -1,0 +1,10 @@
+{
+  "name": "taska",
+  "displayName": "taska",
+  "version": "0.1.0",
+  "description": "Drive a taska store (`ta`): pick up work, groom the backlog, validate the dependency graph, migrate an existing tracker.",
+  "author": {
+    "name": "Roman Studenikin",
+    "url": "https://github.com/justpresident/taska"
+  }
+}

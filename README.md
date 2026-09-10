@@ -26,6 +26,15 @@ $ curl -fsSL https://raw.githubusercontent.com/justpresident/taska/master/script
 
 It picks the right binary for your OS/arch from the [latest release](https://github.com/justpresident/taska/releases/latest), verifies its checksum, installs to `/usr/local/bin` (or `~/.local/bin` if that isn't writable), and - if that directory isn't on your `PATH` - adds it to your shell's rc file (`.zshrc`/`.bashrc`/`.bash_profile`/`config.fish`/`.profile`, detected from `$SHELL`). Prefer to read before you pipe? It's [`scripts/install.sh`](scripts/install.sh).
 
+**Using Claude Code?** taska ships a plugin - a skill that teaches the agent this
+store's workflow, plus `/taska:next`, `/taska:groom`, `/taska:check` and
+`/taska:migrate`. It installs no hooks and edits no settings:
+
+```console
+/plugin marketplace add justpresident/taska
+/plugin install taska@justpresident
+```
+
 **Already using another tracker?** [docs/MIGRATING.md](https://github.com/justpresident/taska/blob/master/docs/MIGRATING.md) is a
 migration guide written for an AI agent to execute - point yours at it with your
 beads export, `TODO.md` or GitHub issues and it will map them onto your project's

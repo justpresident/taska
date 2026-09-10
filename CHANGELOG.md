@@ -8,6 +8,12 @@ git log.
 ## [Unreleased]
 
 ### Added
+- **A Claude Code plugin**, distributed from this repository's own marketplace
+  (`/plugin marketplace add justpresident/taska`). It ships a skill that teaches
+  an agent this store's workflow - config-agnostic, pointing at `ta prime` rather
+  than hardcoding statuses - plus `/taska:next`, `/taska:groom`, `/taska:check`
+  and `/taska:migrate`. No hooks, and no `settings.json` edits. Not part of the
+  published crate.
 - **`ta dep add` / `ta dep remove` report their `[seq:N]` cursor**, like every
   other write. Chaining a dependency edit into `ta watch --since` no longer needs
   a follow-up `ta status --current`.

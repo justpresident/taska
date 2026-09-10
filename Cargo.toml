@@ -12,9 +12,9 @@ keywords = ["task", "todo", "agentic", "git", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 # Ship the code, its tests/benches, and the user-facing docs - nothing else.
 # Excluded: /docs (drafts), the dogfood task store, the tutorial walkthroughs, CI
-# config, the agent guide, and the installer script - all dev/repo material a
-# crate consumer doesn't need.
-exclude = ["/docs", "/.taska", "/tutorials", "/.github", "/CLAUDE.md", "/scripts"]
+# config, the agent guide, the installer script, and the Claude Code plugin plus
+# its marketplace manifest - all dev/repo material a crate consumer doesn't need.
+exclude = ["/docs", "/.taska", "/tutorials", "/.github", "/CLAUDE.md", "/scripts", "/.claude-plugin", "/plugins"]
 
 # Release builds (and the binaries the release workflow ships) are size- and
 # speed-optimized: fat LTO needs codegen-units = 1 to inline across the whole

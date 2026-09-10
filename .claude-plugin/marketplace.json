@@ -1,0 +1,14 @@
+{
+  "name": "justpresident",
+  "owner": {
+    "name": "Roman Studenikin",
+    "url": "https://github.com/justpresident"
+  },
+  "plugins": [
+    {
+      "name": "taska",
+      "source": "./plugins/taska",
+      "description": "Git-native task tracking for coding agents: an append-only log your branches merge cleanly."
+    }
+  ]
+}
