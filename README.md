@@ -26,6 +26,13 @@ $ curl -fsSL https://raw.githubusercontent.com/justpresident/taska/master/script
 
 It picks the right binary for your OS/arch from the [latest release](https://github.com/justpresident/taska/releases/latest), verifies its checksum, installs to `/usr/local/bin` (or `~/.local/bin` if that isn't writable), and - if that directory isn't on your `PATH` - adds it to your shell's rc file (`.zshrc`/`.bashrc`/`.bash_profile`/`config.fish`/`.profile`, detected from `$SHELL`). Prefer to read before you pipe? It's [`scripts/install.sh`](scripts/install.sh).
 
+**Already using another tracker?** [docs/MIGRATING.md](https://github.com/justpresident/taska/blob/master/docs/MIGRATING.md) is a
+migration guide written for an AI agent to execute - point yours at it with your
+beads export, `TODO.md` or GitHub issues and it will map them onto your project's
+own workflow. There is no `ta import`, deliberately: an importer has to guess at
+which status means done and which links really block, and your agent can just read
+your repository instead.
+
 The installer needs a POSIX shell, so it covers Linux and macOS (x86_64 and ARM64). **On Windows**, download `ta-<tag>-x86_64-pc-windows-msvc.tar.gz` from the [latest release](https://github.com/justpresident/taska/releases/latest), extract it (`tar -xzf`, built into Windows 10+) and put `ta.exe` on your `PATH` - `ta self-update` handles upgrades from there.
 
 **Or, with Rust installed, from crates.io**:
@@ -144,9 +151,9 @@ That single choice is the whole point, because it is what makes git work *for* y
 - **Full history, for free.** Every change is in the log, so you can see exactly how a task reached its current state - and a delete is just another event, so it stays deleted.
 - **One-pass reconstruction.** Barely noticable, but nice side-effect of this design is that the whole dependency graph is rebuilt in a single sweep of the event log - no separate load-then-resolve step usually needed for state-storing task managers - blazing fast and friendlier to cache than a two-pass walk over a full graph.
 
-When the event log eventually grows large enough that replaying it gets slow(~ million of updates, see [compaction](docs/MERGE.md#compaction-and-the-baseline)), you can compact it - the same move Cassandra makes with its SSTables. Compaction folds the old prefix of the log into `baseline.jsonl`, a snapshot of the dependency graph in its final state. That file never produces merge conflicts, because it is built only from old, settled events. The smaller `mutations.jsonl` holds the recent events and is the one the merge driver reconciles.
+When the event log eventually grows large enough that replaying it gets slow(~ million of updates, see [compaction](https://github.com/justpresident/taska/blob/master/docs/MERGE.md#compaction-and-the-baseline)), you can compact it - the same move Cassandra makes with its SSTables. Compaction folds the old prefix of the log into `baseline.jsonl`, a snapshot of the dependency graph in its final state. That file never produces merge conflicts, because it is built only from old, settled events. The smaller `mutations.jsonl` holds the recent events and is the one the merge driver reconciles.
 
-See [docs/MERGE.md](docs/MERGE.md) for the detailed design: the event log and `seq` model, the merge/rebase algorithm, revert handling, per-field conflict resolution, and compaction.
+See [docs/MERGE.md](https://github.com/justpresident/taska/blob/master/docs/MERGE.md) for the detailed design: the event log and `seq` model, the merge/rebase algorithm, revert handling, per-field conflict resolution, and compaction.
 
 ### Non-intrusive
 
@@ -395,7 +402,7 @@ Dates work for free: the computed timestamps are RFC 3339 strings, so a lexicogr
 
 taska is stable and in daily use - this repository's own backlog has been tracked in it since the first commit. The event log, merge model, and CLI surface follow semantic versioning, and `1.0` set the on-disk format floor: a store written by any `1.x` is readable by every later `1.x`, and a format change ships with a migration pass (`ta repair --migrate`).
 
-Your tasks stay readable without taska. `.taska/mutations.jsonl` is one JSON event per line and `.taska/baseline.jsonl` a snapshot of settled state - both plain, documented in [docs/MERGE.md](docs/MERGE.md), and greppable with `jq`. There is no database to export from and nothing to migrate out of if you stop using it.
+Your tasks stay readable without taska. `.taska/mutations.jsonl` is one JSON event per line and `.taska/baseline.jsonl` a snapshot of settled state - both plain, documented in [docs/MERGE.md](https://github.com/justpresident/taska/blob/master/docs/MERGE.md), and greppable with `jq`. There is no database to export from and nothing to migrate out of if you stop using it.
 
 ## License
 
