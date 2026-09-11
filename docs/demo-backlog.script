@@ -1,8 +1,9 @@
 # Demo 1 - "a real, queryable backlog". Read-only, against taska's OWN store, so
 # every task on screen is a real one.
 #
-#   bash docs/record-demo.sh --script docs/demo-backlog.script --in-repo \
-#       --cols 120 --rows 30
+#   make -C docs backlog          # or `make -C docs all`
+#
+# The exact flags live in docs/Makefile, so this header and the build agree.
 #
 # WIDTH. This shows REAL tasks, and real titles are long: `dep tree type-schemas`
 # needs 117 columns and `list --open --columns id,title` needs 108, so 120 is the

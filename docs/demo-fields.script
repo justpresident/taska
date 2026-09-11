@@ -1,6 +1,8 @@
 # Demo 4 - "your fields, one syntax". Writes, so it runs in a throwaway repo.
 #
-#   bash docs/record-demo.sh --script docs/demo-fields.script --cols 115
+#   make -C docs fields          # or `make -C docs all`
+#
+# The exact flags live in docs/Makefile, so this header and the build agree.
 #
 # 115 columns so the did-you-mean error - the punchline - does not wrap. The list
 # commands name their columns explicitly because a fresh store's default columns

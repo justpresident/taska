@@ -2,8 +2,9 @@
 # Every task on screen is real, and the notes were written by the agent that did
 # the work - this is the article's claim, demonstrated rather than asserted.
 #
-#   bash docs/record-demo.sh --script docs/demo-notes.script --in-repo \
-#       --cols 110 --rows 34
+#   make -C docs notes          # or `make -C docs all`
+#
+# The exact flags live in docs/Makefile, so this header and the build agree.
 #
 # WIDTH/HEIGHT. The search hit table needs 105 columns, so 110 is the floor - a
 # wrapped table is unreadable in a way prose is not. The notes themselves were

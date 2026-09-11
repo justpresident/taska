@@ -4,7 +4,9 @@
 # Record it with the wrapper, which builds a throwaway repo, runs this script and
 # renders the GIF:
 #
-#   bash docs/record-demo.sh              # -> docs/demo.gif
+#   make -C docs demo          # or `make -C docs all`
+#
+# The exact flags live in docs/Makefile, so this header and the build agree.
 #   bash docs/record-demo.sh --preview    # watch it, record nothing
 #
 # It needs scriptty with the PTY-sizing fix (--cols/--rows) and the `\e` string

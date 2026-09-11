@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Record the README demo end to end: throwaway repo -> scripted session -> GIF.
+# Record a demo end to end: throwaway repo -> scripted session -> GIF.
+#
+# You usually want `make -C docs <target>` instead of calling this directly - the
+# Makefile carries each demo's flags (widths are not arbitrary) and rebuilds only
+# what changed. `make -C docs` lists the targets; `make -C docs -n all` prints the
+# exact commands without running them.
 #
 #   bash docs/record-demo.sh                # record docs/demo.gif
 #   bash docs/record-demo.sh --preview      # watch it run, record nothing
