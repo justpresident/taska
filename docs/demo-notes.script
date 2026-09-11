@@ -1,0 +1,40 @@
+# Demo 2 - "decisions survive the session". Read-only, against taska's OWN store.
+# Every task on screen is real, and the notes were written by the agent that did
+# the work - this is the article's claim, demonstrated rather than asserted.
+#
+#   bash docs/record-demo.sh --script docs/demo-notes.script --in-repo \
+#       --cols 110 --rows 34
+#
+# WIDTH/HEIGHT. The search hit table needs 105 columns, so 110 is the floor - a
+# wrapped table is unreadable in a way prose is not. The notes themselves were
+# written with hard line breaks around 85 characters, so they do not wrap, and
+# the record is 15 lines: the whole demo is 33 rows, so 34 fits it without scrolling.
+#
+# The subject is chosen for that shape as much as its content. A task whose notes
+# are one long paragraph renders to 60+ rows once wrapped and scrolls away to a
+# wall of implementation detail; this one reads end to end.
+
+expect "$ "
+
+show "\e[90m# months later: why does CI build for Windows when the tests are Linux-only?\e[0m"
+key Enter
+expect "$ "
+wait 600ms
+
+show "\e[90m# search inside what the agents wrote at the time\e[0m"
+key Enter
+expect "$ "
+wait 400ms
+type "ta list 'notes=~Windows' --columns id,title,status"
+key Enter
+expect "$ "
+wait 3s
+
+show "\e[90m# the answer is still there: cause, why nothing caught it, and the guard added\e[0m"
+key Enter
+expect "$ "
+wait 400ms
+type "ta show windows-build-failure --columns id,notes"
+key Enter
+expect "$ "
+wait 6s

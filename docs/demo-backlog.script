@@ -1,0 +1,43 @@
+# Demo 1 - "a real, queryable backlog". Read-only, against taska's OWN store, so
+# every task on screen is a real one.
+#
+#   bash docs/record-demo.sh --script docs/demo-backlog.script --in-repo \
+#       --cols 120 --rows 30
+#
+# WIDTH. This shows REAL tasks, and real titles are long: `dep tree type-schemas`
+# needs 117 columns and `list --open --columns id,title` needs 108, so 120 is the
+# floor - a table that wraps is unreadable in a way prose never is. That makes it
+# an ARTICLE demo, not a feed one. For a feed cut, swap the tree to `dep-command`
+# (6 lines, 83 columns) and the list to `--columns id,status,priority` (42), then
+# record at --cols 90.
+#
+# 30 rows so the 19-line tree lands whole in the final frame.
+
+expect "$ "
+
+show "\e[90m# taska's own backlog - it has tracked its own development from commit one\e[0m"
+key Enter
+expect "$ "
+wait 400ms
+type "ta status"
+key Enter
+expect "$ "
+wait 2s
+
+show "\e[90m# what is actually actionable today\e[0m"
+key Enter
+expect "$ "
+wait 400ms
+type "ta list --open --columns id,title"
+key Enter
+expect "$ "
+wait 2500ms
+
+show "\e[90m# one feature, split into subtasks by the agent that built it\e[0m"
+key Enter
+expect "$ "
+wait 400ms
+type "ta dep tree type-schemas"
+key Enter
+expect "$ "
+wait 4s

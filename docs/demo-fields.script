@@ -1,0 +1,47 @@
+# Demo 4 - "your fields, one syntax". Writes, so it runs in a throwaway repo.
+#
+#   bash docs/record-demo.sh --script docs/demo-fields.script --cols 115
+#
+# 115 columns so the did-you-mean error - the punchline - does not wrap. The list
+# commands name their columns explicitly because a fresh store's default columns
+# do not include the fields being filtered on, and filtering by a column the
+# viewer cannot see rather undercuts the point.
+#
+# Three beats: you choose the fields, the same syntax filters them, and a typo is
+# caught instead of silently becoming a new column.
+
+expect "$ "
+
+show "\e[90m# no fixed schema and no flags to memorise - you name the fields\e[0m"
+key Enter
+expect "$ "
+wait 400ms
+type "ta create migrate-db title='Migrate the database' priority=high owner=alice"
+key Enter
+expect "$ "
+type "ta create deploy-api title='Deploy the API' priority=low owner=bob"
+key Enter
+expect "$ "
+wait 1500ms
+
+show "\e[90m# the same syntax filters - nothing new to learn\e[0m"
+key Enter
+expect "$ "
+wait 400ms
+type "ta list priority=high --columns id,title,priority,owner"
+key Enter
+expect "$ "
+wait 2s
+type "ta list owner=bob --columns id,title,priority,owner"
+key Enter
+expect "$ "
+wait 2s
+
+show "\e[90m# and a typo cannot quietly invent a column\e[0m"
+key Enter
+expect "$ "
+wait 400ms
+type "ta update migrate-db titel='oops'"
+key Enter
+expect "$ "
+wait 4s

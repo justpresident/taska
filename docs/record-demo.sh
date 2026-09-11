@@ -6,6 +6,7 @@
 #   bash docs/record-demo.sh --keep         # leave the throwaway repo in place
 #   bash docs/record-demo.sh --cols 100     # a wider recording
 #   bash docs/record-demo.sh --social       # a short, feed-sized cut
+#   bash docs/record-demo.sh --script docs/demo-notes.script --in-repo
 #   bash docs/record-demo.sh --from-cast docs/demo.cast   # re-render, don't re-record
 #
 # Everything happens in a fresh `mktemp -d` repo that is deleted afterwards, so
@@ -32,6 +33,8 @@ PREVIEW=0
 KEEP=0
 OUT=""
 FROM_CAST=""
+SCRIPT_ARG=""
+IN_REPO=0
 SPEED=""
 FPS_CAP=""
 IDLE_LIMIT=""
@@ -48,6 +51,11 @@ while [ $# -gt 0 ]; do
     --rows)    ROWS="${2:?--rows needs a number}"; shift 2 ;;
     --out)     OUT="${2:?--out needs a path}"; shift 2 ;;
     --from-cast) FROM_CAST="${2:?--from-cast needs a path}"; shift 2 ;;
+    --script)  SCRIPT_ARG="${2:?--script needs a path}"; shift 2 ;;
+    # Record against taska's OWN store instead of a throwaway repo. The read-only
+    # demos exist to show real tasks, so a scratch repo would defeat them. Only
+    # ever point this at a script that reads.
+    --in-repo) IN_REPO=1; shift ;;
     --speed)   SPEED="${2:?--speed needs a number}"; shift 2 ;;
     --fps-cap) FPS_CAP="${2:?--fps-cap needs a number}"; shift 2 ;;
     # A feed-sized cut. GIF frames are roughly one per typed CHARACTER, because
@@ -62,15 +70,17 @@ while [ $# -gt 0 ]; do
 done
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT="$REPO/docs/demo.script"
+SCRIPT="${SCRIPT_ARG:-$REPO/docs/demo.script}"
+case "$SCRIPT" in /*) ;; *) SCRIPT="$PWD/$SCRIPT" ;; esac
 SETUP="$REPO/docs/demo-setup.sh"
+BASE="$(basename "${SCRIPT%.script}")"
 if [ "$SOCIAL" -eq 1 ]; then
-  OUT="${OUT:-$REPO/docs/demo-social.gif}"
+  OUT="${OUT:-$REPO/docs/${BASE}-social.gif}"
   SPEED="${SPEED:-2}"
   FPS_CAP="${FPS_CAP:-10}"
   IDLE_LIMIT="${IDLE_LIMIT:-2}"
 fi
-OUT="${OUT:-$REPO/docs/demo.gif}"
+OUT="${OUT:-$REPO/docs/${BASE}.gif}"
 CAST="${FROM_CAST:-${OUT%.gif}.cast}"
 
 # Rendering is the same whether we just recorded the cast or were handed one.
@@ -181,9 +191,15 @@ trap cleanup EXIT
 
 note "using ta:       $TA_BIN ($("$TA_BIN" --version))"
 note "using scriptty: $SCRIPTTY_BIN"
-note "demo repo:      $DEMO_DIR"
+note "script:         $SCRIPT"
 
-TA="$TA_BIN" bash "$SETUP" "$DEMO_DIR" >/dev/null
+if [ "$IN_REPO" -eq 1 ]; then
+  note "recording against THIS repo's store (read-only): $REPO"
+  TA="$TA_BIN" bash "$SETUP" --rc-only "$REPO" "$DEMO_DIR" >/dev/null
+else
+  note "demo repo:      $DEMO_DIR"
+  TA="$TA_BIN" bash "$SETUP" "$DEMO_DIR" >/dev/null
+fi
 
 run_demo=("$SCRIPTTY_BIN" --script "$SCRIPT" --cols "$COLS" --rows "$ROWS"
           --command bash -- --rcfile "$DEMO_DIR/.demo-bashrc" -i)
