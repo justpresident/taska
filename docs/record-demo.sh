@@ -5,9 +5,25 @@
 #   bash docs/record-demo.sh --preview      # watch it run, record nothing
 #   bash docs/record-demo.sh --keep         # leave the throwaway repo in place
 #   bash docs/record-demo.sh --cols 100     # a wider recording
+#   bash docs/record-demo.sh --social       # a short, feed-sized cut
+#   bash docs/record-demo.sh --from-cast docs/demo.cast   # re-render, don't re-record
 #
 # Everything happens in a fresh `mktemp -d` repo that is deleted afterwards, so
 # this never touches the taska store you are actually working in.
+#
+# FRAME COUNT. The typing is simulated keystroke by keystroke, so a GIF frame is
+# roughly one typed CHARACTER - the full demo lands near 520 frames, and LinkedIn
+# rejects a GIF over 400. --speed and --fps-cap merge keystrokes into shared
+# frames; measured against the current cast:
+#
+#     speed  fps-cap   frames   length
+#       1       30       534      66s    (defaults - README only)
+#       1        6       320      66s
+#     1.5       10       353      44s
+#       2       10       270      33s    (--social)
+#
+# Re-rendering is cheap and needs no recording: --from-cast takes an existing
+# .cast, so a cast captured once can be rendered for the README and for a feed.
 set -euo pipefail
 
 COLS=80
@@ -15,6 +31,11 @@ ROWS=24
 PREVIEW=0
 KEEP=0
 OUT=""
+FROM_CAST=""
+SPEED=""
+FPS_CAP=""
+IDLE_LIMIT=""
+SOCIAL=0
 
 die() { printf 'record-demo: %s\n' "$*" >&2; exit 1; }
 note() { printf '\033[36m==>\033[0m %s\n' "$*" >&2; }
@@ -26,6 +47,15 @@ while [ $# -gt 0 ]; do
     --cols)    COLS="${2:?--cols needs a number}"; shift 2 ;;
     --rows)    ROWS="${2:?--rows needs a number}"; shift 2 ;;
     --out)     OUT="${2:?--out needs a path}"; shift 2 ;;
+    --from-cast) FROM_CAST="${2:?--from-cast needs a path}"; shift 2 ;;
+    --speed)   SPEED="${2:?--speed needs a number}"; shift 2 ;;
+    --fps-cap) FPS_CAP="${2:?--fps-cap needs a number}"; shift 2 ;;
+    # A feed-sized cut. GIF frames are roughly one per typed CHARACTER, because
+    # the typing is simulated keystroke by keystroke - which is why the full demo
+    # lands around 520 frames and LinkedIn rejects anything over 400. Speeding up
+    # and capping the frame rate merges those keystrokes into shared frames; the
+    # result is ~270 frames and about half the length, which suits a feed anyway.
+    --social)  SOCIAL=1; shift ;;
     -h|--help) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
     *)         die "unknown option '$1' (try --help)" ;;
   esac
@@ -34,8 +64,37 @@ done
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$REPO/docs/demo.script"
 SETUP="$REPO/docs/demo-setup.sh"
+if [ "$SOCIAL" -eq 1 ]; then
+  OUT="${OUT:-$REPO/docs/demo-social.gif}"
+  SPEED="${SPEED:-2}"
+  FPS_CAP="${FPS_CAP:-10}"
+  IDLE_LIMIT="${IDLE_LIMIT:-2}"
+fi
 OUT="${OUT:-$REPO/docs/demo.gif}"
-CAST="${OUT%.gif}.cast"
+CAST="${FROM_CAST:-${OUT%.gif}.cast}"
+
+# Rendering is the same whether we just recorded the cast or were handed one.
+# --cols re-renders at the pinned width even when the cast was captured in a
+# wider window, which is how a recording made in someone's 115-column terminal
+# stops carrying a third of a frame in dead space.
+render() {
+  command -v agg >/dev/null 2>&1 || die "agg not found (renders the cast to a GIF) - install with:
+    cargo install --git https://github.com/asciinema/agg"
+  [ -f "$CAST" ] || die "no cast at $CAST - record one first, or pass --from-cast <path>"
+  local args=(--cols "$COLS")
+  if [ -n "$SPEED" ];      then args+=(--speed "$SPEED"); fi
+  if [ -n "$FPS_CAP" ];    then args+=(--fps-cap "$FPS_CAP"); fi
+  if [ -n "$IDLE_LIMIT" ]; then args+=(--idle-time-limit "$IDLE_LIMIT"); fi
+  note "rendering $OUT  (agg ${args[*]})"
+  agg "${args[@]}" "$CAST" "$OUT"
+  note "done: $OUT ($(du -h "$OUT" | cut -f1))"
+}
+
+# Re-render only: no repo, no shell, no recording - just the cast we were given.
+if [ -n "$FROM_CAST" ]; then
+  render
+  exit 0
+fi
 
 [ -f "$SCRIPT" ] || die "missing $SCRIPT"
 [ -f "$SETUP" ]  || die "missing $SETUP"
@@ -104,9 +163,8 @@ that does:
     cargo install --git https://github.com/justpresident/scriptty"
 
 if [ "$PREVIEW" -eq 0 ]; then
-  command -v asciinema >/dev/null 2>&1 || die "asciinema not found - install it, or use --preview to just watch"
-  command -v agg >/dev/null 2>&1 || die "agg not found (renders the cast to a GIF) - install with:
-    cargo install --git https://github.com/asciinema/agg"
+  command -v asciinema >/dev/null 2>&1 || die "asciinema not found - install it, use --preview to just
+watch, or --from-cast <path> to re-render a cast you already have"
 fi
 
 # Pinning the PTY WIDER than the real terminal is the case that corrupts output,
@@ -141,9 +199,4 @@ rm -f "$CAST"
 asciinema rec "$CAST" --overwrite --cols "$COLS" --rows "$ROWS" \
   --command "$(printf '%q ' "${run_demo[@]}")"
 
-note "rendering $OUT"
-agg "$CAST" "$OUT"
-
-note "done: $OUT ($(du -h "$OUT" | cut -f1))"
-note "add it to the README by replacing the DEMO SLOT comment with:"
-note "    ![demo](docs/${OUT##*/})"
+render
