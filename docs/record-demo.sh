@@ -42,6 +42,7 @@ SCRIPT_ARG=""
 IN_REPO=0
 SPEED=""
 FPS_CAP=""
+RENDER_ROWS=""
 IDLE_LIMIT=""
 SOCIAL=0
 
@@ -62,6 +63,7 @@ while [ $# -gt 0 ]; do
     # ever point this at a script that reads.
     --in-repo) IN_REPO=1; shift ;;
     --speed)   SPEED="${2:?--speed needs a number}"; shift 2 ;;
+    --render-rows) RENDER_ROWS="${2:?--render-rows needs a number}"; shift 2 ;;
     --fps-cap) FPS_CAP="${2:?--fps-cap needs a number}"; shift 2 ;;
     # A feed-sized cut. GIF frames are roughly one per typed CHARACTER, because
     # the typing is simulated keystroke by keystroke - which is why the full demo
@@ -92,11 +94,50 @@ CAST="${FROM_CAST:-${OUT%.gif}.cast}"
 # --cols re-renders at the pinned width even when the cast was captured in a
 # wider window, which is how a recording made in someone's 115-column terminal
 # stops carrying a third of a frame in dead space.
+# How many rows the session actually needs, so the frame fits it without
+# scrolling. agg otherwise inherits the RECORDING terminal's height - whatever
+# window asciinema happened to run in - so a 23-row demo captured in a maximised
+# terminal renders into a 58-row frame with two thirds of it empty. Counting the
+# session's own wrapped rows keeps every demo's frame its own size and leaves no
+# per-demo number to maintain. Needs python3; without it the frame falls back to
+# the cast's height and says so.
+fit_rows() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$1" "$2" <<'FITPY'
+import json, math, re, sys
+cast, cols = sys.argv[1], int(sys.argv[2])
+ESC = re.compile(r'\x1b\[[0-9;?]*[a-zA-Z]')
+chunks = []
+with open(cast) as f:
+    f.readline()                      # asciicast header
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if len(ev) >= 3 and ev[1] == 'o':
+            chunks.append(ev[2])
+text = ESC.sub('', ''.join(chunks)).replace('\r', '')
+print(sum(max(1, math.ceil(len(l) / cols)) for l in text.split('\n')) + 2)
+FITPY
+}
+
 render() {
   command -v agg >/dev/null 2>&1 || die "agg not found (renders the cast to a GIF) - install with:
     cargo install --git https://github.com/asciinema/agg"
   [ -f "$CAST" ] || die "no cast at $CAST - record one first, or pass --from-cast <path>"
   local args=(--cols "$COLS")
+  local rows="$RENDER_ROWS"
+  if [ -z "$rows" ]; then rows="$(fit_rows "$CAST" "$COLS" 2>/dev/null || true)"; fi
+  if [ -n "$rows" ]; then
+    args+=(--rows "$rows")
+    note "fitting the frame to $rows rows (the session's own height)"
+  else
+    note "warning: no python3 - the frame keeps the recording terminal's height"
+  fi
   if [ -n "$SPEED" ];      then args+=(--speed "$SPEED"); fi
   if [ -n "$FPS_CAP" ];    then args+=(--fps-cap "$FPS_CAP"); fi
   if [ -n "$IDLE_LIMIT" ]; then args+=(--idle-time-limit "$IDLE_LIMIT"); fi
