@@ -1,0 +1,24 @@
+Your coding agent already keeps a task list and decision notes. It just shreds it the moment the session ends or task is complete.
+
+
+You have seen it: give an agent something complex and it breaks the work into subtasks and shows you the progress as it goes. That list is implicit and ephemeral. When the session dies, every design decision and open question dies with it - and months later nobody can explain why the code ended up the way it did.
+
+
+The usual fix is "have the agent keep notes in markdown". That works for about a week. Then the files pile up, nobody knows which ones are still true, and they quietly poison the context of every agent that reads them.
+
+
+What we really want to avoid this blindness is agents to use what we use ourselves: a task manager. Not a todo list - structured long-term memory you can query, a dependency graph, and a handover interface between both agent-agent and agent-human. Every multi-agent orchestration tool has one at its core, but they are usually built-in and not customizable at all.
+
+
+I tried the ones that exist. The one I liked best kept corrupting its database and desynchronising from its own export, and it wanted invasive surgery on my git config plus mandated a workflow I have to follow. It all made sense in theory, but sucked in practice. So I built my own.
+
+
+Taska keeps the whole task database in your git tree, as an append-only log of mutation events - the trick high-performance databases use 
+
+to absorb concurrent writes. But here it is for another reason: two agents on two branches can edit the same task, and git can easily merge preserving both edits! No database. No daemon. No git hooks.
+
+
+Taska has tracked its own development since May - 129 tasks, 124 closed, every design decision still queryable.
+
+
+Last week I ran 14 agents at once on one of my projects, all powered by `taska` for handing work to each other through it. So I can confidently say that it is ready now to be used by you.
