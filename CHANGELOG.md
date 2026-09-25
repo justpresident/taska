@@ -7,6 +7,12 @@ git log.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-25
+
+Task data can live outside `.taska/` - beside the project, in another repository,
+or under a per-user path - and write commands colour their confirmations like
+the read commands do.
+
 ### Added
 - **`[store] dir` puts the task data somewhere other than `.taska/`.** The event
   log, the baseline, and a surfaced merge's conflict marker live wherever `dir`
