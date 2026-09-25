@@ -1,8 +1,8 @@
 //! `resolve` action: inspect (plan) and clear (apply) a surfaced merge conflict
 //! and the log's orphaned events.
 //!
-//! This one takes a concrete [`FileStore`]: the merge marker is a file under
-//! `base_dir` and pruning rewrites the log via `replace_mutations`, neither of
+//! This one takes a concrete [`FileStore`]: the merge marker is a file in the
+//! data directory and pruning rewrites the log via `replace_mutations`, neither of
 //! which the [`EventStore`] trait exposes. `plan` only reads; `apply` performs
 //! the side effects a frontend has decided on (clear the marker, drop the
 //! confirmed orphans).
@@ -77,7 +77,7 @@ pub fn apply(
     drop_orphans: bool,
 ) -> Result<(bool, usize), DynError> {
     let cleared = if plan.conflicts.is_some() {
-        std::fs::remove_file(store.base_dir.join("merge-conflict.json"))?;
+        std::fs::remove_file(store.conflict_marker_path()?)?;
         true
     } else {
         false
@@ -101,7 +101,7 @@ pub fn apply(
 /// Parse the merge-conflict marker, if present. `Some(items)` (possibly empty)
 /// when the file exists, `None` when it doesn't.
 fn read_marker(store: &FileStore) -> Result<Option<Vec<ConflictItem>>, DynError> {
-    let marker = store.base_dir.join("merge-conflict.json");
+    let marker = store.conflict_marker_path()?;
     if !marker.exists() {
         return Ok(None);
     }

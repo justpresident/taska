@@ -10,7 +10,7 @@ use crate::action::{materialize, read, Warning};
 use crate::config::Config;
 use crate::error::DynError;
 use crate::schema::schema_conformance_report;
-use crate::storage::{EventStore, FileStore};
+use crate::storage::{EventStore, FileStore, CONFIG_FILE};
 
 /// Resolve one effective config value by dotted key (file values over defaults).
 pub fn get(cfg: &Config, key: &str) -> Result<toml::Value, DynError> {
@@ -72,7 +72,7 @@ pub fn validate(store: &FileStore) -> Result<ValidateReport, DynError> {
 /// rejected and the file left untouched. Returns the value as written, for the
 /// frontend's confirmation line.
 pub fn set(store: &FileStore, key: &str, raw: &str) -> Result<String, DynError> {
-    let path = store.base_dir.join("config.toml");
+    let path = store.base_dir.join(CONFIG_FILE);
     // Edit the existing file, or seed from the documented template when absent,
     // so even a first `set` on a fresh store yields a fully-commented config.
     let existing = match std::fs::read_to_string(&path) {
@@ -100,11 +100,22 @@ pub fn set(store: &FileStore, key: &str, raw: &str) -> Result<String, DynError> 
         })?;
     }
 
-    // Reject unless valid against the current task graph (keep_events floor, bad
-    // enums, relationship/cycle consistency). The commands you'd use to fix a
-    // graph problem run the cheap struct-only `validate`, so this never locks you
-    // out.
-    candidate.validate_against(&read(store)?.state)?;
+    // Reject unless valid against the task graph this config will govern
+    // (keep_events floor, bad enums, relationship/cycle consistency) - the data
+    // in the CANDIDATE's `[store] dir`, so re-pointing the store is checked
+    // against what lives at its new home. The commands you'd use to fix a graph
+    // problem run the cheap struct-only `validate`, so this never locks you out.
+    // Nor does a location with nothing to read yet (a directory still to be
+    // provisioned, or a variable unset in this shell): it has no graph to
+    // contradict, and `set` is how a broken `store.dir` gets fixed.
+    let governed = FileStore::with_config(store.base_dir.clone(), candidate);
+    if governed.data_dir().is_ok() {
+        governed
+            .config()
+            .validate_against(&read(&governed)?.state)?;
+    } else {
+        governed.config().validate()?;
+    }
 
     std::fs::write(&path, doc.to_string())?;
     Ok(shown)

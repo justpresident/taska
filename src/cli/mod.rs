@@ -22,12 +22,12 @@ use chrono::Utc;
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::{Map, Value};
 
-use crate::config::Config;
+use crate::config::{Config, OnConflict};
 use crate::error::DynError;
 use crate::format::{DisplayArgs, OutputArgs};
 use crate::merge;
 use crate::model::RESERVED_FIELD_KEYS;
-use crate::storage::{EventStore, FileStore};
+use crate::storage::{same_dir, EventStore, FileStore, CONFIG_FILE, CONFLICT_MARKER_FILE};
 
 mod commands;
 pub(crate) mod complete;
@@ -655,17 +655,10 @@ pub fn run() -> Result<(), DynError> {
             path,
         } => {
             // Read the conflict policy and marker location from the merged
-            // file's own store (resolved via %P - see `merge_driver_store`),
+            // file's own store (resolved via %P - see `merge_driver_settings`),
             // falling back to defaults so a merge never fails merely for lack
             // of config.
-            let store = merge_driver_store(&path);
-            let on_conflict = store
-                .as_ref()
-                .map(|s| s.config().merge.on_conflict)
-                .unwrap_or_default();
-            let marker = store
-                .as_ref()
-                .map(|s| s.base_dir.join("merge-conflict.json"));
+            let (on_conflict, marker) = merge_driver_settings(&path);
             merge::execute_git_merge(
                 &ancestor,
                 &current,
@@ -688,14 +681,7 @@ pub fn run() -> Result<(), DynError> {
         } => {
             // The store owning `$output` supplies the conflict policy and marker
             // location, same as the git driver resolves via `%P`.
-            let store = merge_driver_store(&output);
-            let on_conflict = store
-                .as_ref()
-                .map(|s| s.config().merge.on_conflict)
-                .unwrap_or_default();
-            let marker = store
-                .as_ref()
-                .map(|s| s.base_dir.join("merge-conflict.json"));
+            let (on_conflict, marker) = merge_driver_settings(&output);
             merge::execute_hg_merge(
                 &base,
                 &local,
@@ -765,23 +751,50 @@ pub fn run() -> Result<(), DynError> {
 /// Warning-only, unlike the enforce gates: the store itself is healthy, it's the
 /// clone's merge protection that may be incomplete.
 fn warn_scm_health(store: &FileStore) {
-    if let Some(warning) = store.repo_root().and_then(crate::scm::ensure_scm_health) {
+    let warning = store
+        .data_dir()
+        .ok()
+        .and_then(crate::scm::ensure_scm_health);
+    if let Some(warning) = warning {
         eprintln!("warning: {warning}");
     }
 }
 
-/// The store owning the file a merge driver was invoked on. Git runs drivers
-/// at the repo root and passes `%P`, the merged file's repo-relative path -
-/// its parent IS the store dir, so resolving via `%P` finds a store NESTED in
-/// a subdirectory, which walk-up discovery from the repo root cannot.
-/// Discovery remains the fallback for unusual invocations (e.g. an empty `%P`
-/// from an old driver registration).
-fn merge_driver_store(merged_path: &str) -> Option<FileStore> {
-    std::path::Path::new(merged_path)
-        .parent()
-        .filter(|d| d.is_dir())
-        .and_then(|d| FileStore::at(d.to_path_buf()).ok())
-        .or_else(|| FileStore::discover().ok())
+/// The `[merge] on_conflict` policy and conflict-marker path for a merge driver
+/// invoked on `merged_path`.
+///
+/// Git runs drivers at the repo root and passes `%P`, the merged file's
+/// repo-relative path (hg passes `$output`) - its parent IS the store's data
+/// directory, so resolving via `%P` finds a store NESTED in a subdirectory,
+/// which walk-up discovery from the repo root cannot. The marker goes beside the
+/// merged log, where `ta resolve` reads it. The policy comes from the store that
+/// keeps its data there: the `config.toml` beside the log (the default layout),
+/// else the discovered store when its `[store] dir` points there (a relocated
+/// data directory holds no config of its own), else the defaults - a merge never
+/// fails merely for lack of config. Discovery alone serves an unusual invocation
+/// with no usable parent (e.g. an empty `%P` from an old driver registration).
+fn merge_driver_settings(merged_path: &str) -> (OnConflict, Option<PathBuf>) {
+    let policy = |store: &FileStore| store.config().merge.on_conflict;
+    let Some(data_dir) = Path::new(merged_path).parent().filter(|d| d.is_dir()) else {
+        let store = FileStore::discover().ok();
+        return (
+            store.as_ref().map(policy).unwrap_or_default(),
+            store.and_then(|s| s.conflict_marker_path().ok()),
+        );
+    };
+    let owns = |store: &FileStore| store.data_dir().is_ok_and(|dir| same_dir(dir, data_dir));
+    let beside = data_dir
+        .join(CONFIG_FILE)
+        .is_file()
+        .then(|| FileStore::at(data_dir.to_path_buf()).ok())
+        .flatten();
+    let owner = beside
+        .filter(owns)
+        .or_else(|| FileStore::discover().ok().filter(owns));
+    (
+        owner.as_ref().map(policy).unwrap_or_default(),
+        Some(data_dir.join(CONFLICT_MARKER_FILE)),
+    )
 }
 
 /// Validate config on every store-backed command, so a bad config edit surfaces

@@ -20,17 +20,23 @@
 //! [`ensure_scm_health`] heal it) - the whole registration is silently
 //! re-writable, since `.hg/hgrc` is untracked and the tool command is the same
 //! taska-owned constant.
+//!
+//! Everything here is keyed off the store's **data directory** (`[store] dir`,
+//! where the log and baseline live), not the config: the SCM that versions the
+//! data files is the one whose merges need the drivers, and whose committed log
+//! `undo` must respect. For the default layout the data directory IS `.taska`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::error::DynError;
+use crate::storage::{BASELINE_FILE, MUTATIONS_FILE, STORE_DIR_NAME};
 
 const LOG_DRIVER: &str = "taska-merge-driver";
 const BASELINE_DRIVER: &str = "taska-baseline-keep-ours";
-const MUTATIONS_PATH: &str = ".taska/mutations.jsonl";
-const BASELINE_PATH: &str = ".taska/baseline.jsonl";
+/// The per-directory git attributes file the driver mappings live in.
+const GITATTRIBUTES_FILE: &str = ".gitattributes";
 
 /// Mercurial merge-tool names (the hgrc analogue of the git driver names).
 const HG_LOG_TOOL: &str = "taska-merge";
@@ -41,22 +47,24 @@ const HG_BASELINE_TOOL: &str = "taska-baseline";
 const HG_BLOCK_BEGIN: &str = "# BEGIN TASKA MERGE TOOLS (managed by `ta init`)";
 const HG_BLOCK_END: &str = "# END TASKA MERGE TOOLS";
 
-/// Wire up the merge drivers for the detected SCM: a restack driver for the event
-/// log and a keep-ours driver for the compacted baseline.
+/// Wire up the merge drivers for the SCM holding `data_dir` (the store's data
+/// directory): a restack driver for the event log and a keep-ours driver for the
+/// compacted baseline.
 ///
-/// For git this writes the `.gitattributes` entries plus the local `git config`
-/// driver definitions; for mercurial it splices the managed `[merge-patterns]`/
-/// `[merge-tools]` block into per-clone `.hg/hgrc`. Idempotent and safe to call
-/// at any time (attribute/config lines and the hgrc block are only added if
-/// absent). Best-effort - a plain directory (no SCM) warns rather than failing,
-/// so `ta init` still works.
-pub fn setup(repo_root: &Path) -> Result<(), DynError> {
-    match detect_scm(repo_root) {
-        Some((Scm::Git, _)) => {
-            ensure_gitattribute(repo_root, MUTATIONS_PATH, LOG_DRIVER)?;
-            ensure_gitattribute(repo_root, BASELINE_PATH, BASELINE_DRIVER)?;
+/// For git this writes the `.gitattributes` entries (see [`GitAttributes`])
+/// plus the local `git config` driver definitions; for mercurial it splices the
+/// managed `[merge-patterns]`/`[merge-tools]` block into per-clone `.hg/hgrc`.
+/// Idempotent and safe to call at any time (attribute/config lines and the hgrc
+/// block are only added if absent). Best-effort - a plain directory (no SCM)
+/// warns rather than failing, so `ta init` still works.
+pub fn setup(data_dir: &Path) -> Result<(), DynError> {
+    match detect_scm(data_dir) {
+        Some((Scm::Git, root)) => {
+            let attrs = GitAttributes::for_data_dir(data_dir, root);
+            ensure_gitattribute(&attrs.dir, &attrs.pattern(MUTATIONS_FILE), LOG_DRIVER)?;
+            ensure_gitattribute(&attrs.dir, &attrs.pattern(BASELINE_FILE), BASELINE_DRIVER)?;
 
-            if register_drivers(repo_root) {
+            if register_drivers(data_dir) {
                 println!("Configured git merge drivers for the taska event log");
             } else {
                 eprintln!(
@@ -66,7 +74,7 @@ pub fn setup(repo_root: &Path) -> Result<(), DynError> {
             }
         }
         Some((Scm::Mercurial, hg_root)) => {
-            let prefix = store_prefix(repo_root, hg_root);
+            let prefix = root_relative(data_dir, hg_root);
             if register_hg_drivers(&hg_root.join(".hg"), &prefix) {
                 println!("Configured mercurial merge tools for the taska event log");
             } else {
@@ -79,8 +87,10 @@ pub fn setup(repo_root: &Path) -> Result<(), DynError> {
         }
         None => {
             eprintln!(
-                "warning: git merge drivers not configured (not a git repository?); \
-                 run `git init`, then `ta init` again to enable safe .taska merges"
+                "warning: git merge drivers not configured: {} is not in a git (or \
+                 mercurial) repository; if the task data should be versioned, run `git \
+                 init`, then `ta init` again to enable safe .taska merges",
+                data_dir.display()
             );
         }
     }
@@ -108,17 +118,72 @@ pub fn commit_paths(repo_root: &Path, paths: &[PathBuf], message: &str) -> Optio
     }
 }
 
-/// The merge-driver registration files `init` should commit alongside the store.
+/// The merge-driver registration files `init` should commit alongside the store
+/// whose data lives in `data_dir`.
 ///
 /// For the detected SCM: git's `.gitattributes` is the *committed* half of its
 /// driver setup, so it belongs in the commit; mercurial's whole registration
 /// lives in the untracked, per-clone `.hg/hgrc`, so it contributes nothing
 /// committable (and blindly listing `.gitattributes` would sweep an unrelated
 /// pre-existing one into the taska commit). Empty for a plain directory.
-pub fn committed_registration_paths(repo_root: &Path) -> Vec<PathBuf> {
-    match detect_scm(repo_root) {
-        Some((Scm::Git, _)) => vec![repo_root.join(".gitattributes")],
+pub fn committed_registration_paths(data_dir: &Path) -> Vec<PathBuf> {
+    match detect_scm(data_dir) {
+        Some((Scm::Git, root)) => {
+            vec![GitAttributes::for_data_dir(data_dir, root)
+                .dir
+                .join(GITATTRIBUTES_FILE)]
+        }
         Some((Scm::Mercurial, _)) | None => Vec::new(),
+    }
+}
+
+/// Whether `a` and `b` lie in the same SCM checkout (`false` when either is in
+/// none).
+///
+/// `init` commits a relocated data directory's files with the store only when
+/// they share its checkout - naming a path from another checkout would fail the
+/// whole path-scoped commit.
+pub fn same_checkout(a: &Path, b: &Path) -> bool {
+    let root = |p: &Path| detect_scm(p).and_then(|(_, root)| std::fs::canonicalize(root).ok());
+    matches!((root(a), root(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// Where the git attributes mapping a store's data files to the drivers live,
+/// and how their patterns are spelled.
+///
+/// A data directory named `.taska` - the default layout, where it is the store
+/// itself - is mapped from its PARENT's `.gitattributes` (`.taska/mutations.jsonl
+/// merge=...`); attribute files apply to the tree below them, so this also covers
+/// a store nested below the checkout root. Any other data directory carries its
+/// own `.gitattributes` with root-anchored patterns (`/mutations.jsonl
+/// merge=...`): that holds when the data directory is itself the checkout root
+/// (its parent lies outside the checkout), and never needs to quote the
+/// directory's name.
+struct GitAttributes {
+    /// The directory whose `.gitattributes` holds the entries.
+    dir: PathBuf,
+    /// What precedes a data file's name in a pattern: `.taska/` or `/`.
+    prefix: String,
+}
+
+impl GitAttributes {
+    fn for_data_dir(data_dir: &Path, checkout_root: &Path) -> Self {
+        let classic = data_dir.file_name() == Some(std::ffi::OsStr::new(STORE_DIR_NAME))
+            && data_dir != checkout_root;
+        match data_dir.parent() {
+            Some(parent) if classic => Self {
+                dir: parent.to_path_buf(),
+                prefix: format!("{STORE_DIR_NAME}/"),
+            },
+            _ => Self {
+                dir: data_dir.to_path_buf(),
+                prefix: "/".to_string(),
+            },
+        }
+    }
+
+    fn pattern(&self, file: &str) -> String {
+        format!("{}{file}", self.prefix)
     }
 }
 
@@ -258,7 +323,7 @@ fn hg_commit_paths(repo_root: &Path, paths: &[PathBuf], message: &str) -> Option
     Some(String::from_utf8_lossy(&id.stdout).trim().to_owned())
 }
 
-/// The mercurial binary to drive the repo at `repo_root`: `hg`, else Sapling's
+/// The mercurial binary to drive the repo holding `dir`: `hg`, else Sapling's
 /// `sl`. Probed with `<bin> root`, NOT `<bin> --version` - the binary must be able
 /// to open THIS repo, not merely be installed. A classic-Mercurial `hg` can't read
 /// a Sapling checkout (and vice versa), so on a machine with both binaries a
@@ -266,20 +331,21 @@ fn hg_commit_paths(repo_root: &Path, paths: &[PathBuf], message: &str) -> Option
 /// including `undo`'s committed-count read, which then reads 0 and can truncate
 /// committed history. `root` succeeds only for the binary that owns the repo.
 /// `None` when neither can open it (or neither is installed).
-fn hg_binary(repo_root: &Path) -> Option<&'static str> {
+fn hg_binary(dir: &Path) -> Option<&'static str> {
     ["hg", "sl"].into_iter().find(|bin| {
         Command::new(bin)
-            .current_dir(repo_root)
+            .current_dir(dir)
             .arg("root")
             .output()
             .is_ok_and(|o| o.status.success())
     })
 }
 
-/// Append a `<path> merge=<driver>` attribute line if it isn't already present.
-fn ensure_gitattribute(repo_root: &Path, file: &str, driver: &str) -> Result<(), DynError> {
-    let line = format!("{file} merge={driver}");
-    let attrs_path = repo_root.join(".gitattributes");
+/// Append a `<pattern> merge=<driver>` attribute line to `dir`'s
+/// `.gitattributes` if it isn't already present.
+fn ensure_gitattribute(dir: &Path, pattern: &str, driver: &str) -> Result<(), DynError> {
+    let line = format!("{pattern} merge={driver}");
+    let attrs_path = dir.join(GITATTRIBUTES_FILE);
     let existing = std::fs::read_to_string(&attrs_path).unwrap_or_default();
     if existing.lines().any(|l| l.trim() == line) {
         return Ok(());
@@ -296,9 +362,9 @@ fn ensure_gitattribute(repo_root: &Path, file: &str, driver: &str) -> Result<(),
 }
 
 /// The SCM owning a directory: the nearest `.git` or `.hg` walking UP from
-/// `start` (the store's parent - which need not be the SCM root: a `.taska`
-/// nested deeper inside a repo is supported), together with the checkout root
-/// it was found at. `.git` may be a FILE (worktrees, submodules), so `exists()`
+/// `start` (e.g. the store's data directory - which need not sit at the SCM root:
+/// a `.taska` nested deeper inside a repo is supported), together with the
+/// checkout root it was found at. `.git` may be a FILE (worktrees, submodules), so `exists()`
 /// not `is_dir()`. `None` means a plain directory.
 fn detect_scm(start: &Path) -> Option<(Scm, &Path)> {
     let mut dir = start;
@@ -327,8 +393,9 @@ pub fn scm_root(start: &Path) -> Option<&Path> {
     detect_scm(start).map(|(_, root)| root)
 }
 
-/// Bring this clone's `.taska` merge protection up to health, returning a
-/// residual warning only for what can't be auto-fixed.
+/// Bring this clone's merge protection for the store whose data lives in
+/// `data_dir` up to health, returning a residual warning only for what can't be
+/// auto-fixed.
 ///
 /// Never blocking - the store itself is fine; it's the *clone* whose setup may
 /// be incomplete. `.gitattributes` travels with the repo, but the driver
@@ -343,22 +410,23 @@ pub fn scm_root(start: &Path) -> Option<&Path> {
 /// fails: a missing `.gitattributes` entry (an explicit `ta init` must rewrite
 /// that committed file), a failed git-config write, or a failed `.hg/hgrc` write.
 ///
-/// Detection walks up from the store's parent and is ordered cheapest-first: no
-/// SCM anywhere costs only stats and stays quiet (plain-dir use is deliberate;
-/// `ta init` warned once); mercurial reads `.hg/hgrc` and silently writes the
-/// managed block when it's absent (warning only if that fails); git costs
-/// a `.gitattributes` read plus one `git config` spawn (git resolves config from
-/// any directory inside the repo, so a nested store needs no special-casing),
-/// and once per clone the registration writes.
-pub fn ensure_scm_health(repo_root: &Path) -> Option<String> {
-    let (scm, scm_root) = detect_scm(repo_root)?;
+/// Detection walks up from the data directory and is ordered cheapest-first: no
+/// SCM anywhere costs only stats and stays quiet (plain-dir use is deliberate -
+/// e.g. data kept outside version control; `ta init` warned once); mercurial
+/// reads `.hg/hgrc` and silently writes the managed block when it's absent
+/// (warning only if that fails); git costs a `.gitattributes` read plus one
+/// `git config` spawn (git resolves config from any directory inside the repo,
+/// so a nested store needs no special-casing), and once per clone the
+/// registration writes.
+pub fn ensure_scm_health(data_dir: &Path) -> Option<String> {
+    let (scm, scm_root) = detect_scm(data_dir)?;
     match scm {
         // Mercurial has no committed half - the whole registration lives in the
         // untracked, per-clone `.hg/hgrc` - so heal it silently (like git's local
         // config), warning only if the write itself fails. The tool command is
         // the same taska-owned constant, so this runs nothing the repo chose.
         Scm::Mercurial => {
-            let prefix = store_prefix(repo_root, scm_root);
+            let prefix = root_relative(data_dir, scm_root);
             let hg_dir = scm_root.join(".hg");
             if !hg_drivers_registered(&hg_dir, &prefix) && !register_hg_drivers(&hg_dir, &prefix) {
                 return Some(
@@ -371,19 +439,18 @@ pub fn ensure_scm_health(repo_root: &Path) -> Option<String> {
             None
         }
         Scm::Git => {
-            // Check the .gitattributes where `setup` writes it: the store's
-            // parent (valid for a nested store too - attribute files apply to
-            // the tree below their directory). It's the committed half of the
-            // setup, so a missing entry is a real gap that only `ta init` should
-            // close - we don't silently rewrite a tracked file the user may have
-            // edited.
+            // Check the .gitattributes where `setup` writes it (see
+            // `GitAttributes`). It's the committed half of the setup, so a
+            // missing entry is a real gap that only `ta init` should close - we
+            // don't silently rewrite a tracked file the user may have edited.
+            let target = GitAttributes::for_data_dir(data_dir, scm_root);
             let attrs =
-                std::fs::read_to_string(repo_root.join(".gitattributes")).unwrap_or_default();
+                std::fs::read_to_string(target.dir.join(GITATTRIBUTES_FILE)).unwrap_or_default();
             let has = |file: &str, driver: &str| {
-                let line = format!("{file} merge={driver}");
+                let line = format!("{} merge={driver}", target.pattern(file));
                 attrs.lines().any(|l| l.trim() == line)
             };
-            if !has(MUTATIONS_PATH, LOG_DRIVER) || !has(BASELINE_PATH, BASELINE_DRIVER) {
+            if !has(MUTATIONS_FILE, LOG_DRIVER) || !has(BASELINE_FILE, BASELINE_DRIVER) {
                 return Some(
                     ".gitattributes is missing the .taska merge-driver entries; run \
                      `ta init` to restore them (without them, a git merge can corrupt \
@@ -399,7 +466,7 @@ pub fn ensure_scm_health(repo_root: &Path) -> Option<String> {
             // driver definitions out of the committed tree. Warn only if the
             // local git-config write itself fails (read-only HOME, locked
             // config), so protection is never silently absent.
-            if !drivers_registered(repo_root) && !register_drivers(repo_root) {
+            if !drivers_registered(data_dir) && !register_drivers(data_dir) {
                 return Some(
                     "git merge drivers for .taska could not be auto-registered in this \
                      clone; run `ta init` to set them up (without them, a git merge can \
@@ -412,12 +479,13 @@ pub fn ensure_scm_health(repo_root: &Path) -> Option<String> {
     }
 }
 
-/// Whether both merge-driver definitions resolve in git config (any scope -
-/// a globally registered driver works just as well as a local one). One spawn
-/// for both drivers; a missing repo or git binary reads as "not registered".
-fn drivers_registered(repo_root: &Path) -> bool {
+/// Whether both merge-driver definitions resolve in git config for the repo
+/// holding `dir` (any scope - a globally registered driver works just as well as
+/// a local one). One spawn for both drivers; a missing repo or git binary reads
+/// as "not registered".
+fn drivers_registered(dir: &Path) -> bool {
     let output = std::process::Command::new("git")
-        .current_dir(repo_root)
+        .current_dir(dir)
         .args(["config", "--get-regexp", r"^merge\.taska-.*\.driver$"])
         .output();
     let Ok(out) = output else {
@@ -432,19 +500,20 @@ fn drivers_registered(repo_root: &Path) -> bool {
     out.status.success() && defines(LOG_DRIVER) && defines(BASELINE_DRIVER)
 }
 
-/// Register both merge-driver definitions in local git config, returning whether
-/// every write succeeded. The driver commands are taska-owned constants, never
-/// read from the repo - so this is safe to run unprompted (see
-/// [`ensure_scm_health`]); messaging and error policy are left to the caller.
-fn register_drivers(repo_root: &Path) -> bool {
+/// Register both merge-driver definitions in the local git config of the repo
+/// holding `dir`, returning whether every write succeeded. The driver commands
+/// are taska-owned constants, never read from the repo - so this is safe to run
+/// unprompted (see [`ensure_scm_health`]); messaging and error policy are left
+/// to the caller.
+fn register_drivers(dir: &Path) -> bool {
     let log_ok = register_driver(
-        repo_root,
+        dir,
         LOG_DRIVER,
         "Taska Auto-Resolution Log Consolidation Driver",
         "ta git-merge %O %A %B %P",
     );
     let baseline_ok = register_driver(
-        repo_root,
+        dir,
         BASELINE_DRIVER,
         "Taska Baseline Keep-Ours Driver",
         "ta git-merge-baseline %O %A %B %P",
@@ -454,13 +523,13 @@ fn register_drivers(repo_root: &Path) -> bool {
 
 /// Register one merge driver in local git config. Returns whether both config
 /// writes succeeded; messaging and error policy are left to the caller.
-fn register_driver(repo_root: &Path, name: &str, description: &str, driver_cmd: &str) -> bool {
+fn register_driver(dir: &Path, name: &str, description: &str, driver_cmd: &str) -> bool {
     // Capture the child's output rather than inheriting stderr: outside a git
     // repo every `git config` call would otherwise leak its own `fatal: not in
     // a git directory` to the terminal before `setup` prints its one warning.
     let git = |args: &[&str]| {
         std::process::Command::new("git")
-            .current_dir(repo_root)
+            .current_dir(dir)
             .args(args)
             .output()
     };
@@ -473,13 +542,13 @@ fn register_driver(repo_root: &Path, name: &str, description: &str, driver_cmd: 
 // Mercurial (and Sapling) registration
 // ---------------------------------------------------------------------------
 
-/// The store's parent relative to the SCM root, forward-slashed, `""` at the
+/// The data directory relative to the SCM root, forward-slashed, `""` at the
 /// root. Mercurial matches `[merge-patterns]` against ROOT-relative paths from a
-/// single `.hg/hgrc`, so a store nested below the checkout root needs its prefix
-/// baked into the pattern (git handles this differently, via a `.gitattributes`
-/// placed in the store's parent).
-fn store_prefix(repo_root: &Path, scm_root: &Path) -> String {
-    repo_root
+/// single `.hg/hgrc`, so the data files' location below the checkout root is
+/// baked into the pattern (git handles this differently, via a directory-local
+/// `.gitattributes` - see [`GitAttributes`]).
+fn root_relative(data_dir: &Path, scm_root: &Path) -> String {
+    data_dir
         .strip_prefix(scm_root)
         .ok()
         .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -492,17 +561,18 @@ fn store_prefix(repo_root: &Path, scm_root: &Path) -> String {
 /// could resolve an append cleanly and never call our restacker, or worse leave
 /// conflict markers), so the tool always runs on the raw ours/base/other. The
 /// tool `executable` is `ta`, the same taska-owned constant the git driver uses.
-fn hg_block(store_prefix: &str) -> String {
-    let p = if store_prefix.is_empty() {
+/// `data_prefix` is the data directory relative to the checkout root.
+fn hg_block(data_prefix: &str) -> String {
+    let p = if data_prefix.is_empty() {
         String::new()
     } else {
-        format!("{store_prefix}/")
+        format!("{data_prefix}/")
     };
     format!(
         "{HG_BLOCK_BEGIN}\n\
          [merge-patterns]\n\
-         {p}{MUTATIONS_PATH} = {HG_LOG_TOOL}\n\
-         {p}{BASELINE_PATH} = {HG_BASELINE_TOOL}\n\
+         {p}{MUTATIONS_FILE} = {HG_LOG_TOOL}\n\
+         {p}{BASELINE_FILE} = {HG_BASELINE_TOOL}\n\
          [merge-tools]\n\
          {HG_LOG_TOOL}.executable = ta\n\
          {HG_LOG_TOOL}.args = hg-merge $base $local $other $output\n\
@@ -553,50 +623,51 @@ fn splice_hg_block(existing: &str, block: &str) -> Option<String> {
 /// `.hg/hgrc` (hg does not create that file itself). Idempotent; returns whether
 /// the write succeeded (or was already current). The tool command is a
 /// taska-owned constant, so this is safe to run unprompted.
-fn register_hg_drivers(hg_dir: &Path, store_prefix: &str) -> bool {
+fn register_hg_drivers(hg_dir: &Path, data_prefix: &str) -> bool {
     let path = hg_dir.join("hgrc");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    splice_hg_block(&existing, &hg_block(store_prefix))
+    splice_hg_block(&existing, &hg_block(data_prefix))
         .is_none_or(|updated| std::fs::write(&path, updated).is_ok())
 }
 
 /// Whether `.hg/hgrc` already holds the CURRENT managed block for this store.
-fn hg_drivers_registered(hg_dir: &Path, store_prefix: &str) -> bool {
+fn hg_drivers_registered(hg_dir: &Path, data_prefix: &str) -> bool {
     let existing = std::fs::read_to_string(hg_dir.join("hgrc")).unwrap_or_default();
-    splice_hg_block(&existing, &hg_block(store_prefix)).is_none()
+    splice_hg_block(&existing, &hg_block(data_prefix)).is_none()
 }
 
 // ---------------------------------------------------------------------------
 // Committed log inspection (SCM-dispatched)
 // ---------------------------------------------------------------------------
 
-/// Count the committed `.taska/mutations.jsonl` lines at the current tip.
+/// Count the committed lines of the log in `data_dir` at the current tip.
 ///
 /// The tip is git's `HEAD` / mercurial's `.`; the count is of non-empty lines.
 /// Returns 0 when the file isn't committed yet, there's no tip, or there's no
 /// (recognized) SCM, which `undo` treats as "nothing committed" (every event safe
 /// to truncate).
 ///
-/// Dispatched by the detected SCM so `undo` need not know which one backs the
-/// store. For mercurial both `hg` and `sl` (Sapling) are tried, since either may
-/// be the installed binary.
-pub fn committed_mutation_count(repo_root: &Path) -> usize {
-    let content = match detect_scm(repo_root) {
-        Some((Scm::Git, _)) => git_committed_mutations(repo_root),
-        Some((Scm::Mercurial, _)) => hg_committed_mutations(repo_root),
+/// Dispatched by the SCM holding the data (not the config) so `undo` need not
+/// know which one backs the store. For mercurial both `hg` and `sl` (Sapling)
+/// are tried, since either may be the installed binary.
+pub fn committed_mutation_count(data_dir: &Path) -> usize {
+    let content = match detect_scm(data_dir) {
+        Some((Scm::Git, _)) => git_committed_mutations(data_dir),
+        Some((Scm::Mercurial, _)) => hg_committed_mutations(data_dir),
         None => None,
     };
     content.map_or(0, |s| s.lines().filter(|l| !l.trim().is_empty()).count())
 }
 
-/// The git-committed `mutations.jsonl` blob (`HEAD:`). The `./` prefix makes the
-/// path relative to `repo_root` (the store's parent, via `-C`) rather than the
-/// repo root, so a store NESTED below the root reads its own committed events.
-fn git_committed_mutations(repo_root: &Path) -> Option<String> {
+/// The git-committed log blob (`HEAD:`). The `./` prefix makes the path relative
+/// to `data_dir` (via `-C`) rather than the repo root, so data NESTED below the
+/// root reads its own committed events.
+fn git_committed_mutations(data_dir: &Path) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
-        .arg(repo_root)
-        .args(["show", "HEAD:./.taska/mutations.jsonl"])
+        .arg(data_dir)
+        .arg("show")
+        .arg(format!("HEAD:./{MUTATIONS_FILE}"))
         .output()
         .ok()?;
     out.status
@@ -604,14 +675,14 @@ fn git_committed_mutations(repo_root: &Path) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The mercurial-committed `mutations.jsonl` at the working parent (`-r .`). Run
-/// with cwd at `repo_root` (the store's parent) so the path resolves for a nested
-/// store, and hg/sl walk up to find the checkout.
-fn hg_committed_mutations(repo_root: &Path) -> Option<String> {
-    let bin = hg_binary(repo_root)?;
+/// The mercurial-committed log at the working parent (`-r .`). Run with cwd at
+/// `data_dir` so the path resolves wherever the data sits in the checkout, and
+/// hg/sl walk up to find it.
+fn hg_committed_mutations(data_dir: &Path) -> Option<String> {
+    let bin = hg_binary(data_dir)?;
     let out = Command::new(bin)
-        .current_dir(repo_root)
-        .args(["cat", "-r", ".", ".taska/mutations.jsonl"])
+        .current_dir(data_dir)
+        .args(["cat", "-r", ".", MUTATIONS_FILE])
         .output()
         .ok()?;
     out.status
@@ -633,7 +704,7 @@ mod tests {
 
     #[test]
     fn hg_block_defines_tools_patterns_and_disables_premerge() {
-        let b = hg_block("");
+        let b = hg_block(".taska");
         assert!(b.starts_with(HG_BLOCK_BEGIN) && b.ends_with(HG_BLOCK_END));
         assert!(b.contains(".taska/mutations.jsonl = taska-merge"));
         assert!(b.contains(".taska/baseline.jsonl = taska-baseline"));
@@ -646,19 +717,40 @@ mod tests {
 
     #[test]
     fn hg_block_roots_patterns_at_a_nested_store_prefix() {
-        let b = hg_block("crates/app");
+        let b = hg_block("crates/app/.taska");
         assert!(b.contains("crates/app/.taska/mutations.jsonl = taska-merge"));
         assert!(b.contains("crates/app/.taska/baseline.jsonl = taska-baseline"));
+        // Data at the checkout root itself.
+        let b = hg_block("");
+        assert!(b.contains("\nmutations.jsonl = taska-merge"));
     }
 
     #[test]
-    fn store_prefix_is_empty_at_root_and_relative_when_nested() {
+    fn root_relative_is_empty_at_root_and_relative_when_nested() {
         let root = Path::new("/repo");
-        assert_eq!(store_prefix(root, root), "");
+        assert_eq!(root_relative(root, root), "");
         assert_eq!(
-            store_prefix(Path::new("/repo/crates/app"), root),
-            "crates/app"
+            root_relative(Path::new("/repo/crates/app/.taska"), root),
+            "crates/app/.taska"
         );
+    }
+
+    #[test]
+    fn gitattributes_classic_for_a_taska_dir_anchored_otherwise() {
+        let root = Path::new("/repo");
+        // The default layout (and a nested store): the store's parent maps
+        // `.taska/<file>`, exactly as before data directories were configurable.
+        let classic = GitAttributes::for_data_dir(Path::new("/repo/sub/.taska"), root);
+        assert_eq!(classic.dir, PathBuf::from("/repo/sub"));
+        assert_eq!(classic.pattern(MUTATIONS_FILE), ".taska/mutations.jsonl");
+        // A relocated data directory carries its own, root-anchored entries.
+        let own = GitAttributes::for_data_dir(Path::new("/repo/my tasks"), root);
+        assert_eq!(own.dir, PathBuf::from("/repo/my tasks"));
+        assert_eq!(own.pattern(BASELINE_FILE), "/baseline.jsonl");
+        // So does data at the checkout root, whose parent is outside the checkout.
+        let at_root = GitAttributes::for_data_dir(root, root);
+        assert_eq!(at_root.dir, PathBuf::from("/repo"));
+        assert_eq!(at_root.pattern(MUTATIONS_FILE), "/mutations.jsonl");
     }
 
     #[test]
@@ -677,7 +769,7 @@ mod tests {
         );
 
         // A changed block (different prefix) replaces the old one IN PLACE.
-        let block_b = hg_block("sub");
+        let block_b = hg_block("sub/.taska");
         let updated = splice_hg_block(&after, &block_b).expect("replaces");
         assert_eq!(
             updated.matches(HG_BLOCK_BEGIN).count(),

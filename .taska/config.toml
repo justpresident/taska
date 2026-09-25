@@ -3,6 +3,17 @@
 # Created by `ta init`. Edit freely - `ta init` will not overwrite this file
 # once it exists. Missing keys fall back to the defaults shown below.
 
+[store]
+# Where this store's data files live: the event log (mutations.jsonl), the
+# compacted baseline (baseline.jsonl), and a surfaced merge's conflict marker.
+# A relative path resolves against the directory holding THIS file, so "." keeps
+# them beside it and `..` climbs (`../../tasks`). `$VAR` / `${VAR}` expand from
+# the environment and a leading `~` is `$HOME` (`$$` is a literal `$`); every
+# command that reads or writes tasks fails while a variable it names is unset or
+# empty. Changing this does not move existing data: move the files yourself,
+# then run `ta init` to provision the directory and re-point the merge drivers.
+dir = "."
+
 [compaction]
 # `ta compact` folds old events into the baseline snapshot to keep the log
 # small. These settings control how much recent history stays in the log.

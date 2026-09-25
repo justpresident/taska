@@ -243,3 +243,56 @@ fn hg_surface_conflict_fails_merge_and_resolve_clears_it() {
         "marker should be cleared"
     );
 }
+
+#[test]
+fn hg_merge_tools_follow_a_relocated_data_dir() {
+    if !hg_available() {
+        eprintln!("skipping: classic mercurial (`hg`) not on PATH");
+        return;
+    }
+    let dir = fresh_dir("hg-store-dir");
+    init_hg(&dir);
+    ta(&dir, &["config", "set", "store.dir", "\"../tasks\""]);
+    ta(&dir, &["init"]); // provisions ./tasks and re-points the managed block
+
+    let hgrc = fs::read_to_string(dir.join(".hg/hgrc")).unwrap();
+    assert!(
+        hgrc.contains("\ntasks/mutations.jsonl = taska-merge")
+            && hgrc.contains("\ntasks/baseline.jsonl = taska-baseline"),
+        "patterns name the relocated files: {hgrc}"
+    );
+    assert!(!hgrc.contains(".taska/mutations.jsonl"), "{hgrc}");
+    assert_eq!(hgrc.matches("# BEGIN TASKA MERGE TOOLS").count(), 1);
+
+    // Two heads appending different tasks collide on the same seq; only the
+    // merge tool (routed by those patterns) turns that into a clean union.
+    ta(&dir, &["create", "base"]);
+    hg_ok(&dir, &["add", "tasks", ".taska"]);
+    hg_ok(&dir, &["commit", "-m", "base"]);
+    let base = base_rev(&dir);
+    ta(&dir, &["create", "on-main"]);
+    hg_ok(&dir, &["commit", "-m", "main task"]);
+    hg_ok(&dir, &["update", "-q", "-r", &base]);
+    ta(&dir, &["create", "on-feature"]);
+    hg_ok(&dir, &["commit", "-m", "feature task"]);
+
+    let merge = hg(&dir, &["merge"]);
+    assert!(
+        merge.status.success(),
+        "hg merge should auto-resolve:\n{}\n{}",
+        String::from_utf8_lossy(&merge.stdout),
+        String::from_utf8_lossy(&merge.stderr)
+    );
+    hg_ok(&dir, &["commit", "-m", "merge"]);
+    let list = ta(&dir, &["list"]);
+    for id in ["base", "on-main", "on-feature"] {
+        assert!(lists_task(&list, id), "missing {id} after merge:\n{list}");
+    }
+
+    // `undo` reads the committed log from the relocated path too: the last
+    // event is committed, so it's compensated rather than truncated.
+    let log = dir.join("tasks/mutations.jsonl");
+    let before = rows(&log);
+    ta(&dir, &["undo", "--force"]);
+    assert_eq!(rows(&log), before + 1, "committed event compensated");
+}

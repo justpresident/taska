@@ -67,9 +67,36 @@ pub trait EventStore {
     fn replace_mutations(&self, events: &[MutationEvent]) -> Result<(), DynError>;
 }
 
+/// The store directory walk-up discovery looks for and `ta init` creates.
+pub const STORE_DIR_NAME: &str = ".taska";
+/// The store's configuration, always directly inside the store directory.
+pub const CONFIG_FILE: &str = "config.toml";
+/// The append-only event log, inside the data directory (`[store] dir`).
+pub const MUTATIONS_FILE: &str = "mutations.jsonl";
+/// The compacted baseline snapshot, inside the data directory.
+pub const BASELINE_FILE: &str = "baseline.jsonl";
+/// Where a surfaced merge records its conflicts for `ta resolve`.
+///
+/// It sits inside the data directory, next to the log it describes - the one
+/// place both the merge driver (which knows only the merged file's path) and
+/// `ta resolve` can derive.
+pub const CONFLICT_MARKER_FILE: &str = "merge-conflict.json";
+/// The ignore file keeping the transient conflict marker out of version control.
+const GITIGNORE_FILE: &str = ".gitignore";
+
 /// JSONL-on-disk event store rooted at a repo's `.taska` directory.
+///
+/// Two directories: `base_dir` holds `config.toml` (it is what discovery
+/// finds), and the data directory - `[store] dir` resolved against `base_dir`,
+/// by default `base_dir` itself - holds the log, the baseline and the conflict
+/// marker.
 pub struct FileStore {
     pub base_dir: PathBuf,
+    /// The resolved `[store] dir`. A resolution failure (a variable it names
+    /// is unset) is kept rather than raised, so commands that never touch the
+    /// data still run - `ta config` above all, the way to fix the setting -
+    /// while every data access reports it.
+    data_dir: Result<PathBuf, String>,
     config: Config,
 }
 
@@ -79,16 +106,28 @@ impl FileStore {
     /// know the store dir - e.g. the merge driver deriving it from git's `%P`
     /// argument, where a nested store is invisible to [`Self::discover`].
     pub fn at(base_dir: PathBuf) -> Result<Self, DynError> {
-        let config = Config::load(&base_dir.join("config.toml"))?;
-        Ok(Self { base_dir, config })
+        let config = Config::load(&base_dir.join(CONFIG_FILE))?;
+        Ok(Self::with_config(base_dir, config))
+    }
+
+    /// The store at `base_dir` as `config` would see it - its data directory
+    /// resolved from `config`, not from the `config.toml` on disk. How `ta config
+    /// set` reaches the data a candidate config would govern before writing it.
+    pub fn with_config(base_dir: PathBuf, config: Config) -> Self {
+        let data_dir = config.store.resolve_dir(&base_dir);
+        Self {
+            base_dir,
+            data_dir,
+            config,
+        }
     }
 
     /// Locate an existing `.taska` directory by walking up from the current dir.
     pub fn discover() -> Result<Self, DynError> {
         let mut dir = std::env::current_dir()?;
         loop {
-            if dir.join(".taska").is_dir() {
-                return Self::at(dir.join(".taska"));
+            if dir.join(STORE_DIR_NAME).is_dir() {
+                return Self::at(dir.join(STORE_DIR_NAME));
             }
             if !dir.pop() {
                 return Err("No .taska directory found. Run `ta init` first."
@@ -100,49 +139,113 @@ impl FileStore {
 
     /// Idempotently provision the store at `base_dir`: create the directory,
     /// write the default `config.toml` if absent, then create the *configured*
-    /// log files if absent. Because it loads the existing config first, re-running
-    /// it after editing `[store]` paths creates the renamed files. Existing data
-    /// is never touched.
+    /// data directory and its log files if absent. Because it loads the existing
+    /// config first, re-running it after editing `[store] dir` provisions the new
+    /// location. Existing data is never touched.
     pub fn provision(base_dir: PathBuf) -> Result<Self, DynError> {
         fs::create_dir_all(&base_dir)?;
 
         // Write the documented default config only if absent, so re-running
         // `ta init` never clobbers a user's edits.
-        let config_path = base_dir.join("config.toml");
+        let config_path = base_dir.join(CONFIG_FILE);
         if !config_path.exists() {
             fs::write(&config_path, crate::config::default_toml())?;
         }
 
+        let store = Self::at(base_dir)?;
+        let data_dir = store.data_dir.clone()?;
+        fs::create_dir_all(&data_dir)?;
+
         // The merge-conflict marker is transient per-clone state, never history.
-        let gitignore = base_dir.join(".gitignore");
+        let gitignore = data_dir.join(GITIGNORE_FILE);
         if !gitignore.exists() {
-            fs::write(&gitignore, "merge-conflict.json\n")?;
+            fs::write(&gitignore, gitignore_body())?;
         }
 
-        let store = Self::at(base_dir)?;
-        // Touch the (configured) log files so subsequent reads never fail.
+        // Touch the log files so subsequent reads never fail.
         OpenOptions::new()
             .create(true)
             .append(true)
-            .open(store.mutations_path())?;
+            .open(store.mutations_path()?)?;
         OpenOptions::new()
             .create(true)
             .append(true)
-            .open(store.baseline_path())?;
+            .open(store.baseline_path()?)?;
         Ok(store)
     }
 
-    /// The repository root containing the `.taska` directory.
+    /// The directory containing the `.taska` directory - the project it belongs
+    /// to, where `init` keeps the agent-integration files.
     pub fn repo_root(&self) -> Option<&Path> {
         self.base_dir.parent()
     }
 
-    fn mutations_path(&self) -> PathBuf {
-        self.base_dir.join("mutations.jsonl")
+    /// The directory holding the data files: `[store] dir`, resolved.
+    ///
+    /// Errors when a variable the setting names is unset, or when the directory
+    /// doesn't exist - a mistyped or not-yet-provisioned location must not read
+    /// as an empty store.
+    pub fn data_dir(&self) -> Result<&Path, DynError> {
+        let dir = self.data_dir.as_deref().map_err(Clone::clone)?;
+        if !dir.is_dir() {
+            return Err(format!(
+                "the store's data directory {} (store.dir = \"{}\") does not exist - move \
+                 the store's {MUTATIONS_FILE}/{BASELINE_FILE} there, or run `ta init` to \
+                 provision it",
+                dir.display(),
+                self.config.store.dir
+            )
+            .into());
+        }
+        Ok(dir)
     }
 
-    fn baseline_path(&self) -> PathBuf {
-        self.base_dir.join("baseline.jsonl")
+    /// Whether the data lives somewhere other than beside `config.toml` - a
+    /// `[store] dir` that resolves to a different, existing directory.
+    pub fn data_relocated(&self) -> bool {
+        self.data_dir()
+            .is_ok_and(|dir| !same_dir(dir, &self.base_dir))
+    }
+
+    /// The taska-owned files in the data directory: the log, the baseline, and
+    /// the `.gitignore` keeping the conflict marker untracked - that last one only
+    /// while it is exactly what [`Self::provision`] writes, since a data directory
+    /// may be shared (even the project root) and its `.gitignore` the user's.
+    pub fn data_files(&self) -> Result<Vec<PathBuf>, DynError> {
+        let dir = self.data_dir()?;
+        let mut files = vec![dir.join(MUTATIONS_FILE), dir.join(BASELINE_FILE)];
+        let gitignore = dir.join(GITIGNORE_FILE);
+        if fs::read_to_string(&gitignore).is_ok_and(|body| body == gitignore_body()) {
+            files.push(gitignore);
+        }
+        Ok(files)
+    }
+
+    /// Log files still holding data in the config's own directory while
+    /// `[store] dir` points elsewhere - the tasks this store no longer reads
+    /// because `[store] dir` changed but the files were never moved.
+    pub fn stranded_data_files(&self) -> Vec<PathBuf> {
+        if !self.data_relocated() {
+            return Vec::new();
+        }
+        [MUTATIONS_FILE, BASELINE_FILE]
+            .into_iter()
+            .map(|file| self.base_dir.join(file))
+            .filter(|path| fs::metadata(path).is_ok_and(|meta| meta.len() > 0))
+            .collect()
+    }
+
+    /// Where a surfaced merge conflict is recorded (see [`CONFLICT_MARKER_FILE`]).
+    pub fn conflict_marker_path(&self) -> Result<PathBuf, DynError> {
+        Ok(self.data_dir()?.join(CONFLICT_MARKER_FILE))
+    }
+
+    fn mutations_path(&self) -> Result<PathBuf, DynError> {
+        Ok(self.data_dir()?.join(MUTATIONS_FILE))
+    }
+
+    fn baseline_path(&self) -> Result<PathBuf, DynError> {
+        Ok(self.data_dir()?.join(BASELINE_FILE))
     }
 
     /// Detect a PRE-1.0 on-disk format and return a one-line reason, else `None`.
@@ -154,12 +257,12 @@ impl FileStore {
     /// actionable "migrate on the last 0.x" message. It scans the raw bytes as
     /// generic JSON (the typed deserializers no longer accept these shapes).
     pub(crate) fn detect_legacy_format(&self) -> Result<Option<String>, DynError> {
-        for value in raw_json_lines(&self.mutations_path())? {
+        for value in raw_json_lines(&self.mutations_path()?)? {
             if let Some(reason) = legacy_log_marker(&value) {
                 return Ok(Some(reason));
             }
         }
-        for value in raw_json_lines(&self.baseline_path())? {
+        for value in raw_json_lines(&self.baseline_path()?)? {
             if value.get("depends_on").is_some() {
                 return Ok(Some(
                     "the baseline stores `depends_on` as a top-level field".to_string(),
@@ -168,6 +271,20 @@ impl FileStore {
         }
         Ok(None)
     }
+}
+
+/// The `.gitignore` [`FileStore::provision`] writes into a data directory.
+fn gitignore_body() -> String {
+    format!("{CONFLICT_MARKER_FILE}\n")
+}
+
+/// Whether two existing paths name the same directory, however each is spelled
+/// (relative, symlinked, `..`).
+pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
+    matches!(
+        (fs::canonicalize(a), fs::canonicalize(b)),
+        (Ok(x), Ok(y)) if x == y
+    )
 }
 
 /// Every non-blank line of a JSONL file parsed as a generic [`Value`], skipping
@@ -214,7 +331,7 @@ impl EventStore for FileStore {
     }
 
     fn load_baseline(&self) -> Result<Vec<TaskState>, DynError> {
-        let path = self.baseline_path();
+        let path = self.baseline_path()?;
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -230,7 +347,7 @@ impl EventStore for FileStore {
     }
 
     fn load_mutations(&self) -> Result<Vec<MutationEvent>, DynError> {
-        read_events(&self.mutations_path())
+        read_events(&self.mutations_path()?)
     }
 
     /// Append-only write path for normal operations. Never rewrites or reorders
@@ -242,7 +359,7 @@ impl EventStore for FileStore {
     /// Minting under the same lock as the write is what stops two concurrent
     /// writers from handing out the same `seq`.
     fn log_fingerprint(&self) -> Option<(u64, std::time::SystemTime)> {
-        let meta = fs::metadata(self.mutations_path()).ok()?;
+        let meta = fs::metadata(self.mutations_path().ok()?).ok()?;
         Some((meta.len(), meta.modified().ok()?))
     }
 
@@ -256,7 +373,7 @@ impl EventStore for FileStore {
             .read(true)
             .append(true)
             .create(true)
-            .open(self.mutations_path())?;
+            .open(self.mutations_path()?)?;
 
         // OS advisory write lock so concurrent writers can't interleave partial
         // lines into the log or race on sequence assignment.
@@ -285,7 +402,7 @@ impl EventStore for FileStore {
             .read(true)
             .append(true)
             .create(true)
-            .open(self.mutations_path())?;
+            .open(self.mutations_path()?)?;
         let mut lock = RwLock::new(file);
         let mut locked_file = lock.write()?;
 
@@ -317,12 +434,12 @@ impl EventStore for FileStore {
             .write(true)
             .create(true)
             .truncate(false) // we truncate explicitly under the lock, below
-            .open(self.mutations_path())?;
+            .open(self.mutations_path()?)?;
         let mut lock = RwLock::new(file);
         let mut locked_file = lock.write()?;
 
         // Persist the new baseline first...
-        let mut baseline_file = File::create(self.baseline_path())?;
+        let mut baseline_file = File::create(self.baseline_path()?)?;
         for state in baseline {
             writeln!(baseline_file, "{}", serde_json::to_string(state)?)?;
         }
@@ -349,7 +466,7 @@ impl EventStore for FileStore {
             .write(true)
             .create(true)
             .truncate(false) // we truncate explicitly under the lock, below
-            .open(self.mutations_path())?;
+            .open(self.mutations_path()?)?;
         let mut lock = RwLock::new(file);
         let mut locked_file = lock.write()?;
 

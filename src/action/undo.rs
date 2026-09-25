@@ -146,9 +146,7 @@ pub fn plan(
 
     // Truncate the maximal trailing run of selected events within the writable
     // region; compensate the rest.
-    let committed_count = store
-        .repo_root()
-        .map_or(0, crate::scm::committed_mutation_count);
+    let committed_count = crate::scm::committed_mutation_count(store.data_dir()?);
     let mut p = n;
     while p > 0 && selected_set.contains(&mutations[p - 1].seq) {
         p -= 1;

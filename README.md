@@ -209,6 +209,13 @@ With `on_conflict = "surface"` (the default), a real conflict pauses the merge a
 `ta init` writes a documented `.taska/config.toml`. Every key falls back to the default shown, so a partial file is fine.
 
 ```toml
+[store]
+# Where the data files live (the event log, the baseline, and a surfaced merge's
+# conflict marker). Relative to the directory holding config.toml, so "." keeps
+# them beside it; `..` climbs, `$VAR`/`${VAR}` expand from the environment, `~`
+# is `$HOME`, `$$` is a literal `$`. See "Storage layout" below.
+dir = "."
+
 [compaction]
 # Keep at least this many of the most recent events (minimum 100); also the
 # minimum log size before `ta compact` does anything.
@@ -406,6 +413,8 @@ Dates work for free: the computed timestamps are RFC 3339 strings, so a lexicogr
   .gitignore        # ignores the transient merge-conflict marker
 .gitattributes      # registers the merge driver for the log files
 ```
+
+**Keeping the data elsewhere.** `[store] dir` moves `mutations.jsonl`, `baseline.jsonl` (and the transient conflict marker) out of `.taska/` while `config.toml` stays put, so discovery - and `-C` - work as before. Use it to keep the log outside the checkout (`dir = "~/tasks/myproj"`), per-user (`dir = "$TASKS_HOME/myproj"`), or in a separate, private repo (`dir = "../../tasks-repo/myproj"`). A relative path resolves against `.taska/`, with `..` resolved like `cd` does. Every command that reads or writes tasks refuses to run while a variable the path names is unset or empty - it never falls back to some other location - and so does a directory that doesn't exist yet. `ta config` still works, so you can fix the setting. Changing `dir` moves nothing: move the two files yourself, then re-run `ta init`. `init` creates the new directory if needed and points the merge drivers at it. The merge protection follows the data. It is wired into whichever repository versions the data files (a relocated directory gets its own `.gitattributes`), `ta undo` checks *that* repository's committed history, and data kept outside any repository simply isn't merge-managed. `ta init` commits the relocated files along with the store only when they sit inside the same repository.
 
 ## Status
 

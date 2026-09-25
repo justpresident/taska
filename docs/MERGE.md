@@ -10,7 +10,9 @@ Tasks are not stored as state. They live as an **append-only log of changes** in
 operation (`Create`, `Update`, `Append`, `Add`, `Remove`, `Delete`, `AddEdge`,
 `RemoveEdge`) on a task id, plus a store-minted **`seq`** number. The state you
 see (`ta list`, `ta show`) is *replayed* from the log on demand; it is never
-written back.
+written back. (`.taska/` is the default location of the log, its baseline, and the
+conflict marker below; `[store] dir` in `config.toml` can put all three elsewhere,
+and the merge drivers follow them.)
 
 ```
 seq op       task   payload
@@ -78,7 +80,7 @@ fields, commuting edits - merges untouched. The `[merge] on_conflict` policy
 picks the winner per field:
 
 - **`surface`** (default) - write a deterministic tentative merge (keeping ours),
-  record the conflicts in `.taska/merge-conflict.json`, and **fail** so git marks
+  record the conflicts in `merge-conflict.json` beside the log, and **fail** so git marks
   the path unmerged. Review with `ta resolve`, then `git add` + commit.
 - **`latest`** - keep the value with the newest `timestamp`.
 - **`ours`** / **`theirs`** - keep that side's value.

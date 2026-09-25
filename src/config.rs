@@ -1,13 +1,14 @@
 //! User configuration, persisted to `.taska/config.toml`.
 //!
-//! The split mirrors how the values are consumed: `[compaction]` tunes how much
-//! history `ta compact` leaves in the log, `[workflow]` describes task semantics
+//! The split mirrors how the values are consumed: `[store]` says where the data
+//! files live, `[compaction]` tunes how much history `ta compact` leaves in the log, `[workflow]` describes task semantics
 //! used by the engine/graph layer, and `[merge]` controls how the git merge
 //! driver reconciles concurrent branches. Every key here is honored somewhere -
 //! this file is not a list of aspirations.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,12 @@ use crate::model::{TaskState, DEPS_KEY, ID_KEY, STATUS_KEY};
 /// rejects any smaller value on every store-backed command.
 pub const MIN_KEEP_EVENTS: usize = 300;
 
+/// Default `[store] dir`: the data files live beside `config.toml`.
+pub const DEFAULT_STORE_DIR: &str = ".";
+
+/// The environment variable a leading `~` in `[store] dir` stands for.
+const HOME_VAR: &str = "HOME";
+
 /// The `config.toml` written by `ta init`.
 ///
 /// Rendered from [`Config::default`] so the values live in exactly one place
@@ -34,6 +41,7 @@ pub const MIN_KEEP_EVENTS: usize = 300;
 #[allow(clippy::too_many_lines)]
 pub fn default_toml() -> String {
     let Config {
+        store,
         compaction,
         workflow,
         merge,
@@ -53,6 +61,17 @@ pub fn default_toml() -> String {
 #
 # Created by `ta init`. Edit freely - `ta init` will not overwrite this file
 # once it exists. Missing keys fall back to the defaults shown below.
+
+[store]
+# Where this store's data files live: the event log (mutations.jsonl), the
+# compacted baseline (baseline.jsonl), and a surfaced merge's conflict marker.
+# A relative path resolves against the directory holding THIS file, so "." keeps
+# them beside it and `..` climbs (`../../tasks`). `$VAR` / `${{VAR}}` expand from
+# the environment and a leading `~` is `$HOME` (`$$` is a literal `$`); every
+# command that reads or writes tasks fails while a variable it names is unset or
+# empty. Changing this does not move existing data: move the files yourself,
+# then run `ta init` to provision the directory and re-point the merge drivers.
+dir = "{store_dir}"
 
 [compaction]
 # `ta compact` folds old events into the baseline snapshot to keep the log
@@ -186,6 +205,7 @@ close_time = "{close_time}"
 #              }} }},
 # }}
 "#,
+        store_dir = store.dir,
         min_keep = MIN_KEEP_EVENTS,
         keep_events = compaction.keep_events,
         keep_days = compaction.keep_days,
@@ -259,6 +279,7 @@ fn render_relationships(relationships: &RelationshipConfig) -> String {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct Config {
+    pub store: StoreConfig,
     pub compaction: CompactionConfig,
     pub workflow: WorkflowConfig,
     pub merge: MergeConfig,
@@ -266,6 +287,179 @@ pub struct Config {
     pub timestamps: TimestampConfig,
     pub relationships: RelationshipConfig,
     pub task_types: TaskTypesConfig,
+}
+
+/// `[store]`: where the store's data files live.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct StoreConfig {
+    /// Directory holding the event log, the baseline, and a surfaced merge's
+    /// conflict marker, as written in the config: relative to the directory
+    /// containing `config.toml`, with `$VAR`/`${VAR}` expanded from the
+    /// environment, a leading `~` read as `$HOME`, and `$$` a literal `$`. See
+    /// [`StoreConfig::resolve_dir`].
+    pub dir: String,
+}
+
+impl Default for StoreConfig {
+    fn default() -> Self {
+        Self {
+            dir: DEFAULT_STORE_DIR.to_string(),
+        }
+    }
+}
+
+impl StoreConfig {
+    /// The directory the data files live in: `dir` expanded from the process
+    /// environment and resolved against `config_dir` (the directory holding
+    /// `config.toml`).
+    ///
+    /// Every variable `dir` names must be set to a non-empty value - an empty
+    /// one would quietly turn `$DATA/tasks` into `/tasks` - and the error names
+    /// all that aren't. `.` and `..` resolve lexically, the way `cd` reads them,
+    /// so `../../tasks` means exactly what it says.
+    pub fn resolve_dir(&self, config_dir: &Path) -> Result<PathBuf, String> {
+        self.resolve_dir_with(config_dir, |name| std::env::var_os(name))
+    }
+
+    /// [`Self::resolve_dir`] over an injected variable lookup.
+    fn resolve_dir_with(
+        &self,
+        config_dir: &Path,
+        lookup: impl Fn(&str) -> Option<OsString>,
+    ) -> Result<PathBuf, String> {
+        let mut expanded = OsString::new();
+        let mut missing: Vec<&str> = Vec::new();
+        for part in parse_store_dir(&self.dir)? {
+            match part {
+                DirPart::Text(text) => expanded.push(text),
+                DirPart::Var(name) => match lookup(name).filter(|value| !value.is_empty()) {
+                    Some(value) => expanded.push(value),
+                    None if !missing.contains(&name) => missing.push(name),
+                    None => {}
+                },
+            }
+        }
+        if !missing.is_empty() {
+            let names = missing
+                .iter()
+                .map(|name| format!("${name}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let them = if missing.len() == 1 { "it" } else { "them" };
+            return Err(format!(
+                "store.dir = \"{}\" needs {names} set to a non-empty value - set {them}, or \
+                 point the store elsewhere with `ta config set store.dir <path>`",
+                self.dir
+            ));
+        }
+        Ok(normalize_lexically(&config_dir.join(expanded)))
+    }
+}
+
+/// One piece of a parsed `[store] dir`.
+#[derive(Debug, PartialEq, Eq)]
+enum DirPart<'a> {
+    /// Literal path text (a `$$` already collapsed to `$`).
+    Text(String),
+    /// An environment variable reference: `$NAME`, `${NAME}`, or the leading `~`.
+    Var(&'a str),
+}
+
+/// Split a `[store] dir` value into literal text and variable references,
+/// rejecting anything that has no single reading (`~user`, a bare or unnamed
+/// `$`, an unterminated `${`, an empty value).
+///
+/// Environment-free, so [`Config::validate`] reports a malformed value on every
+/// command and `ta config set` refuses to write one.
+fn parse_store_dir(spec: &str) -> Result<Vec<DirPart<'_>>, String> {
+    let bad = |why: &str| format!("store.dir = \"{spec}\": {why}");
+    if spec.is_empty() {
+        return Err(bad(
+            "must not be empty (\".\" keeps the data beside config.toml)",
+        ));
+    }
+    let mut parts = Vec::new();
+    // `~` means `$HOME` only as the whole first path component.
+    let mut rest = if let Some(after) = spec.strip_prefix('~') {
+        if !(after.is_empty() || after.starts_with(std::path::is_separator)) {
+            return Err(bad("only `~` and `~/...` are supported, not `~user`"));
+        }
+        parts.push(DirPart::Var(HOME_VAR));
+        after
+    } else {
+        spec
+    };
+    let mut text = String::new();
+    while let Some(at) = rest.find('$') {
+        text.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        if let Some(tail) = after.strip_prefix('$') {
+            text.push('$');
+            rest = tail;
+            continue;
+        }
+        let (name, tail) = if let Some(braced) = after.strip_prefix('{') {
+            let end = braced.find('}').ok_or_else(|| bad("unterminated `${`"))?;
+            (&braced[..end], &braced[end + 1..])
+        } else {
+            let end = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(after.len());
+            after.split_at(end)
+        };
+        if !is_env_var_name(name) {
+            return Err(bad(
+                "`$` must start a variable name (`$NAME` or `${NAME}`); write `$$` for a \
+                 literal `$`",
+            ));
+        }
+        if !text.is_empty() {
+            parts.push(DirPart::Text(std::mem::take(&mut text)));
+        }
+        parts.push(DirPart::Var(name));
+        rest = tail;
+    }
+    text.push_str(rest);
+    if !text.is_empty() {
+        parts.push(DirPart::Text(text));
+    }
+    Ok(parts)
+}
+
+/// A portable environment variable name: a letter or `_`, then letters, digits
+/// or `_`.
+fn is_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Resolve `.` and `..` in `path` without touching the filesystem: `..` drops
+/// the component before it, as `cd` does, instead of following a symlink back
+/// out. `..` at the root stays at the root; a relative path that climbs above
+/// its start keeps its leading `..`s.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                Some(Component::ParentDir | Component::CurDir) | None => out.push(".."),
+            },
+            other => out.push(other),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        out.push(".");
+    }
+    out
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -972,6 +1166,9 @@ impl Config {
     }
 
     fn collect_struct_problems(&self, problems: &mut Vec<String>) {
+        if let Err(problem) = parse_store_dir(&self.store.dir) {
+            problems.push(problem);
+        }
         if self.compaction.keep_events < MIN_KEEP_EVENTS {
             problems.push(format!(
                 "compaction.keep_events = {} is below the minimum of {}. Retaining fewer \
@@ -1499,6 +1696,120 @@ mod tests {
         // from - catches a typo'd key or section in the prose template.
         let parsed: Config = toml::from_str(&default_toml()).unwrap();
         assert_eq!(parsed, Config::default());
+    }
+
+    /// Resolve `dir` against `config_dir` with a fixed fake environment.
+    fn resolve(dir: &str, config_dir: &str) -> Result<PathBuf, String> {
+        let env: HashMap<&str, &str> = [
+            ("HOME", "/home/me"),
+            ("TASKS", "/data/tasks"),
+            ("REL", "shared"),
+            ("EMPTY", ""),
+        ]
+        .into_iter()
+        .collect();
+        StoreConfig {
+            dir: dir.to_string(),
+        }
+        .resolve_dir_with(Path::new(config_dir), |name| {
+            env.get(name).map(OsString::from)
+        })
+    }
+
+    #[test]
+    fn store_dir_resolves_relative_to_the_config_dir() {
+        let ok = |dir: &str, config_dir: &str| resolve(dir, config_dir).unwrap();
+        assert_eq!(ok(".", "/repo/.taska"), PathBuf::from("/repo/.taska"));
+        assert_eq!(ok("./", "/repo/.taska"), PathBuf::from("/repo/.taska"));
+        assert_eq!(
+            ok("data", "/repo/.taska"),
+            PathBuf::from("/repo/.taska/data")
+        );
+        assert_eq!(ok("..", "/repo/.taska"), PathBuf::from("/repo"));
+        assert_eq!(
+            ok("../../tasks", "/repo/sub/.taska"),
+            PathBuf::from("/repo/tasks")
+        );
+        assert_eq!(
+            ok("a/./b/../c", "/repo/.taska"),
+            PathBuf::from("/repo/.taska/a/c")
+        );
+        // An absolute path ignores the config dir; `..` can't climb past the root.
+        assert_eq!(
+            ok("/srv/tasks", "/repo/.taska"),
+            PathBuf::from("/srv/tasks")
+        );
+        assert_eq!(ok("../../../../x", "/repo/.taska"), PathBuf::from("/x"));
+        // A relative config dir (the merge driver's `%P` parent) stays relative.
+        assert_eq!(ok("../data", ".taska"), PathBuf::from("data"));
+        assert_eq!(ok("../../data", ".taska"), PathBuf::from("../data"));
+        assert_eq!(ok("..", ".taska"), PathBuf::from("."));
+    }
+
+    #[test]
+    fn store_dir_expands_env_vars_and_tilde() {
+        let ok = |dir: &str| resolve(dir, "/repo/.taska").unwrap();
+        assert_eq!(ok("$TASKS/proj"), PathBuf::from("/data/tasks/proj"));
+        assert_eq!(
+            ok("${TASKS}-old/proj"),
+            PathBuf::from("/data/tasks-old/proj")
+        );
+        assert_eq!(ok("$HOME/$REL/p"), PathBuf::from("/home/me/shared/p"));
+        assert_eq!(ok("~"), PathBuf::from("/home/me"));
+        assert_eq!(ok("~/tasks"), PathBuf::from("/home/me/tasks"));
+        // A relative expansion is still relative to the config dir.
+        assert_eq!(ok("$REL/p"), PathBuf::from("/repo/.taska/shared/p"));
+        assert_eq!(ok("../$REL"), PathBuf::from("/repo/shared"));
+        // `$$` is a literal `$`; `~` past the first component is literal.
+        assert_eq!(ok("a$$b"), PathBuf::from("/repo/.taska/a$b"));
+        assert_eq!(ok("$$HOME"), PathBuf::from("/repo/.taska/$HOME"));
+        assert_eq!(ok("a/~"), PathBuf::from("/repo/.taska/a/~"));
+    }
+
+    #[test]
+    fn store_dir_requires_every_named_var_set_and_non_empty() {
+        let err = resolve("$NOPE/x", "/r").unwrap_err();
+        assert!(err.contains("$NOPE"), "{err}");
+        // Empty is as bad as unset: `$EMPTY/x` must not quietly become `/x`.
+        let err = resolve("$EMPTY/x", "/r").unwrap_err();
+        assert!(err.contains("$EMPTY"), "{err}");
+        // Every missing var is named, each once.
+        let err = resolve("$A/${B}/$A/$TASKS", "/r").unwrap_err();
+        let (_, named) = err.split_once(" needs ").unwrap();
+        assert!(named.starts_with("$A, $B set"), "{err}");
+        assert_eq!(named.matches("$A").count(), 1, "{err}");
+        assert!(!named.contains("$TASKS"), "a set var isn't reported: {err}");
+        // `~` needs HOME like `$HOME` does.
+        let no_home = StoreConfig {
+            dir: "~/x".to_string(),
+        }
+        .resolve_dir_with(Path::new("/r"), |_| None)
+        .unwrap_err();
+        assert!(no_home.contains("$HOME"), "{no_home}");
+    }
+
+    #[test]
+    fn malformed_store_dir_is_a_struct_problem() {
+        for bad in ["", "~user/x", "$", "a/$/b", "${", "${X", "${}", "$1", "$-x"] {
+            assert!(parse_store_dir(bad).is_err(), "must reject `{bad}`");
+            let cfg = Config {
+                store: StoreConfig {
+                    dir: bad.to_string(),
+                },
+                ..Config::default()
+            };
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains("store.dir"), "`{bad}`: {err}");
+        }
+        // Well-formed values validate even while their variables are unset -
+        // resolution, not validation, owns the environment.
+        let cfg = Config {
+            store: StoreConfig {
+                dir: "$SURELY_UNSET_TASKA_VAR/x".to_string(),
+            },
+            ..Config::default()
+        };
+        cfg.validate().unwrap();
     }
 
     #[test]

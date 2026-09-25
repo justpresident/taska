@@ -8,6 +8,17 @@ git log.
 ## [Unreleased]
 
 ### Added
+- **`[store] dir` puts the task data somewhere other than `.taska/`.** The event
+  log, the baseline, and a surfaced merge's conflict marker live wherever `dir`
+  points, while `config.toml` - and so discovery and `-C` - stays in `.taska/`.
+  A relative path resolves against `.taska/` (`"../../tasks"`), `$VAR`/`${VAR}`
+  expand from the environment, `~` is `$HOME`, and `$$` is a literal `$`. Any
+  command that touches the data refuses to run while a variable the path names
+  is unset or empty, or while the directory doesn't exist; `ta config` keeps
+  working so the setting can be fixed, and `ta init` provisions the new
+  location. The merge drivers, the health check, and `undo`'s committed-history
+  check follow the data into whichever repository holds it. The default, `"."`,
+  is the existing layout.
 - **A Claude Code plugin**, distributed from this repository's own marketplace
   (`/plugin marketplace add justpresident/taska`). It ships a skill that teaches
   an agent this store's workflow - config-agnostic, pointing at `ta prime` rather

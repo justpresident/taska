@@ -10,6 +10,16 @@ pub fn cmd_init(no_commit: bool) -> Result<(), DynError> {
         StoreInit::Reused(dir) => println!("taska store already present at {}", dir.display()),
         StoreInit::Created(dir) => println!("Initialized taska store at {}", dir.display()),
     }
+    if let Some(dir) = &outcome.data_dir {
+        println!("Task data (store.dir) lives in {}", dir.display());
+    }
+    for path in &outcome.stranded {
+        eprintln!(
+            "warning: {} still holds task data, but store.dir points elsewhere - this store \
+             no longer reads it; move it into the data directory (or point store.dir back)",
+            path.display()
+        );
+    }
     for file in &outcome.agent_files {
         let msg = match file.status {
             AgentFileStatus::Created => "Wrote taska integration to",

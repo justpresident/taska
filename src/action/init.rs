@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::DynError;
 use crate::scm;
-use crate::storage::FileStore;
+use crate::storage::{FileStore, STORE_DIR_NAME};
 
 /// Whether `init` reused an existing store or created a new one (with its path).
 pub enum StoreInit {
@@ -39,6 +39,12 @@ pub struct AgentFile {
 /// git repo, or nothing changed since the last init).
 pub struct InitOutcome {
     pub store: StoreInit,
+    /// The data directory, when `[store] dir` puts it somewhere other than
+    /// beside `config.toml`.
+    pub data_dir: Option<PathBuf>,
+    /// Log files left holding data beside `config.toml` while `[store] dir`
+    /// points elsewhere (see [`FileStore::stranded_data_files`]).
+    pub stranded: Vec<PathBuf>,
     pub agent_files: Vec<AgentFile>,
     pub commit: Option<String>,
 }
@@ -67,6 +73,10 @@ const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 /// (re)registered, and the integration block is always re-synced, so re-running
 /// is how a clone installs both.
 ///
+/// The merge drivers are wired for wherever the DATA lives (`[store] dir`), which
+/// is also where provisioning creates the log files - re-running `init` is how a
+/// changed `[store] dir` is applied.
+///
 /// With `commit`, the store, the SCM's committed registration files (git's
 /// `.gitattributes`; nothing for mercurial, whose registration lives in the
 /// untracked `.hg/hgrc`), and any agent file this run wrote are committed as one
@@ -74,7 +84,9 @@ const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 /// it no-ops cleanly outside a repo or when nothing changed (see
 /// [`scm::commit_paths`]). Works under both git and mercurial - the commit helper
 /// dispatches by the detected SCM, and [`scm::committed_registration_paths`]
-/// contributes only what that SCM actually writes.
+/// contributes only what that SCM actually writes. A relocated data directory's
+/// files and registration join the commit only when they sit in the store's own
+/// checkout; data kept outside it (another repo, or no repo) is left to the user.
 pub fn init(commit: bool) -> Result<InitOutcome, DynError> {
     let (base_dir, store_outcome) = if let Ok(existing) = FileStore::discover() {
         let dir = existing.base_dir;
@@ -82,19 +94,21 @@ pub fn init(commit: bool) -> Result<InitOutcome, DynError> {
     } else {
         let cwd = std::env::current_dir()?;
         let root = scm::scm_root(&cwd).map(Path::to_path_buf).unwrap_or(cwd);
-        let dir = root.join(".taska");
+        let dir = root.join(STORE_DIR_NAME);
         (dir.clone(), StoreInit::Created(dir))
     };
 
-    // Provision honors the (possibly user-edited) config, creating any newly
-    // configured log files - re-running `init` is how a `[store]` path change is
-    // applied.
+    // Provision honors the (possibly user-edited) config, creating the configured
+    // data directory and its log files - re-running `init` is how a `[store] dir`
+    // change is applied.
     let store = FileStore::provision(base_dir)?;
     let repo_root = store
         .repo_root()
         .ok_or("could not determine repository root from the .taska directory")?
         .to_path_buf();
-    scm::setup(&repo_root)?;
+    let data_dir = store.data_dir()?.to_path_buf();
+    let relocated = store.data_relocated();
+    scm::setup(&data_dir)?;
 
     // The block is config-AGNOSTIC (durable bare commands + working habits +
     // pointers to `ta prime`/`--help`), so it needs nothing from the store and
@@ -107,8 +121,16 @@ pub fn init(commit: bool) -> Result<InitOutcome, DynError> {
     // into the commit. A fresh store's message says "Initialize"; a re-init that
     // has something to commit says "Update".
     let commit = if commit {
-        let mut paths = vec![store.base_dir];
-        paths.extend(scm::committed_registration_paths(&repo_root));
+        let mut paths = vec![store.base_dir.clone()];
+        if scm::same_checkout(&repo_root, &data_dir) {
+            if relocated {
+                // File by file, never the directory: a data dir can be an
+                // ancestor of the project (`dir = ".."`), and adding it whole
+                // would sweep the user's unrelated changes into this commit.
+                paths.extend(store.data_files()?.into_iter().filter(|path| path.exists()));
+            }
+            paths.extend(scm::committed_registration_paths(&data_dir));
+        }
         paths.extend(
             agent_files
                 .iter()
@@ -131,6 +153,8 @@ pub fn init(commit: bool) -> Result<InitOutcome, DynError> {
 
     Ok(InitOutcome {
         store: store_outcome,
+        data_dir: relocated.then_some(data_dir),
+        stranded: store.stranded_data_files(),
         agent_files,
         commit,
     })
