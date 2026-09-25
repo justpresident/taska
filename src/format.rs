@@ -27,10 +27,10 @@ pub(crate) fn sgr(text: &str, code: &str, on: bool) -> String {
     }
 }
 
-/// The SGR codes this tool paints with, from the terminal's NAMED 16-color
-/// palette so a user's theme remaps them. Named rather than inlined because each
-/// is referenced from more than one renderer, and a task must look the same in
-/// every one of them.
+/// The SGR codes this tool paints with: colors from the terminal's NAMED
+/// 16-color palette, so a user's theme remaps them, plus the dim and bold
+/// attributes. Named rather than inlined because each is referenced from more
+/// than one renderer, and a task must look the same in every one of them.
 const SGR_ID: &str = "36"; // cyan
 const SGR_STATUS: &str = "32"; // green
 const SGR_DONE: &str = "2"; // dim - reserved for "this task is done/inactive"

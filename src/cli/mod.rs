@@ -55,6 +55,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Initialize a taska repository environment
+    ///
+    /// Creates the store (or reuses one found up the tree), registers the merge
+    /// drivers, and syncs the agent-integration block. Idempotent - re-run it in
+    /// each fresh clone, and after changing `[store] dir` to provision the new
+    /// data directory and point the merge drivers at it.
     Init {
         /// Create the store and `.gitattributes` but don't git-commit them
         #[arg(long)]

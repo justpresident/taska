@@ -92,10 +92,10 @@ const GITIGNORE_FILE: &str = ".gitignore";
 /// marker.
 pub struct FileStore {
     pub base_dir: PathBuf,
-    /// The resolved `[store] dir`. A resolution failure (a variable it names
-    /// is unset) is kept rather than raised, so commands that never touch the
-    /// data still run - `ta config` above all, the way to fix the setting -
-    /// while every data access reports it.
+    /// The resolved `[store] dir`. A resolution failure (a malformed value, or
+    /// a variable it names that is unset or empty) is kept rather than raised,
+    /// so commands that never touch the data still run - `ta config` above all,
+    /// the way to fix the setting - while every data access reports it.
     data_dir: Result<PathBuf, String>,
     config: Config,
 }
@@ -350,6 +350,11 @@ impl EventStore for FileStore {
         read_events(&self.mutations_path()?)
     }
 
+    fn log_fingerprint(&self) -> Option<(u64, std::time::SystemTime)> {
+        let meta = fs::metadata(self.mutations_path().ok()?).ok()?;
+        Some((meta.len(), meta.modified().ok()?))
+    }
+
     /// Append-only write path for normal operations. Never rewrites or reorders
     /// existing lines, which is what keeps the log Git-merge-friendly (branches
     /// only ever append).
@@ -358,11 +363,6 @@ impl EventStore for FileStore {
     /// past the largest already in the log (or 1 for a fresh/fully-overlaid log).
     /// Minting under the same lock as the write is what stops two concurrent
     /// writers from handing out the same `seq`.
-    fn log_fingerprint(&self) -> Option<(u64, std::time::SystemTime)> {
-        let meta = fs::metadata(self.mutations_path().ok()?).ok()?;
-        Some((meta.len(), meta.modified().ok()?))
-    }
-
     fn append_events(&self, drafts: &[MutationEvent]) -> Result<(), DynError> {
         if drafts.is_empty() {
             return Ok(());
