@@ -84,9 +84,9 @@ fn cmd_config_set(store: &FileStore, key: &str, raw: &str) -> Result<(), DynErro
 
 /// Render a leaf config value git-config-style: bare for strings, TOML form
 /// (numbers, bools, arrays) otherwise.
-fn show_config_value(v: &toml::Value) -> String {
+fn show_config_value(v: &toml_edit::Value) -> String {
     match v {
-        toml::Value::String(s) => s.clone(),
+        toml_edit::Value::String(s) => s.value().clone(),
         other => other.to_string(),
     }
 }
@@ -99,8 +99,11 @@ mod tests {
     #[test]
     fn show_renders_strings_bare_and_others_as_toml() {
         // git-config style: a string renders bare, everything else its TOML form.
-        assert_eq!(show_config_value(&toml::Value::from("status")), "status");
-        assert_eq!(show_config_value(&toml::Value::from(5000)), "5000");
-        assert_eq!(show_config_value(&toml::Value::from(true)), "true");
+        assert_eq!(
+            show_config_value(&toml_edit::Value::from("status")),
+            "status"
+        );
+        assert_eq!(show_config_value(&toml_edit::Value::from(5000)), "5000");
+        assert_eq!(show_config_value(&toml_edit::Value::from(true)), "true");
     }
 }

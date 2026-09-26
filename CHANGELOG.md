@@ -12,6 +12,10 @@ git log.
   declared). The event log's writer lock uses the standard library's
   `File::lock` instead of the `fd-lock` crate - the same `flock` / `LockFileEx`
   lock underneath, so an older and a newer `ta` still exclude each other.
+- **One TOML library instead of two.** Config, the `ta edit` document and
+  `ta config set` all go through `toml_edit`; the `toml` crate is no longer a
+  dependency. CLI output is unchanged. For library users,
+  `taska::action::config::get` and `list` now return `toml_edit::Value`.
 
 ## [1.4.0] - 2026-09-25
 

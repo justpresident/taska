@@ -267,7 +267,7 @@ fn edit_create_prefills_the_schema_template() {
     }
     // Assert on the parsed KEYS: a `starts_with` line scan both over-matches a
     // longer field name and misses a key emitted anywhere but at line start.
-    let keys: toml::Table = toml::from_str(&opened).unwrap();
+    let keys = opened.parse::<toml_edit::DocumentMut>().unwrap();
     for computed in ["id", "deps", "made_at", "touched_at", "shipped_at", "needs"] {
         assert!(
             !keys.contains_key(computed),

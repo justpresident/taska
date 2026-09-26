@@ -1134,7 +1134,7 @@ impl Config {
     /// present override their defaults.
     pub fn load(path: &Path) -> Result<Self, DynError> {
         match std::fs::read_to_string(path) {
-            Ok(contents) => Ok(toml::from_str(&contents)?),
+            Ok(contents) => Ok(toml_edit::de::from_str(&contents)?),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e.into()),
         }
@@ -1694,7 +1694,7 @@ mod tests {
     fn template_parses_to_defaults() {
         // The rendered template must round-trip to the defaults it was built
         // from - catches a typo'd key or section in the prose template.
-        let parsed: Config = toml::from_str(&default_toml()).unwrap();
+        let parsed: Config = toml_edit::de::from_str(&default_toml()).unwrap();
         assert_eq!(parsed, Config::default());
     }
 
@@ -1837,7 +1837,7 @@ mod tests {
 
     #[test]
     fn task_type_schemas_parse_shorthand_and_long_form() {
-        let cfg: Config = toml::from_str(
+        let cfg: Config = toml_edit::de::from_str(
             r#"
 [task_types.bug]
 closed = true
@@ -1862,7 +1862,7 @@ required = true
         assert!(cfg.validate().is_ok(), "a sound schema validates");
 
         // A typo'd long-form key is a LOAD error, not a silently weaker schema.
-        assert!(toml::from_str::<Config>(
+        assert!(toml_edit::de::from_str::<Config>(
             "[task_types.t.fields.s]\ntype = \"string\"\nrequird = true\n"
         )
         .is_err());
@@ -1871,7 +1871,7 @@ required = true
     #[test]
     fn task_type_validation_catches_bad_declarations() {
         let check = |types_toml: &str, needle: &str| {
-            let cfg: Config = toml::from_str(types_toml).unwrap();
+            let cfg: Config = toml_edit::de::from_str(types_toml).unwrap();
             let err = cfg.validate().unwrap_err().to_string();
             assert!(err.contains(needle), "`{needle}` not in: {err}");
         };
@@ -1908,7 +1908,7 @@ required = true
     #[test]
     fn field_constraints_validate_and_check_values() {
         let check = |types_toml: &str, needle: &str| {
-            let cfg: Config = toml::from_str(types_toml).unwrap();
+            let cfg: Config = toml_edit::de::from_str(types_toml).unwrap();
             let err = cfg.validate().unwrap_err().to_string();
             assert!(err.contains(needle), "`{needle}` not in: {err}");
         };
@@ -1952,7 +1952,7 @@ required = true
         );
 
         // A sound constrained spec validates, and value checks fire precisely.
-        let cfg: Config = toml::from_str(
+        let cfg: Config = toml_edit::de::from_str(
             r#"
 [task_types.t.fields.title]
 type = "string"
@@ -1991,7 +1991,7 @@ max_items = 2
     #[test]
     fn workflow_display_names_validate() {
         let check = |toml_src: &str, needle: &str| {
-            let cfg: Config = toml::from_str(toml_src).unwrap();
+            let cfg: Config = toml_edit::de::from_str(toml_src).unwrap();
             let err = cfg.validate().unwrap_err().to_string();
             assert!(err.contains(needle), "`{needle}` not in: {err}");
         };
@@ -2018,7 +2018,7 @@ max_items = 2
     #[test]
     fn name_namespace_collisions_are_rejected() {
         let check = |toml_src: &str, needle: &str| {
-            let cfg: Config = toml::from_str(toml_src).unwrap();
+            let cfg: Config = toml_edit::de::from_str(toml_src).unwrap();
             let err = cfg.validate().unwrap_err().to_string();
             assert!(err.contains(needle), "`{needle}` not in: {err}");
         };
@@ -2053,7 +2053,7 @@ max_items = 2
             "used by both",
         );
         // A symmetric self-inverse stays sanctioned.
-        let symmetric: Config = toml::from_str(
+        let symmetric: Config = toml_edit::de::from_str(
             "[relationships.depends_on]\nkind = \"blocker\"\n\
              [relationships.mirror]\nkind = \"info\"\ninverse = \"mirror\"\n",
         )
@@ -2090,18 +2090,20 @@ max_items = 2
             "relates_to is symmetric (self-inverse)"
         );
         // A `[relationships.x]` sub-table with only `kind` defaults inverse="".
-        let parsed: Config = toml::from_str("[relationships.needs]\nkind = \"blocker\"\n").unwrap();
+        let parsed: Config =
+            toml_edit::de::from_str("[relationships.needs]\nkind = \"blocker\"\n").unwrap();
         assert_eq!(parsed.relationships.types["needs"].kind, RelKind::Blocker);
         assert_eq!(parsed.relationships.types["needs"].inverse, "");
         // The pre-rename key `type` still loads as an alias of `kind`.
         let legacy: Config =
-            toml::from_str("[relationships.needs]\ntype = \"hierarchy\"\n").unwrap();
+            toml_edit::de::from_str("[relationships.needs]\ntype = \"hierarchy\"\n").unwrap();
         assert_eq!(legacy.relationships.types["needs"].kind, RelKind::Hierarchy);
     }
 
     #[test]
     fn partial_config_keeps_other_defaults() {
-        let parsed: Config = toml::from_str("[workflow]\ndone_status = \"closed\"\n").unwrap();
+        let parsed: Config =
+            toml_edit::de::from_str("[workflow]\ndone_status = \"closed\"\n").unwrap();
         assert_eq!(parsed.workflow.done_status, "closed");
         assert_eq!(parsed.workflow.status_field, STATUS_KEY); // untouched default
         assert_eq!(parsed.compaction, CompactionConfig::default()); // whole section defaulted
@@ -2117,7 +2119,7 @@ max_items = 2
             ("theirs", OnConflict::Theirs),
         ] {
             let cfg: Config =
-                toml::from_str(&format!("[merge]\non_conflict = \"{text}\"\n")).unwrap();
+                toml_edit::de::from_str(&format!("[merge]\non_conflict = \"{text}\"\n")).unwrap();
             assert_eq!(cfg.merge.on_conflict, expected);
         }
     }
@@ -2147,7 +2149,7 @@ values = ["todo", "left", "right", "done"]
 transitions = {transitions}
 "#
             );
-            toml::from_str::<Config>(&toml).unwrap().validate()
+            toml_edit::de::from_str::<Config>(&toml).unwrap().validate()
         };
 
         // A diamond: neither branch touches `done` directly, both reach it via

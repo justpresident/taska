@@ -80,7 +80,7 @@ pub fn store_without_timestamps() -> InMemoryStore {
 /// declares no task types, so its status is free-form).
 pub fn store_with_schema() -> InMemoryStore {
     InMemoryStore {
-        config: toml::from_str(RENAMED_SCHEMA_CONFIG).expect("schema config parses"),
+        config: toml_edit::de::from_str(RENAMED_SCHEMA_CONFIG).expect("schema config parses"),
         ..Default::default()
     }
 }
@@ -90,7 +90,7 @@ pub fn store_with_schema() -> InMemoryStore {
 /// relationships, and the timestamp columns. Use it via [`store_renamed`] for
 /// config-reading unit tests (status VALUES stay free: literal todo/closed).
 pub fn renamed_config() -> Config {
-    toml::from_str(RENAMED_OPEN_CONFIG).expect("renamed config parses")
+    toml_edit::de::from_str(RENAMED_OPEN_CONFIG).expect("renamed config parses")
 }
 
 /// An [`InMemoryStore`] whose config renames every configurable name (see

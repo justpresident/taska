@@ -6,6 +6,8 @@
 //! `toml_edit`) and rejects an invalid result. Rendering - the git-config display
 //! form - is the frontend's job; these return values and reports.
 
+use serde::Serialize;
+
 use crate::action::{materialize, read, Warning};
 use crate::config::Config;
 use crate::error::DynError;
@@ -13,24 +15,53 @@ use crate::schema::schema_conformance_report;
 use crate::storage::{EventStore, FileStore, CONFIG_FILE};
 
 /// Resolve one effective config value by dotted key (file values over defaults).
-pub fn get(cfg: &Config, key: &str) -> Result<toml::Value, DynError> {
-    let root = toml::Value::try_from(cfg)?;
-    let mut cur = &root;
-    for part in key.split('.') {
-        cur = cur
-            .get(part)
-            .ok_or_else(|| format!("no config key `{key}`"))?;
-    }
-    Ok(cur.clone())
+/// A section or sub-table comes back as an inline table.
+pub fn get(cfg: &Config, key: &str) -> Result<toml_edit::Value, DynError> {
+    lookup(&effective(cfg)?, key)
+        .cloned()
+        .ok_or_else(|| format!("no config key `{key}`").into())
 }
 
 /// Every effective config value as `(dotted.key, value)` pairs, sorted by key.
-pub fn list(cfg: &Config) -> Result<Vec<(String, toml::Value)>, DynError> {
-    let root = toml::Value::try_from(cfg)?;
-    let mut pairs: Vec<(String, toml::Value)> = Vec::new();
-    flatten("", &root, &mut pairs);
+pub fn list(cfg: &Config) -> Result<Vec<(String, toml_edit::Value)>, DynError> {
+    let mut pairs: Vec<(String, toml_edit::Value)> = Vec::new();
+    flatten("", &effective(cfg)?, &mut pairs);
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(pairs)
+}
+
+/// The effective config as one TOML value tree: an inline table per section,
+/// keys sorted at every level so a table renders the same on every run
+/// (`ta config get display`) rather than in struct-field order.
+fn effective(cfg: &Config) -> Result<toml_edit::Value, DynError> {
+    let mut root = cfg.serialize(toml_edit::ser::ValueSerializer::new())?;
+    sort_tables(&mut root);
+    Ok(root)
+}
+
+/// Sort every inline table's keys, recursing through nested tables and arrays.
+fn sort_tables(value: &mut toml_edit::Value) {
+    match value {
+        toml_edit::Value::InlineTable(table) => {
+            table.sort_values();
+            for (_, child) in table.iter_mut() {
+                sort_tables(child);
+            }
+        }
+        toml_edit::Value::Array(items) => {
+            for child in items.iter_mut() {
+                sort_tables(child);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Walk a dotted key down through the tree's tables; `None` if any segment is
+/// missing or lands on a non-table.
+fn lookup<'a>(root: &'a toml_edit::Value, key: &str) -> Option<&'a toml_edit::Value> {
+    key.split('.')
+        .try_fold(root, |cur, part| cur.as_inline_table()?.get(part))
 }
 
 /// A `validate` result.
@@ -88,16 +119,14 @@ pub fn set(store: &FileStore, key: &str, raw: &str) -> Result<String, DynError> 
     // Reject unless the whole document still deserializes to a valid Config (bad
     // types / unknown enum variants) AND passes validate() (semantic limits like
     // the keep_events floor).
-    let candidate: Config = toml::from_str(&doc.to_string())?;
+    let candidate: Config = toml_edit::de::from_str(&doc.to_string())?;
 
     // Guard against typo'd keys: serde(default) silently drops an unknown field,
     // so the value must survive a load round-trip to confirm the key is real.
-    let normalized = toml::Value::try_from(&candidate)?;
-    let mut cur = &normalized;
-    for part in key.split('.') {
-        cur = cur.get(part).ok_or_else(|| {
-            format!("unknown config key `{key}` (no such field; nothing was changed)")
-        })?;
+    if lookup(&effective(&candidate)?, key).is_none() {
+        return Err(
+            format!("unknown config key `{key}` (no such field; nothing was changed)").into(),
+        );
     }
 
     // Reject unless valid against the task graph this config will govern
@@ -123,11 +152,11 @@ pub fn set(store: &FileStore, key: &str, raw: &str) -> Result<String, DynError> 
 
 /// Flatten a TOML tree into `dotted.key`/value pairs, recursing through tables so
 /// nested sub-tables (e.g. `display.column_max_width.*`) show.
-fn flatten(prefix: &str, v: &toml::Value, out: &mut Vec<(String, toml::Value)>) {
-    if let toml::Value::Table(table) = v {
+fn flatten(prefix: &str, v: &toml_edit::Value, out: &mut Vec<(String, toml_edit::Value)>) {
+    if let toml_edit::Value::InlineTable(table) = v {
         for (k, val) in table {
             let key = if prefix.is_empty() {
-                k.clone()
+                k.to_string()
             } else {
                 format!("{prefix}.{k}")
             };
@@ -242,7 +271,7 @@ mod tests {
             parse_config_value("80"),
         )
         .unwrap();
-        let cfg: Config = toml::from_str(&doc.to_string()).unwrap();
+        let cfg: Config = toml_edit::de::from_str(&doc.to_string()).unwrap();
         assert_eq!(cfg.display.column_max_width.get("title"), Some(&80));
 
         // An empty key segment is rejected rather than producing a bogus table.
@@ -277,7 +306,7 @@ mod tests {
             text.contains("column_max_width = { title = 120 }"),
             "updated in place, still inline: {text}"
         );
-        let cfg: Config = toml::from_str(&text).unwrap();
+        let cfg: Config = toml_edit::de::from_str(&text).unwrap();
         assert_eq!(cfg.display.column_max_width.get("title"), Some(&120));
         assert_eq!(
             cfg.relationships.types[BLOCKER].kind,
@@ -295,18 +324,13 @@ mod tests {
                 .iter()
                 .find(|(key, _)| key == k)
                 .map(|(_, v)| v.clone())
+                .unwrap()
         };
+        assert_eq!(find("workflow.status_field").as_str(), Some(STATUS_FIELD));
+        assert_eq!(find("compaction.keep_events").as_integer(), Some(5000));
         assert_eq!(
-            find("workflow.status_field"),
-            Some(toml::Value::from(STATUS_FIELD))
-        );
-        assert_eq!(
-            find("compaction.keep_events"),
-            Some(toml::Value::from(5000))
-        );
-        assert_eq!(
-            find("display.column_max_width.title"),
-            Some(toml::Value::from(80))
+            find("display.column_max_width.title").as_integer(),
+            Some(80)
         );
     }
 }

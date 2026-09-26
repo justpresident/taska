@@ -1356,7 +1356,7 @@ mod tests {
 
     #[test]
     fn schema_gate_validates_whole_tasks_and_lists_every_violation() {
-        let config: Config = toml::from_str(
+        let config: Config = toml_edit::de::from_str(
             r#"
 [task_types.bug]
 closed = true
@@ -1440,7 +1440,7 @@ required = true
 
     #[test]
     fn schema_coercion_lifts_declared_values() {
-        let config: Config = toml::from_str(
+        let config: Config = toml_edit::de::from_str(
             r#"
 [task_types.bug.fields]
 version = "string"
@@ -1502,7 +1502,7 @@ nums = "array<int>"
 
     #[test]
     fn empty_string_unsets_optional_fields_but_keeps_required() {
-        let config: Config = toml::from_str(
+        let config: Config = toml_edit::de::from_str(
             r#"
 [task_types.bug.fields]
 summary = { type = "string", required = true }
@@ -1551,7 +1551,7 @@ note = "string"
     #[test]
     fn accumulate_dispatch_follows_declared_kinds() {
         use crate::test_support::{state, task};
-        let config: Config = toml::from_str(
+        let config: Config = toml_edit::de::from_str(
             r#"
 [task_types.bug.fields]
 points = "uint"
@@ -1649,9 +1649,10 @@ flag = "bool"
     #[test]
     fn accumulate_no_ops_drop_and_results_validate() {
         use crate::test_support::{state, task};
-        let config: Config =
-            toml::from_str("[task_types.bug.fields]\npoints = \"uint\"\ntags = \"set<string>\"\n")
-                .unwrap();
+        let config: Config = toml_edit::de::from_str(
+            "[task_types.bug.fields]\npoints = \"uint\"\ntags = \"set<string>\"\n",
+        )
+        .unwrap();
         let existing = state(&[task(
             "t",
             &[],
@@ -1713,7 +1714,7 @@ flag = "bool"
     #[test]
     fn schema_gate_revalidates_on_retype() {
         use crate::test_support::{state, task};
-        let config: Config = toml::from_str(
+        let config: Config = toml_edit::de::from_str(
             r#"
 [task_types.bug.fields.severity]
 type = "enum"
@@ -1766,7 +1767,7 @@ required = true
         // declared under the DISPLAY name, the prior value is read from the
         // CANONICAL key. Getting this wrong would silently disable the gate on
         // every store that renames its status field.
-        let config: Config = toml::from_str(&format!(
+        let config: Config = toml_edit::de::from_str(&format!(
             r#"
 [workflow]
 status_field = "{STATUS_FIELD}"
@@ -1811,7 +1812,7 @@ transitions = {{ todo = ["doing"], doing = ["done"], done = [] }}
         use crate::test_support::{state, task};
         // The schema declares the status under its DISPLAY name STATUS_FIELD;
         // the stored key is canonical STATUS_KEY - the gate must match them up.
-        let config: Config = toml::from_str(&format!(
+        let config: Config = toml_edit::de::from_str(&format!(
             r#"
 [workflow]
 status_field = "{STATUS_FIELD}"

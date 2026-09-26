@@ -140,7 +140,7 @@ fn serialize_fields(fields: &Map<String, Value>, as_json: bool) -> Result<String
     if as_json {
         Ok(serde_json::to_string_pretty(fields)?)
     } else {
-        toml::to_string_pretty(fields).map_err(|e| {
+        toml_edit::ser::to_string_pretty(fields).map_err(|e| {
             format!("cannot represent this task as TOML ({e}); edit it with `--json` instead")
                 .into()
         })
@@ -153,7 +153,7 @@ fn parse_fields(text: &str, as_json: bool) -> Result<Map<String, Value>, DynErro
     if as_json {
         serde_json::from_str(text).map_err(|e| format!("invalid JSON: {e}").into())
     } else {
-        toml::from_str(text).map_err(|e| format!("invalid TOML: {e}").into())
+        toml_edit::de::from_str(text).map_err(|e| format!("invalid TOML: {e}").into())
     }
 }
 

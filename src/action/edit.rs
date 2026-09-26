@@ -424,7 +424,7 @@ mod tests {
         // `status_field = "priority"` renames the canonical `status` onto a name
         // this task already stores an ordinary value under (grandfathered before
         // the rename). The real value must survive; the blank must not land.
-        let config: Config = toml::from_str(
+        let config: Config = toml_edit::de::from_str(
             r#"
 [workflow]
 status_field = "priority"
@@ -445,7 +445,7 @@ status_field = "priority"
 
     #[test]
     fn create_template_prefills_editable_fields_and_known_defaults() {
-        let config: Config = toml::from_str(
+        let config: Config = toml_edit::de::from_str(
             r#"
 [workflow]
 untyped_tasks = "deny"
