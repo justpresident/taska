@@ -7,6 +7,12 @@ git log.
 
 ## [Unreleased]
 
+### Changed
+- **Building from source needs Rust 1.89 or newer** (`rust-version` is now
+  declared). The event log's writer lock uses the standard library's
+  `File::lock` instead of the `fd-lock` crate - the same `flock` / `LockFileEx`
+  lock underneath, so an older and a newer `ta` still exclude each other.
+
 ## [1.4.0] - 2026-09-25
 
 Task data can live outside `.taska/` - beside the project, in another repository,

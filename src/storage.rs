@@ -2,7 +2,7 @@
 //!
 //! [`EventStore`] is the abstraction the rest of the program depends on; it
 //! says *what* a store can do, not *how*. [`FileStore`] is the concrete,
-//! fd-locked JSONL-on-disk implementation. Depending on the trait keeps the
+//! file-locked JSONL-on-disk implementation. Depending on the trait keeps the
 //! command and engine layers ignorant of the storage mechanism and lets tests
 //! substitute an in-memory fake.
 
@@ -10,7 +10,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use fd_lock::RwLock;
 use serde_json::Value;
 
 use crate::config::Config;
@@ -240,6 +239,19 @@ impl FileStore {
         Ok(self.data_dir()?.join(CONFLICT_MARKER_FILE))
     }
 
+    /// Open the mutation log with `options` and take the exclusive lock every
+    /// log writer holds, blocking until it is free - `flock(LOCK_EX)` on Unix,
+    /// `LockFileEx` on Windows ([`File::lock`]). The lock lasts as long as the
+    /// returned `File`, so dropping it is the unlock.
+    ///
+    /// `options` must include `read` or `write`: Windows refuses to lock a
+    /// handle opened for append alone.
+    fn open_log_locked(&self, options: &OpenOptions) -> Result<File, DynError> {
+        let file = options.open(self.mutations_path()?)?;
+        file.lock()?;
+        Ok(file)
+    }
+
     fn mutations_path(&self) -> Result<PathBuf, DynError> {
         Ok(self.data_dir()?.join(MUTATIONS_FILE))
     }
@@ -368,17 +380,11 @@ impl EventStore for FileStore {
             return Ok(());
         }
         // `append(true)` keeps the write offset pinned to EOF for every write,
-        // even after we seek to the start to read the current max `seq`.
-        let file = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(self.mutations_path()?)?;
-
-        // OS advisory write lock so concurrent writers can't interleave partial
-        // lines into the log or race on sequence assignment.
-        let mut lock = RwLock::new(file);
-        let mut locked_file = lock.write()?;
+        // even after we seek to the start to read the current max `seq`. The
+        // exclusive lock stops concurrent writers interleaving partial lines into
+        // the log or racing on sequence assignment.
+        let mut locked_file =
+            self.open_log_locked(OpenOptions::new().read(true).append(true).create(true))?;
 
         let start = max_seq(&mut locked_file)?.map_or(1, |m| m + 1);
         for (seq, draft) in (start..).zip(drafts) {
@@ -398,13 +404,8 @@ impl EventStore for FileStore {
     /// the same lock; it is stable because [`FileStore::compact`] also holds this
     /// lock across its baseline swap.
     fn append_checked(&self, build: &EventBuilder) -> Result<Vec<MutationEvent>, DynError> {
-        let file = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(self.mutations_path()?)?;
-        let mut lock = RwLock::new(file);
-        let mut locked_file = lock.write()?;
+        let mut locked_file =
+            self.open_log_locked(OpenOptions::new().read(true).append(true).create(true))?;
 
         let log = read_log_strict(&mut locked_file)?;
         let baseline = self.load_baseline()?;
@@ -429,14 +430,13 @@ impl EventStore for FileStore {
     /// across the baseline swap so a concurrent `append_events` can't slip an
     /// event in between writing the baseline and rewriting the log.
     fn compact(&self, baseline: &[TaskState], retained: &[MutationEvent]) -> Result<(), DynError> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false) // we truncate explicitly under the lock, below
-            .open(self.mutations_path()?)?;
-        let mut lock = RwLock::new(file);
-        let mut locked_file = lock.write()?;
+        let mut locked_file = self.open_log_locked(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false), // we truncate explicitly under the lock, below
+        )?;
 
         // Persist the new baseline first...
         let mut baseline_file = File::create(self.baseline_path()?)?;
@@ -456,19 +456,18 @@ impl EventStore for FileStore {
     }
 
     /// Rewrite the log in place with exactly `events`, leaving the baseline alone.
-    /// Mirrors `compact`'s log-rewrite under the same exclusive fd-lock so a
+    /// Mirrors `compact`'s log-rewrite under the same exclusive lock so a
     /// concurrent `append_events` can't slip an event in mid-rewrite. Unlike
     /// `compact` it never touches the baseline - dropping no-op orphans is
     /// state-neutral, so there is nothing to fold.
     fn replace_mutations(&self, events: &[MutationEvent]) -> Result<(), DynError> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false) // we truncate explicitly under the lock, below
-            .open(self.mutations_path()?)?;
-        let mut lock = RwLock::new(file);
-        let mut locked_file = lock.write()?;
+        let mut locked_file = self.open_log_locked(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false), // we truncate explicitly under the lock, below
+        )?;
 
         locked_file.set_len(0)?;
         locked_file.seek(SeekFrom::Start(0))?;

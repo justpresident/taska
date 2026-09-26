@@ -1,7 +1,7 @@
 mod common;
 use common::names::*;
 use common::*;
-use taska::model::{DEPS_KEY, ID_KEY, STATUS_KEY};
+use taska::model::{DEPS_KEY, ID_KEY, SEQ_KEY, STATUS_KEY};
 
 #[test]
 fn init_creates_config_and_registers_merge_driver() {
@@ -996,5 +996,56 @@ fn every_mutation_reports_its_cursor() {
             !out.contains('\x1b'),
             "mutation output escape-free: {out:?}"
         );
+    }
+}
+
+#[test]
+fn concurrent_writers_never_share_a_seq_or_lose_a_task() {
+    // Every write takes an exclusive lock on the log across read -> vet -> mint
+    // seq -> append. Without it, two racing `create`s can read the same max seq
+    // and append duplicates (the log then refuses to load), or drop a write.
+    const WRITERS: usize = 32;
+    let dir = fresh_dir("concurrent-writers");
+    init_renamed_open(&dir);
+    // Seed the field vocabulary so the racing creates aren't the store's first write.
+    ta(&dir, &["create", "seed"]);
+
+    let children: Vec<_> = (0..WRITERS)
+        .map(|i| {
+            Command::new(ta_bin())
+                .args(["create", &format!("t{i}")])
+                .current_dir(&dir)
+                .env("PATH", path_with_bin())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for child in children {
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "a racing create failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let log = fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    let seqs: Vec<u64> = log
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()[SEQ_KEY]
+                .as_u64()
+                .unwrap()
+        })
+        .collect();
+    let expected: Vec<u64> = (1..=seqs.len() as u64).collect();
+    assert_eq!(seqs, expected, "seqs are unique, in order, gap-free");
+    assert_eq!(seqs.len(), WRITERS + 1, "one event per create");
+
+    let list = ta(&dir, &["list", "--format", "jsonl", "--columns", "id"]);
+    for i in 0..WRITERS {
+        assert!(list.contains(&format!("\"t{i}\"")), "t{i} missing:\n{list}");
     }
 }
