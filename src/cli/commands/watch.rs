@@ -14,8 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::action::list::validate_criteria;
-use crate::action::watch::{poll, validate_columns};
+use crate::action::watch::{poll, validate};
 use crate::error::DynError;
 use crate::format::{render_args, render_diff_lines, seq_tag, state_diff, want_color, OutputArgs};
 use crate::storage::EventStore;
@@ -46,8 +45,7 @@ pub fn cmd_watch(
     output: &OutputArgs,
 ) -> Result<(), DynError> {
     // Reject a bad filter or an unwatchable column before blocking.
-    validate_criteria(criteria)?;
-    validate_columns(store, columns)?;
+    validate(store, criteria, columns)?;
 
     let color = want_color(output.no_color);
     let deadline = Instant::now() + timeout;

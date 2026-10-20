@@ -108,7 +108,13 @@ pub fn update(
     let new_fields = RefCell::new(Vec::new());
     let written = store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
-        ensure_guard(&state, id, guard, &config)?;
+        let introduced = ops
+            .set
+            .keys()
+            .chain(ops.append.iter().map(|(k, _)| k))
+            .chain(ops.subtract.iter().map(|(k, _)| k))
+            .cloned();
+        ensure_guard(&state, log, introduced, id, guard, &config)?;
         let events = build_field_events(id, ops, &state, &config)?;
         let out = vet_events(&events, &state, &config)?;
         // Typo guard AFTER the schema gate (see `create`).
@@ -135,7 +141,7 @@ pub fn delete(
     let config = store.config().clone();
     let written = store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
-        ensure_guard(&state, id, guard, &config)?;
+        ensure_guard(&state, log, std::iter::empty(), id, guard, &config)?;
         vet_events(std::slice::from_ref(&draft), &state, &config)
     })?;
     Ok(WriteOutcome {
@@ -156,15 +162,31 @@ pub fn delete(
 /// `state` is shaped to a display view first (rename only - no computed/timestamp
 /// injection, same limitation as `watch`). A missing task is a plain error; an
 /// unmet guard carries exit code [`crate::error::ExitCode::Precondition`].
+///
+/// Every guard field must be a known column - the store's vocabulary over this
+/// same `state`/`log`, plus the CANONICAL fields this write itself `introduces`
+/// (a first claim `owner=me --if owner=` names the field it creates). An
+/// unknown one is a plain error with a did-you-mean, never a failed condition:
+/// a typo must not read as "someone else got there first".
 fn ensure_guard(
     state: &HashMap<String, TaskState>,
+    log: &[MutationEvent],
+    introduces: impl IntoIterator<Item = String>,
     id: &str,
     guard: &[String],
     config: &crate::config::Config,
 ) -> Result<(), DynError> {
+    use crate::action::columns::{ColumnUse, Vocabulary};
     if guard.is_empty() {
         return Ok(());
     }
+    let mut vocab = Vocabulary::build(config, state, log);
+    vocab.add_canonical(config, introduces);
+    let fields = crate::action::list::criteria_fields(guard)?;
+    vocab.check(
+        &fields.iter().map(String::as_str).collect::<Vec<_>>(),
+        ColumnUse::Filter,
+    )?;
     let mut display = state.clone();
     crate::action::read::rename_to_display(&mut display, config);
     if !display.contains_key(id) {

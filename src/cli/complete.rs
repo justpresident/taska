@@ -60,48 +60,30 @@ pub fn criteria(current: &OsStr) -> Vec<CompletionCandidate> {
 
 // --- shared builders -------------------------------------------------------
 
+/// Every column the store accepts - the shared vocabulary `--columns`/`--sort`
+/// are checked against, so what completes is exactly what's accepted.
 fn column_names() -> BTreeSet<String> {
-    let mut names: BTreeSet<String> =
-        [ID_KEY, DEPS_KEY, UNBLOCKS_KEY, BLOCKED_BY_KEY, SUBTASKS_KEY]
-            .into_iter()
-            .map(str::to_string)
-            .collect();
-    if let Ok(store) = FileStore::discover() {
-        let cfg = store.config();
-        names.extend(cfg.display.columns.iter().cloned());
-        names.insert(cfg.workflow.status_field.clone());
-        names.insert(cfg.workflow.type_field.clone());
-        for ts in [
-            &cfg.timestamps.create_time,
-            &cfg.timestamps.update_time,
-            &cfg.timestamps.close_time,
-        ] {
-            if !ts.is_empty() {
-                names.insert(ts.clone());
-            }
-        }
-        if let Ok(session) = crate::action::read(&store) {
-            for task in session.state.values() {
-                names.extend(task.custom_fields.keys().cloned());
-            }
-        }
-    }
-    names
+    vocabulary().map_or_else(builtin_columns, |v| v.columns().clone())
 }
 
 /// Filterable field names: the columns plus relationship type names and their
 /// inverses (`depends_on=`, `blocks=`, `subtask_of=`, ...).
 fn field_names() -> BTreeSet<String> {
-    let mut names = column_names();
-    if let Ok(store) = FileStore::discover() {
-        for (name, def) in &store.config().relationships.types {
-            names.insert(name.clone());
-            if !def.inverse.is_empty() {
-                names.insert(def.inverse.clone());
-            }
-        }
-    }
-    names
+    vocabulary().map_or_else(builtin_columns, |v| v.filter_fields())
+}
+
+/// The discovered store's full column vocabulary, if there is a readable store.
+fn vocabulary() -> Option<crate::action::columns::Vocabulary> {
+    let store = FileStore::discover().ok()?;
+    crate::action::columns::full_vocabulary(&store).ok()
+}
+
+/// The built-in columns, offered when no store is reachable.
+fn builtin_columns() -> BTreeSet<String> {
+    [ID_KEY, DEPS_KEY, UNBLOCKS_KEY, BLOCKED_BY_KEY, SUBTASKS_KEY]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 /// Candidate values for `field<op>`: task ids when the field references tasks

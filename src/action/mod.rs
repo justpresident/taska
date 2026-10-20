@@ -23,6 +23,7 @@ use crate::graph;
 use crate::model::{MutationEvent, TaskState, BLOCKED_BY_KEY, SUBTASKS_KEY, UNBLOCKS_KEY};
 use crate::storage::EventStore;
 
+pub mod columns;
 pub mod compact;
 pub mod config;
 pub mod dep;

@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
+use crate::action::columns::SortSpec;
 use crate::action::{inject_computed_columns, materialize, read, Warning};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
@@ -404,8 +405,9 @@ pub struct TreeQuery<'a> {
     pub reverse: bool,
     pub columns: &'a [String],
     /// The sort spec siblings/roots are ordered by ([`parse_sort`]: comma-separated
-    /// keys, `-col` descending; `--reverse` flips the whole order).
-    pub sort: &'a str,
+    /// keys, `-col` descending; `--reverse` flips the whole order). An unknown
+    /// key errors if requested, warns if configured.
+    pub sort: SortSpec<'a>,
 }
 
 /// A `tree` read: the built-once forest plus any read warnings.
@@ -419,13 +421,21 @@ pub struct TreeOutcome {
 /// Siblings and roots are ordered by the `query.sort` keys (via the neutral
 /// [`task_cmp`]), with `reverse` and the missing-last rule applied on top.
 pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, DynError> {
+    use crate::action::columns::{check_sort, vocabulary_for, ColumnUse};
+    let sort_keys = parse_sort(query.sort.spec());
+    let sorts: Vec<&str> = sort_keys.iter().map(|k| k.column.as_str()).collect();
+    let mut warnings = check_sort(
+        &vocabulary_for(store, &sorts, ColumnUse::Sort)?,
+        &sorts,
+        query.sort,
+    )?;
     let session = read(store)?;
+    warnings.extend(session.warnings);
     let mut state = session.state;
     // Inject any graph-computed columns the query asked for (timestamps already
     // arrive from `read`), via the same shared primitive `list` uses.
     // The displayed columns plus every sort key, so ordering by a computed
     // column (`unblocks`, ...) has values to order by.
-    let sort_keys = parse_sort(query.sort);
     let mut wanted: Vec<&str> = query.columns.iter().map(String::as_str).collect();
     wanted.extend(sort_keys.iter().map(|k| k.column.as_str()));
     inject_computed_columns(store, &mut state, &wanted);
@@ -471,7 +481,7 @@ pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, D
     if roots.is_empty() {
         return Ok(TreeOutcome {
             forest: Vec::new(),
-            warnings: session.warnings,
+            warnings,
         });
     }
 
@@ -502,10 +512,7 @@ pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, D
     if query.reverse {
         reverse_display(&mut forest);
     }
-    Ok(TreeOutcome {
-        forest,
-        warnings: session.warnings,
-    })
+    Ok(TreeOutcome { forest, warnings })
 }
 
 /// Shared, read-only context for building a `dep tree`.

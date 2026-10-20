@@ -306,8 +306,8 @@ max_width = 40
 # Default sort for list and dep tree: comma-separated columns compared in order,
 # a leading "-" sorting that key descending (e.g. "priority,-create_time");
 # missing values sort last. --sort overrides, --reverse flips the whole order.
-# Any field, "id", "deps", a timestamp or computed column; empty/unknown falls
-# back to id.
+# Any field, "id", "deps", a timestamp or computed column; empty = id order. An
+# unknown name is rejected by `ta config set` and warned about on reads.
 sort = "create_time"
 # Default layout per command: "table" (aligned columns) or "list" (a vertical
 # field: value record per task). --layout overrides for one run.
@@ -382,6 +382,8 @@ The `--if` guard on `update`/`delete` is evaluated **in the same locked step** t
 A write also can't quietly introduce a **brand-new field name**. A name no task uses yet - and that isn't a declared schema field or a display column - is rejected with a did-you-mean suggestion unless you pass `--new-field`. It's a **soft, schema-free guard against typos** (`titel`, `pirority`): you keep schemaless freedom (any field is one `--new-field` away), but a misspelling can't silently spawn a phantom column. The store's existing field names *are* the vocabulary, so the guard needs no configuration; the first task on an empty store is exempt (it seeds that vocabulary). For hard constraints - required fields, value kinds, a closed field set - declare a `[task_types]` schema on top.
 
 `list` and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON - one object per line - for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, `--columns id,status,...` to pick the columns for one run (its `--help` lists the always-available computed columns), `--sort <columns>` / `--reverse` to order the rows (`list`; comma-separated keys compared in order, `-col` for descending - e.g. `--sort mgr,-priority`; missing values sort last; default from `[display].sort`), and `--layout table|list` to switch between an aligned table and a vertical `field: value` record per task. The per-command layout default lives in `[display]` (`list_layout` defaults to `table`, `show_layout` to `list`), alongside the columns and `max_width`.
+
+**Column names are checked everywhere.** An unknown name in `--columns`, `--sort`, a filter criterion, an `--if` guard or `watch --columns` is an error with a did-you-mean (`unknown sort column 'mrg' - did you mean 'mgr'?`), never a blank column or a silent fallback to `id` order. A name is known if a task uses it, a schema declares it, `[display] columns` lists it, or the retained log ever wrote it (so a field just cleared from every task stays filterable); plus `id`, `deps`, the timestamps and computed columns, and - in filters and `show` - relationship types and inverses. `ta config set` rejects an unknown `[display] sort` or `column_max_width` key the same way; one already in the file only warns on reads, so it can't lock you out.
 
 Every command that prints data - `list`, `show`, `status`, and `dep tree`/`plan`/`cycles` - accepts the same `--format human|json|jsonl` and `--no-color`, so machine output is available and consistent everywhere (`dep tree` json is the nested tree; `dep plan` an ordered array; `dep cycles` an array of cycles; `status` a summary object).
 

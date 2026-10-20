@@ -63,7 +63,7 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
             open: false,
             ready: false,
             display_columns: &[],
-            sort: ID_KEY,
+            sort: action::columns::SortSpec::Requested(ID_KEY),
             reverse: false,
         },
     )
@@ -81,7 +81,7 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
             open: false,
             ready: true,
             display_columns: &[],
-            sort: ID_KEY,
+            sort: action::columns::SortSpec::Requested(ID_KEY),
             reverse: false,
         },
     )
@@ -201,7 +201,7 @@ fn dep_tree_returns_the_requested_columns_per_node() {
             open: false,
             reverse: false,
             columns: &["title".to_string(), STATUS_KEY.to_string()],
-            sort: ID_KEY,
+            sort: action::columns::SortSpec::Requested(ID_KEY),
         },
     )
     .unwrap();

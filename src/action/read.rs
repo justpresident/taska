@@ -39,6 +39,10 @@ pub enum Warning {
     /// each. Read-tolerated by design (schemas are write-time law); a write to
     /// such a task must bring it into conformance.
     NonConformance(Vec<String>),
+    /// A `[display] sort` key that names no known column (the message says why,
+    /// with a did-you-mean). Ordering simply skips it; it's a warning, not an
+    /// error, so a config typo can't lock out the reads that would expose it.
+    ConfigSort(String),
 }
 
 /// Materialize the store into display-ready state.

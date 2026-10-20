@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::Value;
 
+use crate::action::columns::SortSpec;
 use crate::action::{inject_computed_columns, read, Warning};
 use crate::config::{Config, RelationshipDef};
 use crate::error::DynError;
@@ -33,8 +34,9 @@ pub struct ListQuery<'a> {
     pub display_columns: &'a [String],
     /// The sort spec ([`parse_sort`]): columns compared in order, `-col`
     /// descending, `id` tiebreak, missing values last (see [`task_cmp`]). Each
-    /// may be `id`, `deps`, a custom field, or an injected computed column.
-    pub sort: &'a str,
+    /// may be `id`, `deps`, a custom field, or an injected computed column. An
+    /// unknown key errors if requested, warns if configured.
+    pub sort: SortSpec<'a>,
     /// Flip the order to descending.
     pub reverse: bool,
 }
@@ -51,8 +53,11 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
     // Compile (and validate regexes) up front so a bad criterion errors before
     // we touch the store.
     let criteria = compile_criteria(query.criteria)?;
+    let sort_keys = parse_sort(query.sort.spec());
+    let mut warnings = check_query_columns(store, query, &criteria, &sort_keys)?;
     let session = read(store)?;
     let mut state = session.state;
+    warnings.extend(session.warnings);
 
     // The columns this query touches: what the frontend will display/sort, plus
     // the criterion fields (so a filter on `unblocks=0` injects the column without
@@ -69,16 +74,44 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
         .collect();
 
     // Return ordered data: the frontend renders the slice as-is.
-    let keys = parse_sort(query.sort);
-    tasks.sort_by(|a, b| task_cmp(a, b, &keys));
+    tasks.sort_by(|a, b| task_cmp(a, b, &sort_keys));
     if query.reverse {
         tasks.reverse();
     }
 
-    Ok(ListOutcome {
-        tasks,
-        warnings: session.warnings,
-    })
+    Ok(ListOutcome { tasks, warnings })
+}
+
+/// Check every column name a `list` query uses - criterion fields, displayed
+/// columns, sort keys - rejecting an unknown one (see [`crate::action::columns`]).
+/// An unknown key in the CONFIGURED sort comes back as a warning instead.
+fn check_query_columns(
+    store: &impl EventStore,
+    query: &ListQuery,
+    criteria: &[Criterion],
+    sort_keys: &[crate::model::SortKey],
+) -> Result<Vec<Warning>, DynError> {
+    use crate::action::columns::{check_sort, full_vocabulary, ColumnUse, Vocabulary};
+    let filters: Vec<&str> = criteria.iter().map(|c| c.field.as_str()).collect();
+    let sorts: Vec<&str> = sort_keys.iter().map(|k| k.column.as_str()).collect();
+    // `display_columns` carries the sort keys too (for injection); those are
+    // checked as sort keys, under their own config rule.
+    let shown: Vec<&str> = query
+        .display_columns
+        .iter()
+        .map(String::as_str)
+        .filter(|c| !sorts.contains(c))
+        .collect();
+    let mut vocab = Vocabulary::from_config(store.config());
+    if !(vocab.covers(&filters, ColumnUse::Filter)
+        && vocab.covers(&shown, ColumnUse::List)
+        && vocab.covers(&sorts, ColumnUse::Sort))
+    {
+        vocab = full_vocabulary(store)?;
+    }
+    vocab.check(&filters, ColumnUse::Filter)?;
+    vocab.check(&shown, ColumnUse::List)?;
+    check_sort(&vocab, &sorts, query.sort)
 }
 
 /// The IDs in `state` passing the `--open`/`--ready` shortcuts and every compiled
@@ -147,10 +180,12 @@ pub(crate) fn matching_ids(
     filter_ids(state, &compiled, open, ready, store.config())
 }
 
-/// Validate `criteria` (parse + compile regexes) without touching the store, so a
-/// long-blocking command like `watch` rejects a bad filter before it starts.
-pub(crate) fn validate_criteria(criteria: &[String]) -> Result<(), DynError> {
-    compile_criteria(criteria).map(|_| ())
+/// The field each criterion filters on, in order - validating the grammar too.
+pub(crate) fn criteria_fields(criteria: &[String]) -> Result<Vec<String>, DynError> {
+    Ok(compile_criteria(criteria)?
+        .into_iter()
+        .map(|c| c.field)
+        .collect())
 }
 
 /// The guard `criteria` that task `id` FAILS in `state` (empty = it satisfies them

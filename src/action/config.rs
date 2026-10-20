@@ -8,9 +8,11 @@
 
 use serde::Serialize;
 
+use crate::action::columns::{full_vocabulary, ColumnUse, Vocabulary};
 use crate::action::{materialize, read, Warning};
 use crate::config::Config;
 use crate::error::DynError;
+use crate::model::parse_sort;
 use crate::schema::schema_conformance_report;
 use crate::storage::{EventStore, FileStore, CONFIG_FILE};
 
@@ -84,11 +86,12 @@ pub struct ValidateReport {
 pub fn validate(store: &FileStore) -> Result<ValidateReport, DynError> {
     let session = read(store)?;
     store.config().validate_against(&session.state)?;
-    let raw = materialize(
+    let log = store.load_mutations()?;
+    let raw = materialize(store.config(), &store.load_baseline()?, &log);
+    check_display_columns(
         store.config(),
-        &store.load_baseline()?,
-        &store.load_mutations()?,
-    );
+        &Vocabulary::build(store.config(), &raw, &log),
+    )?;
     let nonconformance = schema_conformance_report(&raw, store.config());
     Ok(ValidateReport {
         task_count: session.state.len(),
@@ -149,16 +152,51 @@ pub fn set(store: &FileStore, key: &str, raw: &str) -> Result<String, DynError> 
     // provisioned, or a variable unset in this shell): it has no graph to
     // contradict, and `set` is how a broken `store.dir` gets fixed.
     let governed = FileStore::with_config(store.base_dir.clone(), candidate);
+    let names_columns =
+        key == "display" || key == "display.sort" || key.starts_with("display.column_max_width");
     if governed.data_dir().is_ok() {
         governed
             .config()
             .validate_against(&read(&governed)?.state)?;
+        if names_columns {
+            check_display_columns(governed.config(), &full_vocabulary(&governed)?)?;
+        }
     } else {
         governed.config().validate()?;
+        if names_columns {
+            let config = governed.config();
+            check_display_columns(config, &Vocabulary::from_config(config))?;
+        }
     }
 
     std::fs::write(&path, doc.to_string())?;
     Ok(shown)
+}
+
+/// Reject `[display]` settings that name an unknown column: the `sort` keys and
+/// the `column_max_width` keys (`columns` itself DECLARES vocabulary, so it is
+/// known by definition). At read time a bad `sort` only warns; here, where the
+/// config is being written or checked, it's an error with a did-you-mean.
+fn check_display_columns(config: &Config, vocab: &Vocabulary) -> Result<(), DynError> {
+    let keys = parse_sort(&config.display.sort);
+    vocab
+        .check(
+            &keys.iter().map(|k| k.column.as_str()).collect::<Vec<_>>(),
+            ColumnUse::Sort,
+        )
+        .map_err(|e| format!("display.sort: {e}"))?;
+    vocab
+        .check(
+            &config
+                .display
+                .column_max_width
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ColumnUse::Width,
+        )
+        .map_err(|e| format!("display.column_max_width: {e}"))?;
+    Ok(())
 }
 
 /// Flatten a TOML tree into `dotted.key`/value pairs, recursing through tables so

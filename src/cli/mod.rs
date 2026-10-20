@@ -961,6 +961,10 @@ pub(crate) fn render_warnings(warnings: &[crate::action::Warning]) -> Vec<String
                     ));
                 }
             }
+            Warning::ConfigSort(problem) => lines.push(format!(
+                "taska: warning: [display] sort: {problem} - ordering ignores it; fix it with \
+                 `ta config set display.sort ...`"
+            )),
         }
     }
     lines

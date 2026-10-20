@@ -4,6 +4,7 @@
 //! The tasks (with their inverse edges surfaced) come from [`crate::action::show`];
 //! this file is just their presentation.
 
+use crate::action::columns::{check_columns, ColumnUse};
 use crate::action::show;
 use crate::cli::render_warnings;
 use crate::config::DisplayConfig;
@@ -22,6 +23,10 @@ pub fn cmd_show(
     display: &DisplayArgs,
     cfg: &DisplayConfig,
 ) -> Result<(), DynError> {
+    if let Some(columns) = &display.columns {
+        let names: Vec<&str> = columns.iter().map(String::as_str).collect();
+        check_columns(store, &names, ColumnUse::Show)?;
+    }
     let outcome = show(store, ids)?;
     for warning in render_warnings(&outcome.warnings) {
         eprintln!("{warning}");

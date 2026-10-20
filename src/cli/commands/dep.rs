@@ -158,6 +158,7 @@ fn dep_tree(
 ) -> Result<(), DynError> {
     // The action builds and orders the forest itself; resolve the sort column
     // here (default `[display].sort`) and hand it the name.
+    let requested = sort.is_some();
     let column = sort.unwrap_or_else(|| store.config().display.sort.clone());
     // The per-node columns are the configured display columns minus `id` (the node
     // itself) and `deps` (the tree). No field name is hardcoded.
@@ -176,7 +177,11 @@ fn dep_tree(
             open,
             reverse,
             columns: &columns,
-            sort: &column,
+            sort: if requested {
+                crate::action::columns::SortSpec::Requested(&column)
+            } else {
+                crate::action::columns::SortSpec::Configured(&column)
+            },
         },
     )?;
     for warning in crate::cli::render_warnings(&outcome.warnings) {

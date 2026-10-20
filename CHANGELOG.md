@@ -27,6 +27,18 @@ git log.
   `unblocks`/`blocked_by`/`subtasks`) and unknown names are rejected up front
   (with a did-you-mean) instead of waiting forever.
 
+- **Unknown column names are rejected everywhere, with a did-you-mean.**
+  `--columns`, `--sort` (each key), filter criteria, `--if` guards and
+  `watch --columns` used to accept any name - an unknown sort key silently
+  ordered by `id`, an unknown column rendered blank, a typo'd filter matched
+  nothing, and a typo'd guard failed as a lost race (exit 3). Now each is an
+  error (exit 1) naming the closest known column. A field the retained log
+  ever wrote stays known, so filtering on one just cleared from every task
+  still works. `ta config set` rejects an unknown `[display] sort` or
+  `column_max_width` key and `ta config validate` reports one; a bad
+  configured sort only warns on reads. Shell completion offers exactly the
+  accepted names.
+
 ### Changed
 - **`ta watch` reports tasks leaving the filter, not only entering it.** A
   touched task counts if it matched at the cursor or matches now, so

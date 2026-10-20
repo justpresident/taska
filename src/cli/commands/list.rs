@@ -5,6 +5,7 @@
 //! file resolves the display columns that drive computed-column injection, picks
 //! the empty-placeholder text, and renders.
 
+use crate::action::columns::SortSpec;
 use crate::action::{list_tasks, ListQuery};
 use crate::cli::render_warnings;
 use crate::config::DisplayConfig;
@@ -33,7 +34,11 @@ pub fn cmd_list(
             open,
             ready,
             display_columns: &display_columns,
-            sort,
+            sort: if display.sort.is_some() {
+                SortSpec::Requested(sort)
+            } else {
+                SortSpec::Configured(sort)
+            },
             reverse: display.reverse,
         },
     )?;

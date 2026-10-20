@@ -9,13 +9,13 @@
 //! blocking or polling here: that (and the holdout debounce) is the CLI's job.
 //! This is one pure snapshot.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
+use crate::action::columns::{full_vocabulary, ColumnUse, Vocabulary};
 use crate::action::{list, materialize, read};
 use crate::config::Config;
 use crate::error::DynError;
-use crate::model::{TaskState, BLOCKED_BY_KEY, DEPS_KEY, ID_KEY, SUBTASKS_KEY, UNBLOCKS_KEY};
-use crate::schema::{canonical_field_pairs, editable_field_names, nearest_known};
+use crate::model::{TaskState, BLOCKED_BY_KEY, DEPS_KEY, SUBTASKS_KEY, UNBLOCKS_KEY};
 use crate::storage::EventStore;
 
 /// One task that changed since the cursor: its state at the cursor (`before` -
@@ -49,9 +49,9 @@ pub struct WatchPoll {
 /// every event between them, so a task that passes through the set entirely
 /// within one batch matches at neither end and goes unreported. Errors if `since` predates the retained log (compacted away).
 ///
-/// A non-empty `columns` (display names, validated as by [`validate_columns`])
-/// narrows the watch: only a change to one of them counts, and `before`/`after`
-/// carry only those columns. A task created or deleted without any of them set
+/// Criterion fields and a non-empty `columns` (display names) are checked as by
+/// [`validate`]. `columns` narrows the watch: only a change to one of them
+/// counts, and `before`/`after` carry only those columns. A task created or deleted without any of them set
 /// changes nothing watched, so it isn't reported. Empty = every field.
 pub fn poll(
     store: &impl EventStore,
@@ -94,10 +94,17 @@ pub fn poll(
     let since_muts: Vec<_> = muts.iter().filter(|e| e.seq <= since).cloned().collect();
     let mut before = materialize(config, &baseline, &since_muts);
     let mut after = materialize(config, &baseline, &muts);
+    // Names checked against THIS snapshot (a frontend may skip `validate`).
+    let vocab = Vocabulary::build(config, &after, &muts);
+    let fields = list::criteria_fields(criteria)?;
+    vocab.check(
+        &fields.iter().map(String::as_str).collect::<Vec<_>>(),
+        ColumnUse::Filter,
+    )?;
     let watched = if columns.is_empty() {
         None
     } else {
-        Some(resolve_columns(config, &after, columns)?)
+        Some(resolve_columns(config, &vocab, columns)?)
     };
     read::rename_to_display(&mut before, config);
     read::rename_to_display(&mut after, config);
@@ -139,28 +146,40 @@ pub fn poll(
     Ok(WatchPoll { cursor, updates })
 }
 
-/// Check a watch's `columns` against the store before blocking on it, so a
-/// column that can never change is an immediate error rather than a silent
-/// wait until the timeout. See [`poll`].
-pub fn validate_columns(store: &impl EventStore, columns: &[String]) -> Result<(), DynError> {
-    if columns.is_empty() {
-        return Ok(());
-    }
-    let config = store.config();
-    let state = materialize(config, &store.load_baseline()?, &store.load_mutations()?);
-    resolve_columns(config, &state, columns).map(|_| ())
+/// Check a watch's criteria and `columns` against the store before blocking on
+/// it, so a name that can never match is an immediate error rather than a
+/// silent wait until the timeout. See [`poll`].
+///
+/// # Errors
+/// A malformed criterion, an unknown filter field, or an unwatchable column.
+pub fn validate(
+    store: &impl EventStore,
+    criteria: &[String],
+    columns: &[String],
+) -> Result<(), DynError> {
+    let fields = list::criteria_fields(criteria)?;
+    let names: Vec<&str> = fields.iter().map(String::as_str).collect();
+    let watched: Vec<&str> = columns.iter().map(String::as_str).collect();
+    let quick = Vocabulary::from_config(store.config());
+    let vocab =
+        if quick.covers(&names, ColumnUse::Filter) && quick.covers(&watched, ColumnUse::List) {
+            quick
+        } else {
+            full_vocabulary(store)?
+        };
+    vocab.check(&names, ColumnUse::Filter)?;
+    resolve_columns(store.config(), &vocab, columns).map(|_| ())
 }
 
-/// The watchable set named by `columns` (display names), from RAW `state`.
+/// The watched set named by `columns` (display names).
 ///
-/// Watchable = any settable task field (the soft-schema vocabulary), `deps` for
-/// relationship changes, and `id` (accepted; it never changes). Rejected: the
-/// computed columns - watch compares stored values, so a timestamp or graph
-/// column could never fire - a relationship type name (those change under
-/// `deps`), and an unknown name, with a did-you-mean.
+/// Watchable = any column of the store's vocabulary EXCEPT the computed ones -
+/// watch compares stored values, so a timestamp or graph column could never
+/// fire. `id` is accepted (it never changes). A relationship name, or an unknown
+/// one, gets the shared vocabulary error (`deps` / did-you-mean).
 fn resolve_columns(
     config: &Config,
-    state: &HashMap<String, TaskState>,
+    vocab: &Vocabulary,
     columns: &[String],
 ) -> Result<BTreeSet<String>, DynError> {
     let ts = &config.timestamps;
@@ -172,47 +191,17 @@ fn resolve_columns(
         BLOCKED_BY_KEY,
         SUBTASKS_KEY,
     ];
-    let mut known = editable_field_names(state, config);
-    for (display, canonical) in canonical_field_pairs(&config.workflow) {
-        if known.remove(canonical) {
-            known.insert(display.clone());
-        }
-    }
-    known.insert(DEPS_KEY.to_string());
-    known.insert(ID_KEY.to_string());
-
-    let mut watched = BTreeSet::new();
     for col in columns {
-        if known.contains(col) {
-            watched.insert(col.clone());
-        } else if !col.is_empty() && computed.contains(&col.as_str()) {
+        if !col.is_empty() && computed.contains(&col.as_str()) {
             return Err(format!(
                 "`{col}` is a computed column - watch compares stored values only, so it \
                  can't watch it"
             )
             .into());
-        } else if config
-            .relationships
-            .types
-            .iter()
-            .any(|(name, def)| name == col || def.inverse == *col)
-        {
-            return Err(format!(
-                "`{col}` is a relationship type - watch relationship changes with \
-                 `--columns {DEPS_KEY}`"
-            )
-            .into());
-        } else {
-            let hint = nearest_known(col, &known)
-                .map(|k| format!(" - did you mean `{k}`?"))
-                .unwrap_or_default();
-            return Err(format!(
-                "unknown column `{col}`: no task uses it and no schema declares it{hint}"
-            )
-            .into());
         }
+        vocab.check(&[col.as_str()], ColumnUse::List)?;
     }
-    Ok(watched)
+    Ok(columns.iter().cloned().collect())
 }
 
 /// `task` narrowed to the watched columns (`deps` keeps its relationships), or

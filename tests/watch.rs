@@ -398,7 +398,7 @@ fn watch_columns_rejects_unwatchable_names_up_front() {
     for (column, expected) in [
         ("statsu", "did you mean `status`?"),
         ("update_time", "computed column"),
-        ("depends_on", "--columns deps"),
+        ("depends_on", "show under the `deps` column"),
     ] {
         let started = std::time::Instant::now();
         let out = run(
