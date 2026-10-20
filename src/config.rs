@@ -1897,7 +1897,7 @@ required = true
         assert!(bug.closed);
         assert_eq!(bug.fields["points"].kind_str(), "uint");
         assert!(!bug.fields["points"].required(), "shorthand is optional");
-        assert!(bug.fields["points"].values().is_empty());
+        assert_eq!(bug.fields["points"].values(), [] as [String; 0]);
         assert_eq!(bug.fields["severity"].kind_str(), "enum");
         assert_eq!(bug.fields["severity"].values(), ["low", "high"]);
         assert!(bug.fields["severity"].required());
@@ -2016,7 +2016,10 @@ max_items = 2
         let fields = &cfg.task_types.types["t"].fields;
         let violations =
             |field: &str, v: serde_json::Value| fields[field].constraint_violations(&v);
-        assert!(violations("points", serde_json::json!(5)).is_empty());
+        assert_eq!(
+            violations("points", serde_json::json!(5)),
+            [] as [String; 0]
+        );
         assert!(violations("points", serde_json::json!(0))[0].contains("below min 1"));
         assert!(violations("points", serde_json::json!(11))[0].contains("exceeds max 10"));
         let bad_title = violations("title", serde_json::json!("ab"));
@@ -2027,7 +2030,10 @@ max_items = 2
         );
         assert!(violations("title", serde_json::json!("Abcdefg"))[0].contains("max_len"));
         assert!(violations("tags", serde_json::json!(["a", "b", "c"]))[0].contains("max_items"));
-        assert!(violations("tags", serde_json::json!(["a"])).is_empty());
+        assert_eq!(
+            violations("tags", serde_json::json!(["a"])),
+            [] as [String; 0]
+        );
     }
 
     #[test]

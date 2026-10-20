@@ -1901,9 +1901,10 @@ required = true
             "t",
             std::iter::once(("notes".to_string(), serde_json::json!("k"))).collect(),
         );
-        assert!(vet_new_fields(&[known], &existing, &config, false)
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            vet_new_fields(&[known], &existing, &config, false).unwrap(),
+            [] as [String; 0]
+        );
     }
 
     #[test]

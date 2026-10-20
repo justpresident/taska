@@ -165,7 +165,7 @@ fn apply_rename(
         ) && event.payload.contains_key(old)
             && !event.payload.contains_key(target)
         {
-            if !event.payload.get(old).is_some_and(&converts) {
+            if !event.payload.get(old).is_some_and(converts) {
                 kept += 1;
                 continue;
             }
@@ -177,7 +177,7 @@ fn apply_rename(
     }
     for task in baseline.iter_mut() {
         if task.custom_fields.contains_key(old) && !task.custom_fields.contains_key(target) {
-            if !task.custom_fields.get(old).is_some_and(&converts) {
+            if !task.custom_fields.get(old).is_some_and(converts) {
                 kept += 1;
                 continue;
             }

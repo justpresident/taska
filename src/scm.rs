@@ -436,7 +436,6 @@ pub fn ensure_scm_health(data_dir: &Path) -> Option<String> {
                         .to_string(),
                 );
             }
-            None
         }
         Scm::Git => {
             // Check the .gitattributes where `setup` writes it (see
@@ -474,9 +473,9 @@ pub fn ensure_scm_health(data_dir: &Path) -> Option<String> {
                         .to_string(),
                 );
             }
-            None
         }
     }
+    None
 }
 
 /// Whether both merge-driver definitions resolve in git config for the repo
