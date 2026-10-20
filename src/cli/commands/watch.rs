@@ -3,9 +3,11 @@
 //! Polls the mutation log for events newer than `--since`; on the first match it
 //! waits a short `--holdout` to batch a burst, then prints a per-task diff (the
 //! shared `-`/`+` lines of `format::render_diff_lines`, the same view `undo` and
-//! `format::render_state_diff` produce) and exits 0. If nothing matches before
-//! `--timeout`, it prints `No updates yet` to stderr and exits 1 - so a caller
-//! loop is `while :; do ta watch --since "$s" ... && break; done`.
+//! `format::render_state_diff` produce) followed by the cursor that diff was
+//! computed at, and exits 0 - pass that cursor as the next `--since` to resume
+//! with nothing skipped or repeated. If nothing matches before `--timeout`, it
+//! prints `No updates yet` to stderr and exits 1 - so a caller loop is
+//! `while :; do ta watch --since "$s" ... && break; done`.
 
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -15,7 +17,7 @@ use serde_json::{json, Value};
 use crate::action::list::validate_criteria;
 use crate::action::watch::poll;
 use crate::error::DynError;
-use crate::format::{render_args, render_diff_lines, state_diff, want_color, OutputArgs};
+use crate::format::{render_args, render_diff_lines, seq_tag, state_diff, want_color, OutputArgs};
 use crate::storage::EventStore;
 
 /// How often to re-check the log while blocking.
@@ -57,19 +59,21 @@ pub fn cmd_watch(
         let fp = store.log_fingerprint();
         if fp.is_none() || fp != last_fp {
             last_fp = fp;
-            if !collect(store, criteria, open, ready, since)?.is_empty() {
+            if !collect(store, criteria, open, ready, since)?.1.is_empty() {
                 // A match arrived: hold out briefly (bounded by the time left) to
                 // batch a burst, then emit the accumulated set.
                 let wait = holdout.min(deadline.saturating_duration_since(Instant::now()));
                 if !wait.is_zero() {
                     sleep(wait);
                 }
-                let changed = collect(store, criteria, open, ready, since)?;
+                // The cursor comes from this same read, so it covers exactly
+                // the diff printed - never a write that landed after it.
+                let (cursor, changed) = collect(store, criteria, open, ready, since)?;
                 if !changed.is_empty() {
                     for line in render_args(
                         output,
-                        || watch_to_human(&changed, color),
-                        || watch_to_json_value(&changed),
+                        || watch_to_human(&changed, cursor, color),
+                        || watch_to_json_value(&changed, cursor),
                     ) {
                         println!("{line}");
                     }
@@ -85,8 +89,8 @@ pub fn cmd_watch(
     }
 }
 
-/// One snapshot: the tasks that match the filter and changed since `since`, each
-/// with its diff lines. Net-zero changes (e.g. a merge artifact that nets out) are
+/// One snapshot: its cursor, and the tasks that match the filter and changed
+/// since `since`, each with its diff lines. Net-zero changes (e.g. a merge artifact that nets out) are
 /// dropped, so an empty result means "nothing renderable changed" and the caller
 /// keeps waiting. Rendering is deferred to [`watch_to_human`]/[`watch_to_json_value`]
 /// so only the format `render_args` selects gets built.
@@ -96,10 +100,10 @@ fn collect(
     open: bool,
     ready: bool,
     since: u64,
-) -> Result<Vec<ChangedTask>, DynError> {
-    let updates = poll(store, criteria, open, ready, since)?;
+) -> Result<(u64, Vec<ChangedTask>), DynError> {
+    let polled = poll(store, criteria, open, ready, since)?;
     let mut changed = Vec::new();
-    for u in &updates {
+    for u in &polled.updates {
         let (removed, added) = state_diff(u.before.as_ref(), u.after.as_ref());
         if removed.is_empty() && added.is_empty() {
             continue; // touched but net-zero change (e.g. a merge artifact)
@@ -110,13 +114,14 @@ fn collect(
             added,
         });
     }
-    Ok(changed)
+    Ok((polled.cursor, changed))
 }
 
 /// The changed tasks as human diff blocks: `id:` then the colored `-`/`+` lines,
-/// blocks separated by a blank line.
-fn watch_to_human(changed: &[ChangedTask], color: bool) -> String {
-    changed
+/// blocks separated by a blank line, closed by the `[seq:N]` cursor every
+/// mutation prints.
+fn watch_to_human(changed: &[ChangedTask], cursor: u64, color: bool) -> String {
+    let blocks = changed
         .iter()
         .map(|c| {
             format!(
@@ -126,17 +131,17 @@ fn watch_to_human(changed: &[ChangedTask], color: bool) -> String {
             )
         })
         .collect::<Vec<_>>()
-        .join("\n\n")
+        .join("\n\n");
+    format!("{blocks}\n{}", seq_tag(cursor, color))
 }
 
-/// The changed tasks as a JSON array of `{id, removed, added}` objects.
-fn watch_to_json_value(changed: &[ChangedTask]) -> Value {
-    Value::Array(
-        changed
-            .iter()
-            .map(|c| json!({ "id": &c.id, "removed": &c.removed, "added": &c.added }))
-            .collect(),
-    )
+/// The snapshot as `{cursor, changes: [{id, removed, added}, ...]}`.
+fn watch_to_json_value(changed: &[ChangedTask], cursor: u64) -> Value {
+    let rows: Vec<Value> = changed
+        .iter()
+        .map(|c| json!({ "id": &c.id, "removed": &c.removed, "added": &c.added }))
+        .collect();
+    json!({ "cursor": cursor, "changes": rows })
 }
 
 /// Parse a human duration like `1m55s`, `30s`, `500ms`, or `2h` into a

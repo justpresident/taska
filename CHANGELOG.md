@@ -16,6 +16,12 @@ git log.
   one closed status declared by that type.
 
 ### Changed
+- **`ta watch` reports its cursor.** The diff ends with the `[seq:N]` it was
+  computed at - pass it as the next `--since`. It comes from the same read as
+  the diff, so a watch loop no longer has to re-read `ta status --current`
+  (which could skip a write landing in between). **Breaking for JSON
+  consumers:** `--format json` is now `{"cursor": N, "changes": [...]}` instead
+  of a bare array of changes, and `jsonl` prints that object on one line.
 - **`[workflow] done_status` is renamed `closed_statuses`.** Existing configs
   keep working unchanged: `done_status = "closed"` still loads (as a one-item
   list), and `ta config set workflow.closed_statuses ...` replaces the old key.

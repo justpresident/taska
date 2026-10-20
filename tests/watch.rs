@@ -40,6 +40,12 @@ fn watch_reports_matching_changes_since_the_cursor() {
         stdout.contains("+ status: needs-review"),
         "shows the current status as added: {stdout}"
     );
+    let current = ta(&dir, &["status", "--current"]);
+    assert_eq!(
+        stdout.lines().last(),
+        Some(format!("[seq:{}]", current.trim()).as_str()),
+        "the diff closes with the cursor it covers: {stdout}"
+    );
 }
 
 /// With nothing after the cursor, a short timeout prints `No updates yet` to
@@ -138,8 +144,9 @@ fn watch_reports_a_deleted_matching_task() {
     );
 }
 
-/// `--format json` emits one object per changed task with structured
-/// removed/added deltas (not full state), parseable by an agent.
+/// `--format json` emits `{cursor, changes}`: the snapshot's cursor and one
+/// object per changed task with structured removed/added deltas (not full
+/// state), parseable by an agent.
 #[test]
 fn watch_json_emits_structured_deltas() {
     let dir = fresh_dir("watch-json");
@@ -166,7 +173,9 @@ fn watch_json_emits_structured_deltas() {
     assert!(out.status.success(), "exit 0");
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout))
         .expect("watch --format json is valid JSON");
-    let arr = v.as_array().expect("a JSON array");
+    let current = ta(&dir, &["status", "--current"]);
+    assert_eq!(v["cursor"].to_string(), current.trim(), "cursor: {v}");
+    let arr = v["changes"].as_array().expect("a changes array");
     let entry = arr
         .iter()
         .find(|e| e["id"] == "a")
@@ -175,5 +184,65 @@ fn watch_json_emits_structured_deltas() {
     assert!(
         added.iter().any(|l| l == "status: needs-review"),
         "added carries the status line: {entry}"
+    );
+}
+
+/// Resuming from the reported cursor sees exactly the writes after it: the
+/// earlier change isn't repeated and the later one isn't skipped. jsonl carries
+/// the same envelope on one line.
+#[test]
+fn watch_cursor_resumes_without_skips_or_repeats() {
+    let dir = fresh_dir("watch-resume");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    ta(&dir, &["create", "first"]);
+
+    let watch_jsonl = |since: &str| {
+        let out = run(
+            ta_bin(),
+            &dir,
+            &[
+                "watch",
+                "--since",
+                since,
+                "--timeout",
+                "5s",
+                "--holdout",
+                "0s",
+                "--format",
+                "jsonl",
+            ],
+        );
+        assert!(out.status.success(), "exit 0");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(
+            stdout.lines().count(),
+            1,
+            "jsonl is one envelope line: {stdout}"
+        );
+        serde_json::from_str::<serde_json::Value>(&stdout).expect("valid json")
+    };
+    let ids = |v: &serde_json::Value| -> Vec<String> {
+        v["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let first = watch_jsonl("0");
+    assert_eq!(ids(&first), ["first"]);
+    ta(&dir, &["create", "second"]);
+
+    let second = watch_jsonl(&first["cursor"].to_string());
+    assert_eq!(
+        ids(&second),
+        ["second"],
+        "only the write after the cursor: {second}"
+    );
+    assert!(
+        second["cursor"].as_u64() > first["cursor"].as_u64(),
+        "the cursor advances: {second}"
     );
 }

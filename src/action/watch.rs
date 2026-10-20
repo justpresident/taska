@@ -3,7 +3,8 @@
 //! Diffs state as-of `since` against the current state, restricted to tasks
 //! touched by events newer than `since` and matching the list-style filter, and
 //! returns each such task's before/after state - the frontend renders the
-//! per-field diff (via `format::render_state_diff`, shared with `undo`). No
+//! per-field diff (via `format::render_state_diff`, shared with `undo`), plus
+//! the cursor that snapshot was taken at. No
 //! blocking or polling here: that (and the holdout debounce) is the CLI's job.
 //! This is one pure snapshot.
 
@@ -22,9 +23,21 @@ pub struct WatchUpdate {
     pub after: Option<TaskState>,
 }
 
-/// The tasks that changed since `since` (events with `seq > since`) and match the
-/// filter, each with its before/after state (ordered by id). Empty when nothing
-/// new matches.
+/// One [`poll`] snapshot: the matching changes and the cursor they cover.
+pub struct WatchPoll {
+    /// The log's high-water `seq` in the very read the diff was computed from -
+    /// so `--since <cursor>` resumes exactly after it, skipping and repeating
+    /// nothing. A separate `ta status --current` can't promise that: a write may
+    /// land between the two reads.
+    pub cursor: u64,
+    pub updates: Vec<WatchUpdate>,
+}
+
+/// The tasks that changed since `since` and match the filter, plus the cursor.
+///
+/// Changed = touched by an event with `seq > since`; each comes with its
+/// before/after state (ordered by id). `updates` is empty when nothing new
+/// matches.
 ///
 /// An existing task is filtered on its current state; a task deleted since the
 /// cursor is filtered on its at-cursor state, so a matching task's deletion is
@@ -35,7 +48,7 @@ pub fn poll(
     open: bool,
     ready: bool,
     since: u64,
-) -> Result<Vec<WatchUpdate>, DynError> {
+) -> Result<WatchPoll, DynError> {
     let config = store.config();
     let baseline = store.load_baseline()?;
     let muts = store.load_mutations()?;
@@ -55,9 +68,12 @@ pub fn poll(
     }
 
     // Fast path: nothing newer than the cursor.
-    let max_seq = muts.last().map_or(0, |e| e.seq);
-    if since >= max_seq {
-        return Ok(Vec::new());
+    let cursor = muts.last().map_or(0, |e| e.seq);
+    if since >= cursor {
+        return Ok(WatchPoll {
+            cursor,
+            updates: Vec::new(),
+        });
     }
 
     // State at the cursor vs now, display-shaped for consistent field names in the
@@ -97,7 +113,7 @@ pub fn poll(
             });
         }
     }
-    Ok(updates)
+    Ok(WatchPoll { cursor, updates })
 }
 
 #[cfg(test)]
@@ -119,14 +135,20 @@ mod tests {
             poll(&store, &[], false, false, 8).is_err(),
             "cursor before the retained window is rejected"
         );
+        let polled = poll(&store, &[], false, false, 9).unwrap();
         assert_eq!(
-            poll(&store, &[], false, false, 9).unwrap().len(),
+            polled.updates.len(),
             1,
             "cursor exactly before the oldest retained event can be diffed"
+        );
+        assert_eq!(
+            polled.cursor, 10,
+            "the cursor is the snapshot's high-water seq"
         );
         assert!(
             poll(&store, &[], false, false, u64::MAX)
                 .unwrap()
+                .updates
                 .is_empty(),
             "a huge cursor is a clean no-op, not an overflow panic"
         );

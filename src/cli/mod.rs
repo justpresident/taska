@@ -158,9 +158,12 @@ enum Commands {
     /// Blocks until a task matching the (list-style) criteria is created, updated,
     /// or deleted with `seq` greater than `--since`, then prints a per-task diff of
     /// what changed and exits 0. On the first change it waits `--holdout` to batch a
-    /// burst. If nothing matches before `--timeout`, prints `No updates yet` to
-    /// stderr and exits 1. Seed `--since` from `ta status --current` (or the
-    /// `[seq:N]` any mutation prints); computed columns aren't available as filters.
+    /// burst. The diff ends with the cursor it was computed at (`[seq:N]`;
+    /// `{"cursor": N, "changes": [...]}` in json) - the next `--since`, so a loop
+    /// resumes with nothing skipped or repeated. If nothing matches before
+    /// `--timeout`, prints `No updates yet` to stderr and exits 1. Seed the first
+    /// `--since` from `ta status --current` (or the `[seq:N]` any mutation
+    /// prints); computed columns aren't available as filters.
     Watch {
         /// Filter criteria, same grammar as `ta list` (`field=value`, `field=~regex`,
         /// `field!=value`, comparisons); with none given, every changed task matches.
