@@ -848,7 +848,7 @@ fn unknown_field_message(introduced: &[String], known: &BTreeSet<String>) -> Str
 /// The known name closest to `name` within the typo threshold - Damerau/OSA
 /// distance scaled by length (1 for short names, 2 for longer) - or `None`. Ties
 /// resolve to the shortest, then lexicographically smallest, candidate.
-fn nearest_known(name: &str, known: &BTreeSet<String>) -> Option<String> {
+pub(crate) fn nearest_known(name: &str, known: &BTreeSet<String>) -> Option<String> {
     let limit = if name.chars().count() >= 6 { 2 } else { 1 };
     known
         .iter()

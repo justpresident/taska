@@ -15,6 +15,12 @@ git log.
   `close_time`. With a `transitions` workflow, every state must reach at least
   one closed status declared by that type.
 
+- **`ta watch --columns a,b`** watches only those columns: a task is reported
+  only when one of them changed, and its diff shows only them. Any task field,
+  or `deps` for relationship changes. Computed columns (timestamps,
+  `unblocks`/`blocked_by`/`subtasks`) and unknown names are rejected up front
+  (with a did-you-mean) instead of waiting forever.
+
 ### Changed
 - **`ta watch` reports tasks leaving the filter, not only entering it.** A
   touched task counts if it matched at the cursor or matches now, so

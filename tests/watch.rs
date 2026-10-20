@@ -290,3 +290,136 @@ fn watch_reports_a_task_leaving_the_filter() {
         "a task matching at neither end is not: {stdout}"
     );
 }
+
+/// `--columns` decides both what wakes a watch and what it prints: a change to
+/// an unwatched field alone reports nothing, and a batch that touches both
+/// shows only the watched column.
+#[test]
+fn watch_columns_narrow_both_trigger_and_diff() {
+    let dir = fresh_dir("watch-columns");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    ta(&dir, &["create", "a", "status=todo", "notes=start"]);
+    let since = ta(&dir, &["status", "--current"]);
+    let watch = |since: &str| {
+        run(
+            ta_bin(),
+            &dir,
+            &[
+                "watch",
+                "--since",
+                since,
+                "--timeout",
+                "1s",
+                "--holdout",
+                "0s",
+                "--columns",
+                "status",
+            ],
+        )
+    };
+
+    ta(&dir, &["update", "a", "notes+=more"]);
+    let quiet = watch(since.trim());
+    assert_eq!(
+        quiet.status.code(),
+        Some(1),
+        "an unwatched change doesn't wake it: {}",
+        String::from_utf8_lossy(&quiet.stdout)
+    );
+
+    ta(&dir, &["update", "a", "status=in_progress", "notes+=again"]);
+    // A task created without the watched column changes nothing watched
+    // (`status=` opts out of the default status stamp).
+    ta(&dir, &["create", "bare", "status=", "notes=x"]);
+    let out = watch(since.trim());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "a watched change wakes it: {stdout}");
+    assert!(
+        stdout.contains("- status: todo") && stdout.contains("+ status: in_progress"),
+        "the watched column's diff: {stdout}"
+    );
+    assert!(
+        !stdout.contains("notes"),
+        "unwatched columns are left out: {stdout}"
+    );
+    assert!(
+        !stdout.contains("bare:"),
+        "nothing watched changed on `bare`: {stdout}"
+    );
+}
+
+/// `deps` watches relationship changes.
+#[test]
+fn watch_columns_deps_reports_edge_changes() {
+    let dir = fresh_dir("watch-columns-deps");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    ta(&dir, &["create", "a", "status=todo"]);
+    ta(&dir, &["create", "b", "status=todo"]);
+    let since = ta(&dir, &["status", "--current"]);
+    ta(&dir, &["update", "a", "status=in_progress"]);
+    ta(&dir, &["dep", "add", "a", "depends_on=b"]);
+
+    let out = run(
+        ta_bin(),
+        &dir,
+        &[
+            "watch",
+            "--since",
+            since.trim(),
+            "--timeout",
+            "5s",
+            "--holdout",
+            "0s",
+            "--columns",
+            "deps",
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "exit 0: {stdout}");
+    assert!(
+        stdout.contains("depends_on") && stdout.contains('b'),
+        "the new edge: {stdout}"
+    );
+    assert!(!stdout.contains("status"), "status isn't watched: {stdout}");
+}
+
+/// A column that could never fire is an immediate error, not a silent wait
+/// until the timeout: a typo (with a did-you-mean), a computed column, and a
+/// relationship type name.
+#[test]
+fn watch_columns_rejects_unwatchable_names_up_front() {
+    let dir = fresh_dir("watch-columns-reject");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    ta(&dir, &["create", "a", "status=todo"]);
+
+    for (column, expected) in [
+        ("statsu", "did you mean `status`?"),
+        ("update_time", "computed column"),
+        ("depends_on", "--columns deps"),
+    ] {
+        let started = std::time::Instant::now();
+        let out = run(
+            ta_bin(),
+            &dir,
+            &[
+                "watch",
+                "--since",
+                "0",
+                "--timeout",
+                "30s",
+                "--columns",
+                column,
+            ],
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "`{column}` rejected: {stderr}");
+        assert!(stderr.contains(expected), "`{column}`: {stderr}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "rejected before blocking"
+        );
+    }
+}

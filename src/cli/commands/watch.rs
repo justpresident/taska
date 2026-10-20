@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::action::list::validate_criteria;
-use crate::action::watch::poll;
+use crate::action::watch::{poll, validate_columns};
 use crate::error::DynError;
 use crate::format::{render_args, render_diff_lines, seq_tag, state_diff, want_color, OutputArgs};
 use crate::storage::EventStore;
@@ -42,10 +42,12 @@ pub fn cmd_watch(
     since: u64,
     timeout: Duration,
     holdout: Duration,
+    columns: &[String],
     output: &OutputArgs,
 ) -> Result<(), DynError> {
-    // Reject a bad filter before blocking.
+    // Reject a bad filter or an unwatchable column before blocking.
     validate_criteria(criteria)?;
+    validate_columns(store, columns)?;
 
     let color = want_color(output.no_color);
     let deadline = Instant::now() + timeout;
@@ -59,7 +61,10 @@ pub fn cmd_watch(
         let fp = store.log_fingerprint();
         if fp.is_none() || fp != last_fp {
             last_fp = fp;
-            if !collect(store, criteria, open, ready, since)?.1.is_empty() {
+            if !collect(store, criteria, open, ready, since, columns)?
+                .1
+                .is_empty()
+            {
                 // A match arrived: hold out briefly (bounded by the time left) to
                 // batch a burst, then emit the accumulated set.
                 let wait = holdout.min(deadline.saturating_duration_since(Instant::now()));
@@ -68,7 +73,7 @@ pub fn cmd_watch(
                 }
                 // The cursor comes from this same read, so it covers exactly
                 // the diff printed - never a write that landed after it.
-                let (cursor, changed) = collect(store, criteria, open, ready, since)?;
+                let (cursor, changed) = collect(store, criteria, open, ready, since, columns)?;
                 if !changed.is_empty() {
                     for line in render_args(
                         output,
@@ -100,8 +105,9 @@ fn collect(
     open: bool,
     ready: bool,
     since: u64,
+    columns: &[String],
 ) -> Result<(u64, Vec<ChangedTask>), DynError> {
-    let polled = poll(store, criteria, open, ready, since)?;
+    let polled = poll(store, criteria, open, ready, since, columns)?;
     let mut changed = Vec::new();
     for u in &polled.updates {
         let (removed, added) = state_diff(u.before.as_ref(), u.after.as_ref());

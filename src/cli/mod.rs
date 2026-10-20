@@ -189,6 +189,13 @@ enum Commands {
         /// After the first change, wait this long to batch a burst before printing.
         #[arg(long, value_parser = parse_duration, default_value = "10s")]
         holdout: Duration,
+        /// Watch only these columns (comma-separated, as in `ta list`): a task is
+        /// reported only when one of them changed, and its diff shows only them.
+        /// Any task field, or `deps` for relationship changes; computed columns
+        /// (timestamps, `unblocks`/`blocked_by`/`subtasks`) can't be watched. Default:
+        /// every field.
+        #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(complete::columns))]
+        columns: Vec<String>,
         #[command(flatten)]
         output: OutputArgs,
     },
@@ -888,9 +895,10 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             since,
             timeout,
             holdout,
+            columns,
             output,
         } => cmd_watch(
-            store, &criteria, open, ready, since, timeout, holdout, &output,
+            store, &criteria, open, ready, since, timeout, holdout, &columns, &output,
         ),
         Commands::Show { ids, display } => cmd_show(store, &ids, &display, &store.config().display),
         Commands::Edit {

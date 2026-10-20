@@ -4,15 +4,18 @@
 //! touched by events newer than `since` and matching the list-style filter, and
 //! returns each such task's before/after state - the frontend renders the
 //! per-field diff (via `format::render_state_diff`, shared with `undo`), plus
-//! the cursor that snapshot was taken at. No
+//! the cursor that snapshot was taken at. `columns` narrows a watch to some
+//! fields: only their changes count, and only they are returned. No
 //! blocking or polling here: that (and the holdout debounce) is the CLI's job.
 //! This is one pure snapshot.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::action::{list, materialize, read};
+use crate::config::Config;
 use crate::error::DynError;
-use crate::model::TaskState;
+use crate::model::{TaskState, BLOCKED_BY_KEY, DEPS_KEY, ID_KEY, SUBTASKS_KEY, UNBLOCKS_KEY};
+use crate::schema::{canonical_field_pairs, editable_field_names, nearest_known};
 use crate::storage::EventStore;
 
 /// One task that changed since the cursor: its state at the cursor (`before` -
@@ -45,12 +48,18 @@ pub struct WatchPoll {
 /// current state at all) is the same rule. Two snapshots are compared, not
 /// every event between them, so a task that passes through the set entirely
 /// within one batch matches at neither end and goes unreported. Errors if `since` predates the retained log (compacted away).
+///
+/// A non-empty `columns` (display names, validated as by [`validate_columns`])
+/// narrows the watch: only a change to one of them counts, and `before`/`after`
+/// carry only those columns. A task created or deleted without any of them set
+/// changes nothing watched, so it isn't reported. Empty = every field.
 pub fn poll(
     store: &impl EventStore,
     criteria: &[String],
     open: bool,
     ready: bool,
     since: u64,
+    columns: &[String],
 ) -> Result<WatchPoll, DynError> {
     let config = store.config();
     let baseline = store.load_baseline()?;
@@ -85,6 +94,11 @@ pub fn poll(
     let since_muts: Vec<_> = muts.iter().filter(|e| e.seq <= since).cloned().collect();
     let mut before = materialize(config, &baseline, &since_muts);
     let mut after = materialize(config, &baseline, &muts);
+    let watched = if columns.is_empty() {
+        None
+    } else {
+        Some(resolve_columns(config, &after, columns)?)
+    };
     read::rename_to_display(&mut before, config);
     read::rename_to_display(&mut after, config);
 
@@ -102,15 +116,131 @@ pub fn poll(
 
     let mut updates = Vec::new();
     for id in touched {
-        if matched_now.contains(id) || matched_then.contains(id) {
-            updates.push(WatchUpdate {
-                id: id.to_string(),
-                before: before.get(id).cloned(),
-                after: after.get(id).cloned(),
-            });
+        if !(matched_now.contains(id) || matched_then.contains(id)) {
+            continue;
         }
+        let (was, now) = match &watched {
+            None => (before.get(id).cloned(), after.get(id).cloned()),
+            Some(cols) => {
+                let was = before.get(id).and_then(|t| project(t, cols));
+                let now = after.get(id).and_then(|t| project(t, cols));
+                if was == now {
+                    continue; // only unwatched columns changed
+                }
+                (was, now)
+            }
+        };
+        updates.push(WatchUpdate {
+            id: id.to_string(),
+            before: was,
+            after: now,
+        });
     }
     Ok(WatchPoll { cursor, updates })
+}
+
+/// Check a watch's `columns` against the store before blocking on it, so a
+/// column that can never change is an immediate error rather than a silent
+/// wait until the timeout. See [`poll`].
+pub fn validate_columns(store: &impl EventStore, columns: &[String]) -> Result<(), DynError> {
+    if columns.is_empty() {
+        return Ok(());
+    }
+    let config = store.config();
+    let state = materialize(config, &store.load_baseline()?, &store.load_mutations()?);
+    resolve_columns(config, &state, columns).map(|_| ())
+}
+
+/// The watchable set named by `columns` (display names), from RAW `state`.
+///
+/// Watchable = any settable task field (the soft-schema vocabulary), `deps` for
+/// relationship changes, and `id` (accepted; it never changes). Rejected: the
+/// computed columns - watch compares stored values, so a timestamp or graph
+/// column could never fire - a relationship type name (those change under
+/// `deps`), and an unknown name, with a did-you-mean.
+fn resolve_columns(
+    config: &Config,
+    state: &HashMap<String, TaskState>,
+    columns: &[String],
+) -> Result<BTreeSet<String>, DynError> {
+    let ts = &config.timestamps;
+    let computed = [
+        ts.create_time.as_str(),
+        ts.update_time.as_str(),
+        ts.close_time.as_str(),
+        UNBLOCKS_KEY,
+        BLOCKED_BY_KEY,
+        SUBTASKS_KEY,
+    ];
+    let mut known = editable_field_names(state, config);
+    for (display, canonical) in canonical_field_pairs(&config.workflow) {
+        if known.remove(canonical) {
+            known.insert(display.clone());
+        }
+    }
+    known.insert(DEPS_KEY.to_string());
+    known.insert(ID_KEY.to_string());
+
+    let mut watched = BTreeSet::new();
+    for col in columns {
+        if known.contains(col) {
+            watched.insert(col.clone());
+        } else if !col.is_empty() && computed.contains(&col.as_str()) {
+            return Err(format!(
+                "`{col}` is a computed column - watch compares stored values only, so it \
+                 can't watch it"
+            )
+            .into());
+        } else if config
+            .relationships
+            .types
+            .iter()
+            .any(|(name, def)| name == col || def.inverse == *col)
+        {
+            return Err(format!(
+                "`{col}` is a relationship type - watch relationship changes with \
+                 `--columns {DEPS_KEY}`"
+            )
+            .into());
+        } else {
+            let hint = nearest_known(col, &known)
+                .map(|k| format!(" - did you mean `{k}`?"))
+                .unwrap_or_default();
+            return Err(format!(
+                "unknown column `{col}`: no task uses it and no schema declares it{hint}"
+            )
+            .into());
+        }
+    }
+    Ok(watched)
+}
+
+/// `task` narrowed to the watched columns (`deps` keeps its relationships), or
+/// `None` when it carries none of them - so a task gaining its first watched
+/// value reads as an addition, and one without any is no change at all.
+fn project(task: &TaskState, columns: &BTreeSet<String>) -> Option<TaskState> {
+    let custom_fields: serde_json::Map<String, serde_json::Value> = task
+        .custom_fields
+        .iter()
+        .filter(|(k, _)| columns.contains(*k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let relationships = if columns.contains(DEPS_KEY) {
+        task.relationships.clone()
+    } else {
+        BTreeMap::new()
+    };
+    if custom_fields.is_empty() && relationships.values().all(Vec::is_empty) {
+        return None;
+    }
+    Some(TaskState {
+        id: task.id.clone(),
+        relationships,
+        custom_fields,
+        create_time: None,
+        update_time: None,
+        close_time: None,
+    })
 }
 
 #[cfg(test)]
@@ -129,10 +259,10 @@ mod tests {
         store.compact(&[], &[event]).unwrap();
 
         assert!(
-            poll(&store, &[], false, false, 8).is_err(),
+            poll(&store, &[], false, false, 8, &[]).is_err(),
             "cursor before the retained window is rejected"
         );
-        let polled = poll(&store, &[], false, false, 9).unwrap();
+        let polled = poll(&store, &[], false, false, 9, &[]).unwrap();
         assert_eq!(
             polled.updates.len(),
             1,
@@ -143,7 +273,7 @@ mod tests {
             "the cursor is the snapshot's high-water seq"
         );
         assert!(
-            poll(&store, &[], false, false, u64::MAX)
+            poll(&store, &[], false, false, u64::MAX, &[])
                 .unwrap()
                 .updates
                 .is_empty(),
