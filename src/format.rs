@@ -167,9 +167,11 @@ pub(crate) struct DisplayArgs {
     /// `subtasks`; plus any task field. E.g. --columns id,status,unblocks
     #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(crate::cli::complete::columns))]
     pub(crate) columns: Option<Vec<String>>,
-    /// Sort rows by this column: `id`, `deps`, any task field, a timestamp, or a
-    /// computed column (`unblocks`/`blocked_by`/`subtasks`). Overrides config
-    #[arg(long, add = ArgValueCandidates::new(crate::cli::complete::columns))]
+    /// Sort rows by these columns, compared in order (comma-separated; `-col`
+    /// sorts that key descending): `id`, `deps`, any task field, a timestamp, or
+    /// a computed column (`unblocks`/`blocked_by`/`subtasks`). Missing values
+    /// sort last. Overrides config. E.g. --sort mgr,-priority
+    #[arg(long, allow_hyphen_values = true, add = ArgValueCandidates::new(crate::cli::complete::columns))]
     pub(crate) sort: Option<String>,
     /// Reverse the sort order (descending)
     #[arg(long)]
@@ -369,13 +371,17 @@ fn truncation_caps(columns: &[String], display: &DisplayArgs, cfg: &DisplayConfi
         .collect()
 }
 
-/// The column names this display will *reference* - the sort key plus the
+/// The column names this display will *reference* - every sort key plus the
 /// columns it will show (explicit `--columns`, else the configured default).
 /// `--full` is excluded because it shows only fields already on the task; a
 /// caller uses this to inject a computed column (e.g. `unblocks`/`blocked_by`) only
 /// when it's actually needed, leaving default/`--full`/json output untouched.
 pub(crate) fn referenced_columns(display: &DisplayArgs, cfg: &DisplayConfig) -> Vec<String> {
-    let mut refs = vec![display.sort.clone().unwrap_or_else(|| cfg.sort.clone())];
+    let spec = display.sort.as_deref().unwrap_or(cfg.sort.as_str());
+    let mut refs: Vec<String> = crate::model::parse_sort(spec)
+        .into_iter()
+        .map(|k| k.column)
+        .collect();
     if let Some(cols) = &display.columns {
         refs.extend(cols.iter().cloned());
     } else if !display.full {

@@ -615,3 +615,75 @@ fn list_subtasks_column_shows_parent_progress() {
         "default omits computed column"
     );
 }
+
+/// `--sort` takes several keys compared in order, `-col` sorting one key
+/// descending, with missing values last for every key. A comma list used to be
+/// read as ONE column name and silently fall back to id order.
+#[test]
+fn sort_by_several_keys_with_per_key_direction() {
+    let dir = fresh_dir("sort-multi-key");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    ta(
+        &dir,
+        &["create", "a", "mgr=bob", "priority=1", "--new-field"],
+    );
+    ta(&dir, &["create", "b", "mgr=amy", "priority=1"]);
+    ta(&dir, &["create", "c", "mgr=amy", "priority=3"]);
+    ta(&dir, &["create", "d", "mgr=amy"]);
+    ta(&dir, &["create", "e", "priority=9"]);
+
+    let ids = |sort: &[&str]| -> Vec<String> {
+        let mut args = vec!["list", "--columns", ID_KEY];
+        args.extend_from_slice(sort);
+        ta(&dir, &args)
+            .lines()
+            .skip(1)
+            .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+            .collect()
+    };
+    assert_eq!(
+        ids(&["--sort", "mgr,priority"]),
+        ["b", "c", "d", "a", "e"],
+        "the second key breaks ties of the first"
+    );
+    assert_eq!(
+        ids(&["--sort", "mgr,-priority"]),
+        ["c", "b", "d", "a", "e"],
+        "a `-` key sorts descending, missing values still last"
+    );
+    assert_eq!(
+        ids(&["--sort", "-mgr"]),
+        ["a", "b", "c", "d", "e"],
+        "`--sort -col` parses as a value, not a flag"
+    );
+    assert_eq!(
+        ids(&["--sort=mgr,priority", "--reverse"]),
+        ["e", "a", "d", "c", "b"],
+        "--reverse flips the whole order"
+    );
+}
+
+/// `dep tree --sort` orders siblings by every key, including a computed column
+/// it must inject to have values to order by.
+#[test]
+fn dep_tree_sorts_siblings_by_keys_including_computed_columns() {
+    let dir = fresh_dir("tree-sort-keys");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    for id in ["root", "x", "y", "leaf1", "leaf2"] {
+        ta(&dir, &["create", id, &format!("{STATUS_KEY}=todo")]);
+    }
+    ta(&dir, &["dep", "add", "root", "depends_on=x"]);
+    ta(&dir, &["dep", "add", "root", "depends_on=y"]);
+    // y unblocks more open work than x: two leaves wait on it.
+    ta(&dir, &["dep", "add", "leaf1", "depends_on=y"]);
+    ta(&dir, &["dep", "add", "leaf2", "depends_on=y"]);
+
+    let tree = ta(&dir, &["dep", "tree", "root", "--sort", "-unblocks"]);
+    let (x, y) = (tree.find(" x").unwrap(), tree.find(" y").unwrap());
+    assert!(y < x, "y (unblocks 3) before x (unblocks 1): {tree}");
+    let tree = ta(&dir, &["dep", "tree", "root", "--sort", "unblocks"]);
+    let (x, y) = (tree.find(" x").unwrap(), tree.find(" y").unwrap());
+    assert!(x < y, "ascending flips it: {tree}");
+}

@@ -8,6 +8,12 @@ git log.
 ## [Unreleased]
 
 ### Added
+- **Multi-key sort with per-key direction.** `--sort mgr,-priority` (on `list`
+  and `dep tree`, and `[display] sort`) compares by each key in turn, with a
+  leading `-` sorting that key descending; missing values sort last for every
+  key. Previously a comma list was taken as one column name, matched no task
+  and silently fell back to `id` order. `dep tree --sort` by a computed column
+  (`unblocks`, ...) now actually orders by it.
 - **More than one status can close a task.** `[workflow] closed_statuses` is a
   list (`["closed", "archived", "submitted"]`); reaching any of them counts as
   done - for `list --ready`/`--open`, `close_time`, `status` counts and the

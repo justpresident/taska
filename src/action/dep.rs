@@ -17,7 +17,9 @@ use crate::action::{inject_computed_columns, materialize, read, Warning};
 use crate::config::RelationshipDef;
 use crate::error::DynError;
 use crate::graph;
-use crate::model::{is_done, task_cmp, MutationEvent, OpType, TaskState, REL_KEY, TARGET_KEY};
+use crate::model::{
+    is_done, parse_sort, task_cmp, MutationEvent, OpType, SortKey, TaskState, REL_KEY, TARGET_KEY,
+};
 use crate::schema::vet_events;
 use crate::storage::EventStore;
 
@@ -401,7 +403,8 @@ pub struct TreeQuery<'a> {
     pub open: bool,
     pub reverse: bool,
     pub columns: &'a [String],
-    /// The column siblings/roots are ordered by, ascending (`--reverse` flips).
+    /// The sort spec siblings/roots are ordered by ([`parse_sort`]: comma-separated
+    /// keys, `-col` descending; `--reverse` flips the whole order).
     pub sort: &'a str,
 }
 
@@ -413,14 +416,18 @@ pub struct TreeOutcome {
 
 /// Build the blocker-graph forest, children nested under their dependents.
 ///
-/// Siblings and roots are ordered by `query.sort` ascending (via the neutral
+/// Siblings and roots are ordered by the `query.sort` keys (via the neutral
 /// [`task_cmp`]), with `reverse` and the missing-last rule applied on top.
 pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, DynError> {
     let session = read(store)?;
     let mut state = session.state;
     // Inject any graph-computed columns the query asked for (timestamps already
     // arrive from `read`), via the same shared primitive `list` uses.
-    let wanted: Vec<&str> = query.columns.iter().map(String::as_str).collect();
+    // The displayed columns plus every sort key, so ordering by a computed
+    // column (`unblocks`, ...) has values to order by.
+    let sort_keys = parse_sort(query.sort);
+    let mut wanted: Vec<&str> = query.columns.iter().map(String::as_str).collect();
+    wanted.extend(sort_keys.iter().map(|k| k.column.as_str()));
     inject_computed_columns(store, &mut state, &wanted);
 
     let blockers = store.config().relationships.blocker_types();
@@ -457,7 +464,7 @@ pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, D
     };
     // Sort roots canonically (NOT reversed) so the build's expand/collapse choice
     // is identical regardless of `--reverse`; the display flip is a post-pass below.
-    sort_ids(&mut roots, &state, query.sort, false);
+    sort_ids(&mut roots, &state, &sort_keys, false);
     if query.open {
         roots.retain(|r| open_subtrees.contains(r));
     }
@@ -475,7 +482,7 @@ pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, D
         status_field: &wf.status_field,
         closed_statuses: &wf.closed_statuses,
         default_blocker: store.config().relationships.default_blocker(),
-        sort: query.sort,
+        sort: &sort_keys,
         open: query.open,
         open_subtrees: &open_subtrees,
         columns: query.columns,
@@ -513,8 +520,8 @@ struct TreeCtx<'a> {
     /// relation; every other type is tagged. `None` only for a store with no
     /// blocker type (which `Config::validate` rejects).
     default_blocker: Option<&'a str>,
-    /// The column siblings are ordered by (via [`task_cmp`]).
-    sort: &'a str,
+    /// The keys siblings are ordered by (via [`task_cmp`]).
+    sort: &'a [SortKey],
     open: bool,
     /// Tasks whose blocker-subtree contains at least one open task.
     open_subtrees: &'a HashSet<String>,
@@ -614,7 +621,7 @@ fn reverse_display(nodes: &mut [Node]) {
     }
 }
 
-/// Order two task ids by the sort column (missing tasks last, id tiebreak).
+/// Order two task ids by the sort keys (missing tasks last, id tiebreak).
 fn child_cmp(ctx: &TreeCtx, a: &str, b: &str) -> Ordering {
     match (ctx.state.get(a), ctx.state.get(b)) {
         (Some(ta), Some(tb)) => task_cmp(ta, tb, ctx.sort),
@@ -624,9 +631,14 @@ fn child_cmp(ctx: &TreeCtx, a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Sort task ids in place by the `sort` column (missing tasks last), flipped by
+/// Sort task ids in place by the `sort` keys (missing tasks last), flipped by
 /// `reverse`.
-fn sort_ids(ids: &mut [String], state: &HashMap<String, TaskState>, sort: &str, reverse: bool) {
+fn sort_ids(
+    ids: &mut [String],
+    state: &HashMap<String, TaskState>,
+    sort: &[SortKey],
+    reverse: bool,
+) {
     ids.sort_by(|a, b| match (state.get(a), state.get(b)) {
         (Some(ta), Some(tb)) => task_cmp(ta, tb, sort),
         (Some(_), None) => Ordering::Less,

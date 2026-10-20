@@ -49,8 +49,9 @@ pub enum DepAction {
         /// lead to open work stay, so the graph is never spliced
         #[arg(long)]
         open: bool,
-        /// Order siblings/roots by this column (default: [display].sort)
-        #[arg(long, add = ArgValueCandidates::new(complete::columns))]
+        /// Order siblings/roots by these columns (comma-separated, `-col`
+        /// descending; default: [display].sort)
+        #[arg(long, allow_hyphen_values = true, add = ArgValueCandidates::new(complete::columns))]
         sort: Option<String>,
         /// Reverse the sibling/root order
         #[arg(long)]

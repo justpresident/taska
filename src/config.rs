@@ -135,8 +135,11 @@ columns = [{columns}]
 # Truncate long human cell values to this many characters (0 = no limit). This
 # is the global fallback for any column not overridden below.
 max_width = {max_width}
-# Default column to sort list/ready by (ascending; --sort overrides,
-# --reverse flips). Any field, "id", or "deps"; empty/unknown falls back to id.
+# Default sort for list and dep tree: comma-separated columns compared in order,
+# a leading "-" sorting that key descending (e.g. "priority,-create_time");
+# missing values sort last. --sort overrides, --reverse flips the whole order.
+# Any field, "id", "deps", a timestamp or computed column; empty/unknown falls
+# back to id.
 sort = "{sort}"
 # Default human layout per command: "table" (aligned columns, one task per row)
 # or "list" (a vertical `field: value` record per task). `--layout` overrides.

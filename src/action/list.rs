@@ -15,7 +15,7 @@ use crate::action::{inject_computed_columns, read, Warning};
 use crate::config::{Config, RelationshipDef};
 use crate::error::DynError;
 use crate::graph;
-use crate::model::{cmp_json, is_done, task_cmp, TaskState, DEPS_KEY, ID_KEY};
+use crate::model::{cmp_json, is_done, parse_sort, task_cmp, TaskState, DEPS_KEY, ID_KEY};
 use crate::storage::EventStore;
 
 /// A `list` query: the filter criteria, the not-done / ready shortcuts, the
@@ -31,9 +31,9 @@ pub struct ListQuery<'a> {
     /// the graph-computed columns (`unblocks`/`blocked_by`/`subtasks`), so they
     /// cost nothing unless referenced. Criterion fields are added automatically.
     pub display_columns: &'a [String],
-    /// The column to order by, ascending (`id` tiebreak, missing values last -
-    /// see [`task_cmp`]). May be `id`, `deps`, a custom field, or an injected
-    /// computed column.
+    /// The sort spec ([`parse_sort`]): columns compared in order, `-col`
+    /// descending, `id` tiebreak, missing values last (see [`task_cmp`]). Each
+    /// may be `id`, `deps`, a custom field, or an injected computed column.
     pub sort: &'a str,
     /// Flip the order to descending.
     pub reverse: bool,
@@ -69,7 +69,8 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
         .collect();
 
     // Return ordered data: the frontend renders the slice as-is.
-    tasks.sort_by(|a, b| task_cmp(a, b, query.sort));
+    let keys = parse_sort(query.sort);
+    tasks.sort_by(|a, b| task_cmp(a, b, &keys));
     if query.reverse {
         tasks.reverse();
     }

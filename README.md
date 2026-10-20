@@ -303,8 +303,11 @@ columns = ["id", "title", "status", "deps"]
 # Truncate long human cell values to this many characters (0 = no limit). The
 # global fallback for any column not overridden below.
 max_width = 40
-# Default column to sort list/ready by (ascending; --sort overrides,
-# --reverse flips). Any field, "id", or "deps"; empty/unknown falls back to id.
+# Default sort for list and dep tree: comma-separated columns compared in order,
+# a leading "-" sorting that key descending (e.g. "priority,-create_time");
+# missing values sort last. --sort overrides, --reverse flips the whole order.
+# Any field, "id", "deps", a timestamp or computed column; empty/unknown falls
+# back to id.
 sort = "create_time"
 # Default layout per command: "table" (aligned columns) or "list" (a vertical
 # field: value record per task). --layout overrides for one run.
@@ -378,13 +381,13 @@ The `--if` guard on `update`/`delete` is evaluated **in the same locked step** t
 
 A write also can't quietly introduce a **brand-new field name**. A name no task uses yet - and that isn't a declared schema field or a display column - is rejected with a did-you-mean suggestion unless you pass `--new-field`. It's a **soft, schema-free guard against typos** (`titel`, `pirority`): you keep schemaless freedom (any field is one `--new-field` away), but a misspelling can't silently spawn a phantom column. The store's existing field names *are* the vocabulary, so the guard needs no configuration; the first task on an empty store is exempt (it seeds that vocabulary). For hard constraints - required fields, value kinds, a closed field set - declare a `[task_types]` schema on top.
 
-`list` and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON - one object per line - for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, `--columns id,status,...` to pick the columns for one run (its `--help` lists the always-available computed columns), `--sort <column>` / `--reverse` to order the rows (`list`; default column from `[display].sort`), and `--layout table|list` to switch between an aligned table and a vertical `field: value` record per task. The per-command layout default lives in `[display]` (`list_layout` defaults to `table`, `show_layout` to `list`), alongside the columns and `max_width`.
+`list` and `show` share display flags: `--format human|json|jsonl` (`json` is a parseable array; `jsonl` is NDJSON - one object per line - for streaming, `grep`, and agents; both omit a field a task lacks rather than emitting `null`), `--full` to show every field, `--columns id,status,...` to pick the columns for one run (its `--help` lists the always-available computed columns), `--sort <columns>` / `--reverse` to order the rows (`list`; comma-separated keys compared in order, `-col` for descending - e.g. `--sort mgr,-priority`; missing values sort last; default from `[display].sort`), and `--layout table|list` to switch between an aligned table and a vertical `field: value` record per task. The per-command layout default lives in `[display]` (`list_layout` defaults to `table`, `show_layout` to `list`), alongside the columns and `max_width`.
 
 Every command that prints data - `list`, `show`, `status`, and `dep tree`/`plan`/`cycles` - accepts the same `--format human|json|jsonl` and `--no-color`, so machine output is available and consistent everywhere (`dep tree` json is the nested tree; `dep plan` an ordered array; `dep cycles` an array of cycles; `status` a summary object).
 
 Human output is **colored** when stdout is a terminal, and **consistently across every command** (`list`, `show`, `dep tree`, and any future one) - they share one styling rule: `id` is cyan, the configured status column green, headers bold, and the `deps` type groups styled by kind (readiness-gating types bold, informational ones dim). A **done/closed task greys out** wholesale (dim), overriding those colors, so finished work recedes in `list` rows and `dep tree` nodes alike. It uses the terminal's named 16-color palette, so it adapts to your light/dark theme. Color auto-disables when output isn't a TTY (pipes, redirects) and for `--format json`/`jsonl`, so machine output and `grep` stay clean; `--no-color` or the `NO_COLOR` env var turns it off explicitly.
 
-`list` also offers a few **computed** columns for triage - `unblocks` (how many still-open tasks this one transitively unblocks - "finish it to free up N"), `blocked_by` (how many still-open prerequisites it's waiting on), and `subtasks` (a parent's `done/total` child completion). The first two behave like numeric fields, so `--sort unblocks --reverse` surfaces the highest-leverage work and `--sort blocked_by` the most-stuck. They're opt-in: computed only when named in `--columns`/`--sort` or the configured columns, so default and `--full`/json output are untouched.
+`list` also offers a few **computed** columns for triage - `unblocks` (how many still-open tasks this one transitively unblocks - "finish it to free up N"), `blocked_by` (how many still-open prerequisites it's waiting on), and `subtasks` (a parent's `done/total` child completion). The first two behave like numeric fields, so `--sort -unblocks` surfaces the highest-leverage work and `--sort blocked_by` the most-stuck. They're opt-in: computed only when named in `--columns`/`--sort` or the configured columns, so default and `--full`/json output are untouched.
 
 ### Filtering
 

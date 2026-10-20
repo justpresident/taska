@@ -365,22 +365,57 @@ pub fn cell_value(task: &TaskState, column: &str) -> Option<Value> {
     }
 }
 
-/// Compare two tasks by one `column`, ascending, with `id` as the stable
-/// tiebreaker - a present value sorts before a missing one.
+/// One key of a sort spec: a column, and whether it orders descending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SortKey {
+    pub column: String,
+    pub descending: bool,
+}
+
+/// Parse a sort spec, the grammar `--sort` and `[display] sort` share.
+///
+/// Comma-separated columns compared in order, a leading `-` making that key
+/// descending (`mgr,-status`). Blank keys are skipped, so `""` is no keys at
+/// all (pure `id` order).
+#[must_use]
+pub fn parse_sort(spec: &str) -> Vec<SortKey> {
+    spec.split(',')
+        .map(str::trim)
+        .filter(|k| !k.is_empty() && *k != "-")
+        .map(|k| {
+            let column = k.strip_prefix('-');
+            SortKey {
+                column: column.unwrap_or(k).to_string(),
+                descending: column.is_some(),
+            }
+        })
+        .collect()
+}
+
+/// Compare two tasks by each sort key in turn, then `id` as the stable tiebreaker.
+///
+/// A present value sorts before a missing one for EVERY key, in either
+/// direction - `-` reverses how values order, not where gaps go.
 ///
 /// The shared ordering behind `list`'s `--sort` and `dep tree`'s sibling sort
 /// (both keyed off [`cell_value`] and [`cmp_json`]); `--reverse` flips the
-/// result at the call site.
+/// whole result at the call site.
 #[must_use]
-pub fn task_cmp(a: &TaskState, b: &TaskState, column: &str) -> std::cmp::Ordering {
+pub fn task_cmp(a: &TaskState, b: &TaskState, keys: &[SortKey]) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    let ord = match (cell_value(a, column), cell_value(b, column)) {
-        (Some(x), Some(y)) => cmp_json(&x, &y),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    };
-    ord.then_with(|| a.id.cmp(&b.id))
+    keys.iter()
+        .map(
+            |key| match (cell_value(a, &key.column), cell_value(b, &key.column)) {
+                (Some(x), Some(y)) if key.descending => cmp_json(&y, &x),
+                (Some(x), Some(y)) => cmp_json(&x, &y),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            },
+        )
+        .find(|ord| ord.is_ne())
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| a.id.cmp(&b.id))
 }
 
 #[cfg(test)]
@@ -469,20 +504,20 @@ mod tests {
         let lo = task("z", &[], &[("priority", json!(2))]);
         let hi = task("a", &[], &[("priority", json!(10))]);
         assert_eq!(
-            task_cmp(&lo, &hi, "priority"),
+            task_cmp(&lo, &hi, &parse_sort("priority")),
             Ordering::Less,
             "2 < 10 numerically, ignoring ids"
         );
         let none = task("b", &[], &[]);
         assert_eq!(
-            task_cmp(&hi, &none, "priority"),
+            task_cmp(&hi, &none, &parse_sort("priority")),
             Ordering::Less,
             "present sorts before missing"
         );
         let a2 = task("a", &[], &[("priority", json!(2))]);
         let z2 = task("z", &[], &[("priority", json!(2))]);
         assert_eq!(
-            task_cmp(&a2, &z2, "priority"),
+            task_cmp(&a2, &z2, &parse_sort("priority")),
             Ordering::Less,
             "equal column -> id tiebreak"
         );
@@ -497,13 +532,71 @@ mod tests {
         let ids = |v: &[&TaskState]| -> Vec<String> { v.iter().map(|t| t.id.clone()).collect() };
 
         let mut list = vec![&pri3, &pri1, &pri2, &none];
-        list.sort_by(|a, b| task_cmp(a, b, "priority"));
+        list.sort_by(|a, b| task_cmp(a, b, &parse_sort("priority")));
         assert_eq!(ids(&list), ["b", "c", "a", "d"], "asc, missing last");
         list.reverse();
         assert_eq!(ids(&list), ["d", "a", "c", "b"], "reversed");
 
         let mut unknown = vec![&pri2, &pri3, &pri1];
-        unknown.sort_by(|a, b| task_cmp(a, b, "nope"));
+        unknown.sort_by(|a, b| task_cmp(a, b, &parse_sort("nope")));
         assert_eq!(ids(&unknown), ["a", "b", "c"], "unknown column -> by id");
+    }
+
+    #[test]
+    fn parse_sort_reads_keys_and_directions() {
+        let key = |column: &str, descending| SortKey {
+            column: column.to_string(),
+            descending,
+        };
+        assert_eq!(
+            parse_sort("mgr, -status"),
+            [key("mgr", false), key("status", true)]
+        );
+        assert!(parse_sort("").is_empty(), "empty = pure id order");
+        assert_eq!(parse_sort("a,,-"), [key("a", false)], "blank keys skipped");
+    }
+
+    #[test]
+    fn task_cmp_orders_by_each_key_then_id_with_gaps_last() {
+        use crate::test_support::task;
+        use serde_json::json;
+        let t = |id: &str, mgr: Option<&str>, pri: Option<i64>| {
+            let mut fields = vec![];
+            if let Some(m) = mgr {
+                fields.push(("mgr", json!(m)));
+            }
+            if let Some(p) = pri {
+                fields.push(("pri", json!(p)));
+            }
+            task(id, &[], &fields)
+        };
+        let tasks = [
+            t("a", Some("bob"), Some(1)),
+            t("b", Some("amy"), Some(1)),
+            t("c", Some("amy"), Some(3)),
+            t("d", Some("amy"), None),
+            t("e", None, Some(9)),
+        ];
+        let order = |spec: &str| -> Vec<String> {
+            let keys = parse_sort(spec);
+            let mut v: Vec<&TaskState> = tasks.iter().collect();
+            v.sort_by(|x, y| task_cmp(x, y, &keys));
+            v.iter().map(|t| t.id.clone()).collect()
+        };
+        assert_eq!(
+            order("mgr,pri"),
+            ["b", "c", "d", "a", "e"],
+            "second key breaks ties"
+        );
+        assert_eq!(
+            order("mgr,-pri"),
+            ["c", "b", "d", "a", "e"],
+            "descending per key, missing still last"
+        );
+        assert_eq!(
+            order("-mgr"),
+            ["a", "b", "c", "d", "e"],
+            "gaps last when descending"
+        );
     }
 }
