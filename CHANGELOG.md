@@ -16,6 +16,12 @@ git log.
   one closed status declared by that type.
 
 ### Changed
+- **`ta watch` reports tasks leaving the filter, not only entering it.** A
+  touched task counts if it matched at the cursor or matches now, so
+  `ta watch status=in_progress` sees `in_progress -> closed` too (the diff
+  shows which way it went), `--open` sees closures, and `--ready` sees a task
+  become blocked. Previously only a matching task's deletion counted as
+  leaving.
 - **`ta watch` reports its cursor.** The diff ends with the `[seq:N]` it was
   computed at - pass it as the next `--since`. It comes from the same read as
   the diff, so a watch loop no longer has to re-read `ta status --current`

@@ -157,7 +157,9 @@ enum Commands {
     ///
     /// Blocks until a task matching the (list-style) criteria is created, updated,
     /// or deleted with `seq` greater than `--since`, then prints a per-task diff of
-    /// what changed and exits 0. On the first change it waits `--holdout` to batch a
+    /// what changed and exits 0. A task counts if it matched at the cursor OR
+    /// matches now, so leaving the filter (e.g. `status=in_progress` -> `closed`)
+    /// is reported like entering it. On the first change it waits `--holdout` to batch a
     /// burst. The diff ends with the cursor it was computed at (`[seq:N]`;
     /// `{"cursor": N, "changes": [...]}` in json) - the next `--since`, so a loop
     /// resumes with nothing skipped or repeated. If nothing matches before

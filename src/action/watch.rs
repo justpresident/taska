@@ -39,9 +39,12 @@ pub struct WatchPoll {
 /// before/after state (ordered by id). `updates` is empty when nothing new
 /// matches.
 ///
-/// An existing task is filtered on its current state; a task deleted since the
-/// cursor is filtered on its at-cursor state, so a matching task's deletion is
-/// still reported. Errors if `since` predates the retained log (compacted away).
+/// A touched task is reported if it matched the filter at the cursor OR matches
+/// now, so leaving the filtered set is reported like entering it: `status=x`
+/// sees a task move into `x` and out of it, and a matching task's deletion (no
+/// current state at all) is the same rule. Two snapshots are compared, not
+/// every event between them, so a task that passes through the set entirely
+/// within one batch matches at neither end and goes unreported. Errors if `since` predates the retained log (compacted away).
 pub fn poll(
     store: &impl EventStore,
     criteria: &[String],
@@ -92,24 +95,18 @@ pub fn poll(
         .map(|e| e.task_id.as_str())
         .collect();
 
-    // Filter each side: an existing task on its current state, a deleted one on
-    // its at-cursor state.
+    // Matching either side counts: entering the set, leaving it (including by
+    // deletion), or changing while inside it.
     let matched_now = list::matching_ids(store, &after, criteria, open, ready)?;
     let matched_then = list::matching_ids(store, &before, criteria, open, ready)?;
 
     let mut updates = Vec::new();
     for id in touched {
-        let after_state = after.get(id);
-        let matches = if after_state.is_some() {
-            matched_now.contains(id)
-        } else {
-            matched_then.contains(id)
-        };
-        if matches {
+        if matched_now.contains(id) || matched_then.contains(id) {
             updates.push(WatchUpdate {
                 id: id.to_string(),
                 before: before.get(id).cloned(),
-                after: after_state.cloned(),
+                after: after.get(id).cloned(),
             });
         }
     }

@@ -110,7 +110,7 @@ fn watch_filters_by_criteria() {
 }
 
 /// A matching task deleted after the cursor is reported as an all-removed diff
-/// (filtered on its at-cursor state, since it no longer exists).
+/// (it matched at the cursor - deletion is one way of leaving the filter).
 #[test]
 fn watch_reports_a_deleted_matching_task() {
     let dir = fresh_dir("watch-delete");
@@ -244,5 +244,49 @@ fn watch_cursor_resumes_without_skips_or_repeats() {
     assert!(
         second["cursor"].as_u64() > first["cursor"].as_u64(),
         "the cursor advances: {second}"
+    );
+}
+
+/// Leaving the filter is reported like entering it: watching `status=in_progress`
+/// sees the task move OUT to closed, with the diff showing which way it went.
+#[test]
+fn watch_reports_a_task_leaving_the_filter() {
+    let dir = fresh_dir("watch-leave");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    ta(&dir, &["create", "a", "status=in_progress"]);
+    ta(&dir, &["create", "other", "status=todo"]);
+    let since = ta(&dir, &["status", "--current"]);
+    ta(&dir, &["update", "a", "status=closed"]);
+    ta(&dir, &["update", "other", "status=closed"]); // never matched
+
+    let out = run(
+        ta_bin(),
+        &dir,
+        &[
+            "watch",
+            "--since",
+            since.trim(),
+            "--timeout",
+            "5s",
+            "--holdout",
+            "0s",
+            "status=in_progress",
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "exit 0 on leaving the filter: {stdout}"
+    );
+    assert!(
+        stdout.contains("a:")
+            && stdout.contains("- status: in_progress")
+            && stdout.contains("+ status: closed"),
+        "the exit transition is reported: {stdout}"
+    );
+    assert!(
+        !stdout.contains("other:"),
+        "a task matching at neither end is not: {stdout}"
     );
 }
