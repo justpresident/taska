@@ -379,7 +379,7 @@ fn workflow_config_override_changes_ready_semantics() {
     // Rename the status convention to state/closed via config.
     fs::write(
         dir.join(".taska/config.toml"),
-        "[workflow]\nstatus_field = \"state\"\ndone_status = \"closed\"\n",
+        "[workflow]\nstatus_field = \"state\"\nclosed_statuses = [\"closed\"]\n",
     )
     .unwrap();
 
@@ -391,6 +391,54 @@ fn workflow_config_override_changes_ready_semantics() {
     let ready = ta(&dir, &["list", "--ready"]);
     assert!(lists_task(&ready, "api"), "api should be ready: {ready}");
     assert!(!lists_task(&ready, "db"), "db is closed/done: {ready}");
+}
+
+#[test]
+fn any_closed_status_closes_a_task() {
+    let dir = fresh_dir("closed-statuses");
+    init_repo(&dir);
+    ta(&dir, &["init"]);
+    // A legacy `done_status` config: `config set` must retire it in favor of
+    // the list, not leave two spellings that refuse to load.
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[workflow]\ndone_status = \"closed\"\n",
+    )
+    .unwrap();
+    ta(
+        &dir,
+        &[
+            "config",
+            "set",
+            "workflow.closed_statuses",
+            r#"["closed", "archived"]"#,
+        ],
+    );
+    let cfg = fs::read_to_string(dir.join(".taska/config.toml")).unwrap();
+    assert!(!cfg.contains("done_status"), "legacy key retired: {cfg}");
+
+    let st = |v: &str| format!("{STATUS_KEY}={v}");
+    ta(&dir, &["create", "db", &st("archived")]);
+    ta(&dir, &["create", "web", &st("closed")]);
+    ta(&dir, &["create", "api", &st("todo")]);
+    ta(&dir, &["dep", "add", "api", "depends_on=db"]);
+    ta(&dir, &["dep", "add", "api", "depends_on=web"]);
+
+    let ready = ta(&dir, &["list", "--ready"]);
+    assert!(
+        lists_task(&ready, "api"),
+        "both deps closed, api ready: {ready}"
+    );
+    let open = ta(&dir, &["list", "--open"]);
+    assert!(
+        lists_task(&open, "api") && !lists_task(&open, "db") && !lists_task(&open, "web"),
+        "--open hides every closed status: {open}"
+    );
+    let shown = ta(&dir, &["show", "db", "--full", "--format", "json"]);
+    assert!(
+        shown.contains("close_time"),
+        "archiving stamps close_time: {shown}"
+    );
 }
 
 #[test]

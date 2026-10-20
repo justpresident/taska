@@ -160,7 +160,7 @@ fn write_commands(f: &PrimeFacts, ex: &PrimeExamples) -> String {
             "claim atomically: applies only if still current (exit 3 if you lost)".to_string(),
         ),
         (
-            format!("ta update <id> {sf}={}", f.done_status),
+            format!("ta update <id> {sf}={}", ex.close),
             "close it".to_string(),
         ),
         (
@@ -180,16 +180,21 @@ fn write_commands(f: &PrimeFacts, ex: &PrimeExamples) -> String {
 fn schema_section(f: &PrimeFacts) -> String {
     let (sf, tf) = (&f.status_field, &f.type_field);
 
+    let closed = f
+        .closed_statuses
+        .iter()
+        .map(|s| format!("`{s}`"))
+        .collect::<Vec<_>>()
+        .join(" | ");
     let status_line = if f.statuses.is_empty() {
         format!(
-            "- Status field `{sf}`: free-form (any value); done = `{}`, create defaults to `{}`.",
-            f.done_status, f.default_status
+            "- Status field `{sf}`: free-form (any value); closed = {closed}, create defaults to `{}`.",
+            f.default_status
         )
     } else {
         format!(
-            "- Status field `{sf}`: {} (done = `{}`, create defaults to `{}`).",
+            "- Status field `{sf}`: {} (closed = {closed}, create defaults to `{}`).",
             f.statuses.join(" | "),
-            f.done_status,
             f.default_status
         )
     };
@@ -289,7 +294,7 @@ fn render_guide(f: &PrimeFacts) -> String {
         sf = sf,
         default = f.default_status,
         claim = ex.claim,
-        done = f.done_status,
+        done = ex.close,
         open = s.open,
         ready = s.ready,
         blocked = s.blocked,
@@ -408,7 +413,7 @@ mod tests {
     fn json_serializes_the_facts() {
         let value = serde_json::to_value(prime(&store_with_schema()).unwrap().facts).unwrap();
         assert_eq!(value["status_field"], STATUS_FIELD);
-        assert_eq!(value["done_status"], DONE_STATUS);
+        assert_eq!(value["closed_statuses"][0], DONE_STATUS);
         assert_eq!(value["statuses"][0], DEFAULT_STATUS);
         assert_eq!(value["summary"]["total"], 0);
         assert!(value["relationships"].is_array());

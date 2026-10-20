@@ -113,7 +113,7 @@ fn filter_ids(
         let ids = graph::ready_tasks(
             state,
             &workflow.status_field,
-            &workflow.done_status,
+            &workflow.closed_statuses,
             &blockers,
         )?;
         Some(ids.into_iter().collect())
@@ -123,7 +123,7 @@ fn filter_ids(
 
     Ok(state
         .values()
-        .filter(|t| !open || !is_done(t, &workflow.status_field, &workflow.done_status))
+        .filter(|t| !open || !is_done(t, &workflow.status_field, &workflow.closed_statuses))
         .filter(|t| ready_set.as_ref().is_none_or(|s| s.contains(&t.id)))
         .filter(|t| criteria.iter().all(|c| c.matches(t, &ctx)))
         .map(|t| t.id.clone())

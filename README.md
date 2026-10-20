@@ -224,11 +224,12 @@ keep_events = 1000
 keep_days = 30
 
 [workflow]
-# The DISPLAY name of the status field, and the value that means "done" -
+# The DISPLAY name of the status field, and the values that close a task -
 # storage always uses the canonical key `status`, so renaming this is free.
-# `ta list --ready` treats a dependency as satisfied once it reaches done_status.
+# Reaching ANY closed status (e.g. "closed", "archived") closes a task: `ta list
+# --ready` treats such a dependency as satisfied and `--open` hides it.
 status_field = "status"
-done_status = "closed"
+closed_statuses = ["closed"]
 # Status stamped onto a new task when `ta create` doesn't set one ("" = off).
 default_status = "todo"
 # DISPLAY name of the task-type discriminator that selects a [task_types]
@@ -277,7 +278,7 @@ fields = {
 # supported shape: that is how `implement <-> review` bounces until review
 # passes. The map must be TOTAL (every declared value is a key) and a terminal
 # state is written `state = []`, so no state is ever frozen by accident; for the
-# STATUS field every state must additionally reach `done_status`, or its tasks
+# STATUS field every state must additionally reach one of `closed_statuses`, or its tasks
 # could never be completed. Creating a task, setting a previously-absent value,
 # and unsetting are not transitions, so they pass through.
 [task_types.feature]
@@ -321,7 +322,7 @@ column_max_width = { title = 80 }
 # list filtering, and --sort.
 create_time = "create_time"   # the Create event's time
 update_time = "update_time"   # the latest touching event's time
-close_time  = "close_time"    # most recent time status hit done_status (cleared on reopen)
+close_time  = "close_time"    # most recent time status became closed (cleared on reopen)
 ```
 
 Because the times are folded into the baseline at compaction, they survive even after their source events are compacted away. They are best-effort: event timestamps are informational (`seq` is the authoritative order), so after a cross-branch merge they can be non-monotonic.

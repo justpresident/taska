@@ -351,7 +351,7 @@ fn reinit_is_idempotent_and_preserves_edited_config() {
 
     fs::write(
         dir.join(".taska/config.toml"),
-        "[workflow]\ndone_status = \"closed\"\n",
+        "[workflow]\nclosed_statuses = [\"closed\"]\n",
     )
     .unwrap();
 

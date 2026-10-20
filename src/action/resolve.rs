@@ -50,7 +50,7 @@ pub fn plan(store: &FileStore) -> Result<ResolvePlan, DynError> {
     let (_, orphan_seqs) = Engine::materialize_report(
         baseline,
         mutations.clone(),
-        &store.config().workflow.done_status,
+        &store.config().workflow.closed_statuses,
     );
     let drop: HashSet<u64> = orphan_seqs.iter().copied().collect();
     let orphans = mutations

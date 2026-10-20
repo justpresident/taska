@@ -21,7 +21,7 @@ these four hazards with you:
    relate, and whether there is a parent/child structure.
 2. **`workflow.default_status` is stamped at create.** If you declare a status enum
    that does not contain it, *every* `ta create` omitting a status fails schema
-   validation. `done_status` must be in the enum too. Align them first, and run
+   validation. At least one of `closed_statuses` must be in the enum too. Align them first, and run
    `ta config validate`.
 3. **An empty value means unset.** `notes=""` stores nothing and registers no field
    name, even with `--new-field` - so the next task using that field is still

@@ -116,7 +116,7 @@ pub fn subtask_counts<S: BuildHasher>(
     state: &HashMap<String, TaskState, S>,
     hierarchy: &BTreeSet<String>,
     status_field: &str,
-    done_status: &str,
+    closed_statuses: &[String],
 ) -> (usize, usize) {
     let (mut done, mut total) = (0usize, 0usize);
     for htype in hierarchy {
@@ -124,7 +124,7 @@ pub fn subtask_counts<S: BuildHasher>(
             total += 1;
             if state
                 .get(child)
-                .is_some_and(|t| is_done(t, status_field, done_status))
+                .is_some_and(|t| is_done(t, status_field, closed_statuses))
             {
                 done += 1;
             }
@@ -138,12 +138,13 @@ pub fn subtask_progress<S: BuildHasher>(
     state: &HashMap<String, TaskState, S>,
     hierarchy: &BTreeSet<String>,
     status_field: &str,
-    done_status: &str,
+    closed_statuses: &[String],
 ) -> HashMap<String, (usize, usize)> {
     state
         .iter()
         .filter_map(|(id, task)| {
-            let (done, total) = subtask_counts(task, state, hierarchy, status_field, done_status);
+            let (done, total) =
+                subtask_counts(task, state, hierarchy, status_field, closed_statuses);
             (total > 0).then(|| (id.clone(), (done, total)))
         })
         .collect()
@@ -159,7 +160,7 @@ pub fn reachability_counts<S: BuildHasher>(
     state: &HashMap<String, TaskState, S>,
     blockers: &BTreeSet<String>,
     status_field: &str,
-    done_status: &str,
+    closed_statuses: &[String],
 ) -> HashMap<String, (usize, usize)> {
     let index = IdIndex::new(state);
     let n = index.ids.len();
@@ -170,7 +171,7 @@ pub fn reachability_counts<S: BuildHasher>(
         .map(|&id| {
             state
                 .get(id)
-                .is_some_and(|t| !is_done(t, status_field, done_status))
+                .is_some_and(|t| !is_done(t, status_field, closed_statuses))
         })
         .collect();
     // Integer adjacency to existing tasks: prerequisites (forward) and dependents
@@ -308,12 +309,12 @@ pub fn dependency_cycles<S: BuildHasher>(
 /// Tasks that are not yet done and whose every existing dependency is done.
 /// Returned in topological order so `ta list --ready` lists work in a sane sequence.
 ///
-/// `status_field`/`done_status` come from `[workflow]` config, so projects can
+/// `status_field`/`closed_statuses` come from `[workflow]` config, so projects can
 /// rename the convention (e.g. `state`/`closed`).
 pub fn ready_tasks<S: BuildHasher>(
     state: &HashMap<String, TaskState, S>,
     status_field: &str,
-    done_status: &str,
+    closed_statuses: &[String],
     blockers: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     let order = validate_and_sort_dependencies(state, blockers)?;
@@ -322,13 +323,13 @@ pub fn ready_tasks<S: BuildHasher>(
         let Some(task) = state.get(&id) else {
             continue;
         };
-        if is_done(task, status_field, done_status) {
+        if is_done(task, status_field, closed_statuses) {
             continue;
         }
         let blocked = blocker_edges(task, blockers).into_iter().any(|(dep, _)| {
             state
                 .get(dep)
-                .is_some_and(|d| !is_done(d, status_field, done_status))
+                .is_some_and(|d| !is_done(d, status_field, closed_statuses))
         });
         if !blocked {
             ready.push(id);

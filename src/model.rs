@@ -316,8 +316,8 @@ pub struct TaskState {
     /// (`seq` is the authoritative order), so after a merge restacks another
     /// branch's events these can be non-monotonic. `create_time` is the first
     /// `Create`'s timestamp; `update_time` the latest touching event's;
-    /// `close_time` the most recent transition of `status` into `done_status`,
-    /// cleared whenever the task is currently not done. `#[serde(default,
+    /// `close_time` the most recent transition of `status` into one of the
+    /// `closed_statuses`, cleared whenever the task is currently not done. `#[serde(default,
     /// skip_serializing_if)]` keeps old baselines readable and unset times out
     /// of the serialized line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -328,13 +328,16 @@ pub struct TaskState {
     pub close_time: Option<DateTime<Utc>>,
 }
 
-/// Whether a task counts as done: its `status_field` equals `done_status`.
+/// Whether a task counts as done: its `status_field` is one of `closed_statuses`.
 ///
 /// A pure predicate over [`TaskState`] (no I/O, no config dependency), so the
 /// engine (computing `close_time`), the graph (readiness), and the `status`
 /// summary all agree on what "done" means without duplicating the check.
-pub fn is_done(task: &TaskState, status_field: &str, done_status: &str) -> bool {
-    task.custom_fields.get(status_field).and_then(Value::as_str) == Some(done_status)
+pub fn is_done(task: &TaskState, status_field: &str, closed_statuses: &[String]) -> bool {
+    task.custom_fields
+        .get(status_field)
+        .and_then(Value::as_str)
+        .is_some_and(|s| closed_statuses.iter().any(|c| c == s))
 }
 
 /// The value of `column` for a task as a JSON `Value` - the single source of

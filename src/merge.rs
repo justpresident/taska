@@ -911,7 +911,7 @@ mod tests {
             Strategy::for_policy(policy),
         );
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
-        let state = Engine::materialize_state(Vec::new(), merged, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), merged, &[DONE_STATUS.to_string()]);
         state
             .get(task)
             .map(|t| t.custom_fields.clone())
@@ -935,9 +935,10 @@ mod tests {
         let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
         let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
-        let mut ids: Vec<String> = Engine::materialize_state(Vec::new(), merged, DONE_STATUS)
-            .into_keys()
-            .collect();
+        let mut ids: Vec<String> =
+            Engine::materialize_state(Vec::new(), merged, &[DONE_STATUS.to_string()])
+                .into_keys()
+                .collect();
         ids.sort();
         ids
     }
@@ -1093,7 +1094,8 @@ mod tests {
         let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
 
-        let (state, orphans) = Engine::materialize_report(Vec::new(), merged, DONE_STATUS);
+        let (state, orphans) =
+            Engine::materialize_report(Vec::new(), merged, &[DONE_STATUS.to_string()]);
         assert!(
             !state.contains_key("a"),
             "task a does not materialize - its Create was reverted"
@@ -1264,7 +1266,7 @@ mod tests {
             .filter(|e| e.seq <= fork && !removed.contains(&e.seq))
             .collect();
         let merged = assemble(&shared, &oc, &tc, &plan, fork);
-        let state = Engine::materialize_state(Vec::new(), merged, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), merged, &[DONE_STATUS.to_string()]);
         assert_eq!(
             state["X"].relationships[BLOCKER],
             vec!["Y".to_string()],
@@ -1378,7 +1380,7 @@ mod tests {
             &plan,
             fork,
         );
-        let state = Engine::materialize_state(Vec::new(), merged, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), merged, &[DONE_STATUS.to_string()]);
         assert!(
             !state.contains_key("X"),
             "ours deleted, so the task is gone"
@@ -1423,7 +1425,7 @@ mod tests {
         assert_eq!(meta["resolved"][0]["kept"], json!("theirs"));
 
         // But replay ignores it: the task has no `_meta` field, just the winner.
-        let state = Engine::materialize_state(Vec::new(), merged, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), merged, &[DONE_STATUS.to_string()]);
         assert!(
             !state["X"].custom_fields.contains_key(META_KEY),
             "provenance stays out of state"
@@ -1473,7 +1475,7 @@ mod tests {
 
         // Output holds the restacked union of both concurrent creates.
         let merged = read_log(&output).unwrap();
-        let state = Engine::materialize_state(Vec::new(), merged, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), merged, &[DONE_STATUS.to_string()]);
         for id in ["base", "ours", "theirs"] {
             assert!(state.contains_key(id), "missing {id} in merged output");
         }

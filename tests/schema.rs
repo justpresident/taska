@@ -618,7 +618,7 @@ fn transitions_apply_to_any_enum_field_not_just_status() {
     let mut cfg = fs::read_to_string(&cfg_path).unwrap();
     // `stage` is a plain enum: it gets a state machine, but NOT the status
     // field's reachability rule - `final` is terminal and never reaches
-    // done_status, which is fine for a non-status field.
+    // a closed status, which is fine for a non-status field.
     cfg.push_str(
         "\n[task_types.doc]\nfields = {\n  \
          stage = { type = \"enum\", values = [\"draft\", \"edit\", \"final\"], \

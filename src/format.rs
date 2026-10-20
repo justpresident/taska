@@ -64,13 +64,13 @@ pub(crate) fn task_ref(id: &str, color: bool) -> String {
 #[derive(Clone, Copy)]
 pub(crate) struct RowStyle<'a> {
     pub status_field: &'a str,
-    pub done_status: &'a str,
+    pub closed_statuses: &'a [String],
 }
 
 impl RowStyle<'_> {
     /// Whether a task counts as done under this workflow (so its whole row greys).
     pub(crate) fn is_done(&self, task: &TaskState) -> bool {
-        is_done(task, self.status_field, self.done_status)
+        is_done(task, self.status_field, self.closed_statuses)
     }
 
     /// The SGR code a `column` cell takes on a maybe-`done` task: a done task
@@ -786,11 +786,13 @@ mod tests {
         BTreeSet::from([BLOCKER.to_string()])
     }
 
-    /// The row style: status column `STATE` (= `STATUS_FIELD`), done value `DONE_STATUS`.
+    /// The row style: status column `STATE` (= `STATUS_FIELD`), closed value `DONE_STATUS`.
     fn style() -> RowStyle<'static> {
+        static CLOSED: std::sync::LazyLock<Vec<String>> =
+            std::sync::LazyLock::new(|| vec![DONE_STATUS.to_string()]);
         RowStyle {
             status_field: STATUS_FIELD,
-            done_status: DONE_STATUS,
+            closed_statuses: &CLOSED,
         }
     }
 

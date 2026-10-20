@@ -7,7 +7,20 @@ git log.
 
 ## [Unreleased]
 
+### Added
+- **More than one status can close a task.** `[workflow] closed_statuses` is a
+  list (`["closed", "archived", "submitted"]`); reaching any of them counts as
+  done - for `list --ready`/`--open`, `close_time`, `status` counts and the
+  greyed-out rendering. Moving between two closed statuses keeps the original
+  `close_time`. With a `transitions` workflow, every state must reach at least
+  one closed status declared by that type.
+
 ### Changed
+- **`[workflow] done_status` is renamed `closed_statuses`.** Existing configs
+  keep working unchanged: `done_status = "closed"` still loads (as a one-item
+  list), and `ta config set workflow.closed_statuses ...` replaces the old key.
+  `ta prime --format json` reports `closed_statuses` (an array) in place of
+  `done_status`.
 - **Building from source needs Rust 1.89 or newer** (`rust-version` is now
   declared). The event log's writer lock uses the standard library's
   `File::lock` instead of the `fd-lock` crate - the same `flock` / `LockFileEx`

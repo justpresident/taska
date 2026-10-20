@@ -45,12 +45,27 @@ say() {
   printf '%s## %s%s\n' "$_C_DIM$_C_CYAN" "$*" "$_C_RESET"
 }
 
+# Echo argv as a copy-pasteable command line: an argument holding anything
+# beyond plain word characters is single-quoted, so `title="Run DB migration"`
+# or a TOML list prints the way you'd type it.
+shell_quote() {
+  local out="" arg
+  for arg in "$@"; do
+    if [[ "$arg" =~ ^[A-Za-z0-9_./:=@%+,-]+$ ]]; then
+      out+="$arg "
+    else
+      out+="'${arg//\'/\'\\\'\'}' "
+    fi
+  done
+  printf '%s' "${out% }"
+}
+
 # run <cmd...> - echo the command prefixed with `$ `, wait for Enter, then run
 # it for real so the learner sees the actual output, then print a trailing blank
 # line. The command's own exit status is preserved (returned), so a caller can
 # react to a failure. In non-interactive mode the pause is skipped.
 run() {
-  printf '%s$ %s%s\n' "$_C_BOLD" "$*" "$_C_RESET"
+  printf '%s$ %s%s\n' "$_C_BOLD" "$(shell_quote "$@")" "$_C_RESET"
   pause
   "$@"
   local status=$?

@@ -108,7 +108,7 @@ fn bench_materialize(baseline: &[TaskState], log: &[MutationEvent]) -> Duration 
         .map(|_| (baseline.to_vec(), log.to_vec()))
         .map(|(b, l)| {
             let start = Instant::now();
-            let _ = Engine::materialize_state(b, l, DONE_STATUS);
+            let _ = Engine::materialize_state(b, l, &[DONE_STATUS.to_string()]);
             start.elapsed()
         })
         .collect();
@@ -230,10 +230,13 @@ fn bench_compaction() {
             .single()
             .expect("ts");
         let split = Engine::retention_split(&log, KEEP_EVENTS, 0, now);
-        let baseline: Vec<TaskState> =
-            Engine::materialize_state(Vec::new(), log[..split].to_vec(), DONE_STATUS)
-                .into_values()
-                .collect();
+        let baseline: Vec<TaskState> = Engine::materialize_state(
+            Vec::new(),
+            log[..split].to_vec(),
+            &[DONE_STATUS.to_string()],
+        )
+        .into_values()
+        .collect();
         let recent = &log[split..];
         let warm = bench_materialize(&baseline, recent);
 
@@ -403,7 +406,8 @@ fn bench_relationships() {
         .collect();
 
     // Resident heap of the per-task relationship storage at 100k events.
-    let state = Engine::materialize_state(Vec::new(), gen_rel_log(100_000), DONE_STATUS);
+    let state =
+        Engine::materialize_state(Vec::new(), gen_rel_log(100_000), &[DONE_STATUS.to_string()]);
     let word = std::mem::size_of::<String>();
     let (mut content, mut typename_bytes) = (0usize, 0usize);
     let (mut maps, mut vecs, mut rel_edges, mut dep_edges) = (0usize, 0usize, 0usize, 0usize);
@@ -485,12 +489,14 @@ fn bench_relationships() {
     let order = time_op(ITERS, || {
         graph::validate_and_sort_dependencies(&state, &blockers)
     });
+    let closed = [DONE_STATUS.to_string()];
     let ready = time_op(ITERS, || {
-        graph::ready_tasks(&state, STATUS_FIELD, DONE_STATUS, &blockers)
+        graph::ready_tasks(&state, STATUS_FIELD, &closed, &blockers)
     });
-    let small = Engine::materialize_state(Vec::new(), gen_rel_log(8_000), DONE_STATUS);
+    let small =
+        Engine::materialize_state(Vec::new(), gen_rel_log(8_000), &[DONE_STATUS.to_string()]);
     let reach = time_op(3, || {
-        graph::reachability_counts(&small, &blockers, STATUS_FIELD, DONE_STATUS)
+        graph::reachability_counts(&small, &blockers, STATUS_FIELD, &[DONE_STATUS.to_string()])
     });
 
     println!("\nGraph traversal (blocker edges = depends_on + 2 typed kinds):\n");

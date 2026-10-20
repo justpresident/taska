@@ -79,15 +79,15 @@ Then **align the workflow with those values** - this is the step that bites:
 
 ```bash
 ta config set workflow.default_status open     # stamped on create; MUST be in the enum
-ta config set workflow.done_status closed      # what `--ready` treats as satisfied
+ta config set workflow.closed_statuses '["closed"]'  # what `--ready` treats as satisfied
 ta config validate
 ```
 
 > If `default_status` is not one of the enum's values, **every** `ta create` that
 > omits a status fails schema validation. The shipped default is `todo`; if your
 > source uses `open`/`in_progress`/`closed`, either change it as above or add
-> `todo` to the enum. `done_status` must be in the enum too, or nothing can ever
-> be completed.
+> `todo` to the enum. At least one of `closed_statuses` must be in the enum too,
+> or nothing can ever be completed.
 
 **Alternative: no schema.** Leave `[task_types]` undeclared and the store stays
 schema-agnostic - useful for a quick evaluation. Two rules then apply:

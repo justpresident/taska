@@ -55,7 +55,7 @@ pub fn cmd_list(
     let workflow = &store.config().workflow;
     let style = RowStyle {
         status_field: &workflow.status_field,
-        done_status: &workflow.done_status,
+        closed_statuses: &workflow.closed_statuses,
     };
     // Resolve the effective layout (flag, else `[display].list_layout`).
     let mut display = display.clone();

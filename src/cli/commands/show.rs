@@ -41,7 +41,7 @@ pub fn cmd_show(
     let workflow = &store.config().workflow;
     let style = RowStyle {
         status_field: &workflow.status_field,
-        done_status: &workflow.done_status,
+        closed_statuses: &workflow.closed_statuses,
     };
     println!(
         "{}",

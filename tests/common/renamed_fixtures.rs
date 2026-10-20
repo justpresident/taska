@@ -43,7 +43,7 @@ pub const RENAMED_OPEN_CONFIG: &str = r#"
 [workflow]
 status_field = "state"
 default_status = "todo"
-done_status = "closed"
+closed_statuses = ["closed"]
 type_field = "kind"
 untyped_tasks = "allow"
 
@@ -71,7 +71,7 @@ pub const RENAMED_SCHEMA_CONFIG: &str = r#"
 [workflow]
 status_field = "state"
 default_status = "backlog"
-done_status = "shipped"
+closed_statuses = ["shipped"]
 type_field = "kind"
 untyped_tasks = "deny"
 

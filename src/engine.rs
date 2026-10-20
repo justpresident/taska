@@ -171,16 +171,16 @@ impl Engine {
     /// Fold `mutations` over `baseline` to produce the current task map.
     ///
     /// Thin wrapper over [`Engine::materialize_report`] that discards the orphan
-    /// report, for callers that only need the state. `done_status` is needed
+    /// report, for callers that only need the state. `closed_statuses` is needed
     /// only to compute each task's `close_time`; the status itself always lives
     /// under the canonical [`STATUS_KEY`] in raw state (the configured
     /// `status_field` is a display name, applied later by `action::read`).
     pub fn materialize_state(
         baseline: Vec<TaskState>,
         mutations: Vec<MutationEvent>,
-        done_status: &str,
+        closed_statuses: &[String],
     ) -> HashMap<String, TaskState> {
-        Self::materialize_report(baseline, mutations, done_status).0
+        Self::materialize_report(baseline, mutations, closed_statuses).0
     }
 
     /// Like [`Engine::materialize_state`], but also reports *orphaned* events:
@@ -197,11 +197,12 @@ impl Engine {
     /// Along the way it materializes each task's computed timestamps (see
     /// [`TaskState`]): `create_time` (first `Create`), `update_time` (latest
     /// touching event), and `close_time` (most recent transition of
-    /// the canonical status into `done_status`, cleared while currently not done).
+    /// the canonical status into one of `closed_statuses`, cleared while currently
+    /// not done; moving between two closed statuses keeps the original close).
     pub fn materialize_report(
         baseline: Vec<TaskState>,
         mutations: Vec<MutationEvent>,
-        done_status: &str,
+        closed_statuses: &[String],
     ) -> (HashMap<String, TaskState>, Vec<u64>) {
         let mut state_map: HashMap<String, TaskState> =
             baseline.into_iter().map(|t| (t.id.clone(), t)).collect();
@@ -224,7 +225,7 @@ impl Engine {
                                 update_time: None,
                                 close_time: None,
                             });
-                    let was_done = is_done(entry, STATUS_KEY, done_status);
+                    let was_done = is_done(entry, STATUS_KEY, closed_statuses);
                     apply_set(&mut entry.custom_fields, event.payload);
                     // First Create wins for create_time (a re-Create keeps it).
                     if entry.create_time.is_none() {
@@ -234,19 +235,19 @@ impl Engine {
                     refresh_close_time(
                         entry,
                         was_done,
-                        is_done(entry, STATUS_KEY, done_status),
+                        is_done(entry, STATUS_KEY, closed_statuses),
                         ts,
                     );
                 }
                 OpType::Update => {
                     if let Some(task) = state_map.get_mut(&event.task_id) {
-                        let was_done = is_done(task, STATUS_KEY, done_status);
+                        let was_done = is_done(task, STATUS_KEY, closed_statuses);
                         apply_set(&mut task.custom_fields, event.payload);
                         task.update_time = Some(ts);
                         refresh_close_time(
                             task,
                             was_done,
-                            is_done(task, STATUS_KEY, done_status),
+                            is_done(task, STATUS_KEY, closed_statuses),
                             ts,
                         );
                     } else {
@@ -355,6 +356,10 @@ mod tests {
         MutationEvent::new(op, id, payload)
     }
 
+    fn closed() -> Vec<String> {
+        vec![DONE_STATUS.to_string()]
+    }
+
     fn fields(pairs: &[(&str, Value)]) -> serde_json::Map<String, Value> {
         pairs
             .iter()
@@ -396,12 +401,37 @@ mod tests {
                 40,
             ), // re-close
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), mutations, &closed());
         let a = &state["a"];
         assert_eq!(a.create_time, Some(at(0)), "first Create's time");
         assert_eq!(a.update_time, Some(at(40)), "latest event's time");
         // Cleared on reopen, then set to the MOST RECENT close (not the first).
         assert_eq!(a.close_time, Some(at(40)), "most recent close");
+    }
+
+    #[test]
+    fn moving_between_closed_statuses_keeps_the_original_close_time() {
+        let base = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mk = |seq, op, status: &str, secs| {
+            let mut e = MutationEvent::new(op, "a", fields(&[(STATUS_KEY, json!(status))]));
+            e.seq = seq;
+            e.timestamp = base + Duration::seconds(secs);
+            e
+        };
+        let mutations = vec![
+            mk(1, OpType::Create, "open", 0),
+            mk(2, OpType::Update, "submitted", 10), // close
+            mk(3, OpType::Update, "archived", 20),  // closed -> closed
+        ];
+        let closed = vec!["submitted".to_string(), "archived".to_string()];
+        let state = Engine::materialize_state(Vec::new(), mutations, &closed);
+        assert_eq!(
+            state["a"].close_time,
+            Some(base + Duration::seconds(10)),
+            "a move within the closed set is not a new close"
+        );
     }
 
     #[test]
@@ -411,7 +441,7 @@ mod tests {
             "a",
             fields(&[(STATUS_KEY, json!("open"))]),
         )];
-        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), mutations, &closed());
         assert!(state["a"].create_time.is_some());
         assert!(state["a"].update_time.is_some());
         assert!(
@@ -434,7 +464,7 @@ mod tests {
             ev(OpType::Create, "c", serde_json::Map::new()),
             ev(OpType::Delete, "c", serde_json::Map::new()),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), mutations, &closed());
 
         assert_eq!(state.len(), 2, "c was deleted");
         assert_eq!(
@@ -462,7 +492,7 @@ mod tests {
             // A shape mismatch (string operand onto a number) is a no-op.
             ev(OpType::Add, "a", fields(&[("points", json!("nope"))])),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), mutations, &closed());
         assert_eq!(state["a"].custom_fields["points"], json!(4));
         assert_eq!(state["a"].custom_fields["score"], json!(1.5));
         assert_eq!(state["a"].custom_fields["tags"], json!(["a"]));
@@ -487,7 +517,7 @@ mod tests {
             .iter()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
-        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), mutations, &closed());
         assert!(
             state["b"].relationships.is_empty(),
             "edge with no rel is skipped, not defaulted"
@@ -503,7 +533,7 @@ mod tests {
             // An append to a non-existent task is an orphan, never an error.
             ev(OpType::Append, "ghost", fields(&[("log", json!("x"))])),
         ];
-        let (state, orphans) = Engine::materialize_report(Vec::new(), mutations, DONE_STATUS);
+        let (state, orphans) = Engine::materialize_report(Vec::new(), mutations, &closed());
         assert_eq!(
             state["a"].custom_fields["log"],
             json!("first\nsecond"),
@@ -544,7 +574,7 @@ mod tests {
                 fields(&[(TARGET_KEY, json!("d")), (REL_KEY, json!(INFO))]),
             ),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), mutations, &closed());
         let a = &state["a"];
         assert_eq!(
             a.relationships[BLOCKER],
@@ -568,7 +598,7 @@ mod tests {
                 fields(&[(TARGET_KEY, json!("d")), (REL_KEY, json!(INFO))]),
             ),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), mutations, &closed());
         assert!(
             state["a"].relationships.is_empty(),
             "an emptied typed entry is removed, leaving a clean map"
@@ -593,7 +623,7 @@ mod tests {
                 fields(&[(TARGET_KEY, json!("x")), (REL_KEY, json!(BLOCKER))]),
             ),
         ];
-        let state = Engine::materialize_state(baseline, mutations, DONE_STATUS);
+        let state = Engine::materialize_state(baseline, mutations, &closed());
 
         assert_eq!(state["a"].custom_fields[STATUS_KEY], json!("done"));
         assert!(
@@ -630,7 +660,7 @@ mod tests {
             })
             .collect();
 
-        let (state, orphans) = Engine::materialize_report(Vec::new(), mutations, DONE_STATUS);
+        let (state, orphans) = Engine::materialize_report(Vec::new(), mutations, &closed());
 
         assert_eq!(state.len(), 1, "only `a` survives");
         assert_eq!(state["a"].custom_fields[STATUS_KEY], json!("done"));
@@ -655,7 +685,7 @@ mod tests {
                 fields(&[(TARGET_KEY, json!("b")), (REL_KEY, json!(BLOCKER))]),
             ),
         ];
-        let state = Engine::materialize_state(Vec::new(), mutations, DONE_STATUS);
+        let state = Engine::materialize_state(Vec::new(), mutations, &closed());
         assert_eq!(
             state["a"].relationships[BLOCKER],
             vec!["b".to_string()],

@@ -30,4 +30,13 @@ run ta update migrate-db status=closed
 say "deploy-api now unblocks - its only dependency is done. smoke-test still waits on deploy-api."
 run ta list --ready
 
+say "More than one status can close a task. A shipped deploy reads better as 'deployed' than 'closed',"
+say "so add it to [workflow] closed_statuses - reaching ANY of them counts as done."
+run ta config set workflow.closed_statuses '["closed", "deployed"]'
+run ta update deploy-api status=deployed
+
+say "deploy-api counts as done, so smoke-test is ready - and '--open' hides both closed statuses."
+run ta list --ready
+run ta list --open
+
 say "Dependencies form a DAG; 'ta list --ready' walks it and surfaces exactly what you can start now."

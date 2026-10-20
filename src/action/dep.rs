@@ -271,7 +271,7 @@ pub fn plan(
         .iter()
         .filter(|id| {
             sub.get(id.as_str())
-                .is_some_and(|t| !is_done(t, &workflow.status_field, &workflow.done_status))
+                .is_some_and(|t| !is_done(t, &workflow.status_field, &workflow.closed_statuses))
         })
         .collect();
     let total = remaining.len();
@@ -426,7 +426,8 @@ pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, D
     let blockers = store.config().relationships.blocker_types();
     let hierarchy = store.config().relationships.hierarchy_types();
     let wf = &store.config().workflow;
-    let open_subtrees = compute_open_subtrees(&state, &blockers, &wf.status_field, &wf.done_status);
+    let open_subtrees =
+        compute_open_subtrees(&state, &blockers, &wf.status_field, &wf.closed_statuses);
 
     let mut roots = if query.roots.is_empty() {
         let depended: BTreeSet<&str> = state
@@ -472,7 +473,7 @@ pub fn tree(store: &impl EventStore, query: &TreeQuery) -> Result<TreeOutcome, D
         blockers: &blockers,
         hierarchy: &hierarchy,
         status_field: &wf.status_field,
-        done_status: &wf.done_status,
+        closed_statuses: &wf.closed_statuses,
         default_blocker: store.config().relationships.default_blocker(),
         sort: query.sort,
         open: query.open,
@@ -506,7 +507,7 @@ struct TreeCtx<'a> {
     blockers: &'a BTreeSet<String>,
     hierarchy: &'a BTreeSet<String>,
     status_field: &'a str,
-    done_status: &'a str,
+    closed_statuses: &'a [String],
     /// The default blocker type (the configured first `blocker`-kind type, e.g.
     /// `depends_on`). Its edge tag is hidden since it's the tree's implied default
     /// relation; every other type is tagged. `None` only for a store with no
@@ -548,7 +549,7 @@ fn build(
             kids: Kids::Missing,
         };
     };
-    let done = is_done(task, ctx.status_field, ctx.done_status);
+    let done = is_done(task, ctx.status_field, ctx.closed_statuses);
     // The requested columns the task actually has, full values, in order - no
     // field name is hardcoded; the frontend chose the columns.
     let cells: Vec<(String, Value)> = ctx
@@ -565,7 +566,7 @@ fn build(
         ctx.state,
         ctx.hierarchy,
         ctx.status_field,
-        ctx.done_status,
+        ctx.closed_statuses,
     );
     let rollup = (rt > 0).then_some((rd, rt));
 
@@ -644,7 +645,7 @@ fn compute_open_subtrees(
     state: &HashMap<String, TaskState>,
     blockers: &BTreeSet<String>,
     status_field: &str,
-    done_status: &str,
+    closed_statuses: &[String],
 ) -> HashSet<String> {
     let mut memo: HashMap<String, bool> = HashMap::new();
     let mut on_path: HashSet<String> = HashSet::new();
@@ -654,7 +655,7 @@ fn compute_open_subtrees(
             state,
             blockers,
             status_field,
-            done_status,
+            closed_statuses,
             &mut memo,
             &mut on_path,
         );
@@ -669,7 +670,7 @@ fn subtree_open(
     state: &HashMap<String, TaskState>,
     blockers: &BTreeSet<String>,
     status_field: &str,
-    done_status: &str,
+    closed_statuses: &[String],
     memo: &mut HashMap<String, bool>,
     on_path: &mut HashSet<String>,
 ) -> bool {
@@ -681,7 +682,7 @@ fn subtree_open(
     }
     let mut open = state
         .get(id)
-        .is_some_and(|t| !is_done(t, status_field, done_status));
+        .is_some_and(|t| !is_done(t, status_field, closed_statuses));
     if let Some(task) = state.get(id) {
         for (child, _) in graph::blocker_edges(task, blockers) {
             if subtree_open(
@@ -689,7 +690,7 @@ fn subtree_open(
                 state,
                 blockers,
                 status_field,
-                done_status,
+                closed_statuses,
                 memo,
                 on_path,
             ) {

@@ -40,10 +40,22 @@ fn prime_tailors_to_renamed_workflow_fields() {
     init_repo(&dir);
     ta(&dir, &["init"]);
     ta(&dir, &["config", "set", "workflow.status_field", "state"]);
-    ta(&dir, &["config", "set", "workflow.done_status", "done"]);
+    ta(
+        &dir,
+        &[
+            "config",
+            "set",
+            "workflow.closed_statuses",
+            r#"["done", "archived"]"#,
+        ],
+    );
 
     let out = ta(&dir, &["prime"]);
     assert!(out.contains("field `state`"), "renamed status field: {out}");
+    assert!(
+        out.contains("closed = `done` | `archived`"),
+        "every closed status is listed: {out}"
+    );
     assert!(
         out.contains("ta update <id> state=done"),
         "examples track the rename: {out}"
@@ -66,7 +78,7 @@ fn prime_json_carries_the_facts() {
     let json = ta(&dir, &["prime", "--format", "json"]);
     let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
     assert_eq!(v["status_field"], STATUS_KEY);
-    assert_eq!(v["done_status"], "closed");
+    assert_eq!(v["closed_statuses"], serde_json::json!(["closed"]));
     assert!(
         v["relationships"].is_array(),
         "relationships present: {json}"

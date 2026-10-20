@@ -286,7 +286,7 @@ fn transitions_must_be_total_reachable_and_speak_the_enum() {
     );
 
     // Every state must be able to finish: a subgraph that loops forever without
-    // reaching done_status declares tasks that can never be completed.
+    // reaching a closed status declares tasks that can never be completed.
     let stranded = validate_with(
         &dir,
         "[task_types.wf]\nfields = { status = { type = \"enum\", \
@@ -313,7 +313,7 @@ fn transitions_must_be_total_reachable_and_speak_the_enum() {
         "unknown target rejected: {typo}"
     );
 
-    // Reachability is a STATUS notion; it needs done_status to be declarable.
+    // Reachability is a STATUS notion; it needs a closed status to be declarable.
     let unreachable_done = validate_with(
         &dir,
         "[task_types.wf]\nfields = { status = { type = \"enum\", \
@@ -321,8 +321,9 @@ fn transitions_must_be_total_reachable_and_speak_the_enum() {
          transitions = { todo = [\"shipped\"], shipped = [] } } }",
     );
     assert!(
-        unreachable_done.contains("done_status` is `closed`, which is not one of the declared"),
-        "a done_status outside the enum is one clear problem, not per-state spam: \
+        unreachable_done
+            .contains("none of `[workflow] closed_statuses` (closed) is one of the declared"),
+        "closed statuses outside the enum is one clear problem, not per-state spam: \
          {unreachable_done}"
     );
 

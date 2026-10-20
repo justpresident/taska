@@ -197,7 +197,7 @@ fn dep_tree(
     let workflow = &store.config().workflow;
     let style = crate::format::RowStyle {
         status_field: &workflow.status_field,
-        done_status: &workflow.done_status,
+        closed_statuses: &workflow.closed_statuses,
     };
     for line in crate::format::render_args(
         output,

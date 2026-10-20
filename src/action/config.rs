@@ -115,6 +115,17 @@ pub fn set(store: &FileStore, key: &str, raw: &str) -> Result<String, DynError> 
     let value = parse_config_value(raw);
     let shown = value.to_string().trim().to_string();
     set_dotted(&mut doc, key, value)?;
+    // `closed_statuses` replaces the legacy `done_status` (still loaded as an
+    // alias); setting the new key retires the old one rather than leaving two
+    // spellings that serde rejects as a duplicate.
+    if key == "workflow.closed_statuses" {
+        if let Some(workflow) = doc
+            .get_mut("workflow")
+            .and_then(toml_edit::Item::as_table_like_mut)
+        {
+            workflow.remove("done_status");
+        }
+    }
 
     // Reject unless the whole document still deserializes to a valid Config (bad
     // types / unknown enum variants) AND passes validate() (semantic limits like

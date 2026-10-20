@@ -90,13 +90,14 @@ keep_events = {keep_events}
 keep_days = {keep_days}
 
 [workflow]
-# The DISPLAY name of the status field, and the value that marks a task
-# complete. `ta list --ready` treats a dependency as satisfied once it reaches
-# `done_status`. On disk the status always lives under the canonical key
+# The DISPLAY name of the status field, and the values that mark a task
+# closed. Reaching ANY of `closed_statuses` closes a task (e.g. ["closed",
+# "archived"]): `ta list --ready` treats such a dependency as satisfied and
+# `--open` hides it. On disk the status always lives under the canonical key
 # `status`, so renaming this is free at any time (no data migration) - just
 # update [display] columns to the new name too.
 status_field = "{status_field}"
-done_status = "{done_status}"
+closed_statuses = [{closed_statuses}]
 # Status stamped onto a new task when `ta create` doesn't set one. Set to "" to
 # create statusless tasks (the status field stays absent until you set it).
 default_status = "{default_status}"
@@ -151,7 +152,8 @@ column_max_width = {{ {column_max_width} }}
 # (never user-set). These name the columns they surface under; set a name to ""
 # to disable that timestamp. create_time = the Create event's time; update_time
 # = the latest touching event's time; close_time = the most recent time status
-# reached done_status (cleared while the task is currently not done). They are
+# reached one of closed_statuses (cleared while the task is currently not done;
+# moving between two closed statuses keeps the original close). They are
 # available to --columns/--full/show and as a --sort key.
 create_time = "{create_time}"
 update_time = "{update_time}"
@@ -191,17 +193,17 @@ close_time = "{close_time}"
 # works. The map must be TOTAL (every declared value present as a key), and a
 # terminal state is written `state = []` rather than left out, so no state is
 # ever frozen by accident. For the STATUS field every state must additionally
-# reach `workflow.done_status`, or tasks could never be completed. Creating a
+# reach one of `workflow.closed_statuses`, or tasks could never be completed. Creating a
 # task, setting a previously-absent value, and unsetting are not transitions.
 # [task_types.feature]
 # fields = {{
-#   status = {{ type = "enum", values = ["todo", "plan", "implement", "review", "{done_status}"],
+#   status = {{ type = "enum", values = ["todo", "plan", "implement", "review", "{first_closed}"],
 #              transitions = {{
 #                todo      = ["plan"],
 #                plan      = ["implement", "review"],
 #                implement = ["review"],
-#                review    = ["implement", "{done_status}"],   # bounce until review passes
-#                {done_status}    = ["todo"],                  # reopen, or [] to seal
+#                review    = ["implement", "{first_closed}"],   # bounce until review passes
+#                {first_closed}    = ["todo"],                  # reopen, or [] to seal
 #              }} }},
 # }}
 "#,
@@ -210,7 +212,11 @@ close_time = "{close_time}"
         keep_events = compaction.keep_events,
         keep_days = compaction.keep_days,
         status_field = workflow.status_field,
-        done_status = workflow.done_status,
+        closed_statuses = render_columns(&workflow.closed_statuses),
+        first_closed = workflow
+            .closed_statuses
+            .first()
+            .map_or("closed", String::as_str),
         default_status = workflow.default_status,
         type_field = workflow.type_field,
         warn_nonconforming = workflow.warn_nonconforming,
@@ -489,7 +495,12 @@ pub struct WorkflowConfig {
     /// [`crate::model::STATUS_KEY`]: commands map this name to the key on
     /// write, `action::read` maps it back on read - so renaming it is free.
     pub status_field: String,
-    pub done_status: String,
+    /// The status values that close a task - reaching ANY of them counts as
+    /// done (readiness, `--open`, `close_time`, the done styling). Loads from
+    /// the pre-rename single-string key `done_status` too, and accepts a bare
+    /// string for either spelling.
+    #[serde(alias = "done_status", deserialize_with = "one_or_many")]
+    pub closed_statuses: Vec<String>,
     /// Status stamped onto a new task when `ta create` doesn't set the status
     /// field. Empty means create statusless tasks (the status field is simply
     /// absent until set).
@@ -510,6 +521,21 @@ pub struct WorkflowConfig {
     /// non-conformance report), `deny` (a type is mandatory: any write to an
     /// untyped task is rejected until one is set).
     pub untyped_tasks: UntypedTasks,
+}
+
+/// Deserialize a string list that may also be written as one bare string, so
+/// `closed_statuses = "closed"` (and the legacy `done_status = "closed"`) load.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(s) => vec![s],
+        OneOrMany::Many(v) => v,
+    })
 }
 
 /// See [`WorkflowConfig::untyped_tasks`].
@@ -540,7 +566,7 @@ impl Default for WorkflowConfig {
     fn default() -> Self {
         Self {
             status_field: STATUS_KEY.to_string(),
-            done_status: "closed".to_string(),
+            closed_statuses: vec!["closed".to_string()],
             default_status: "todo".to_string(),
             type_field: "type".to_string(),
             warn_nonconforming: true,
@@ -667,7 +693,7 @@ pub struct TimestampConfig {
     pub create_time: String,
     /// Column name for the latest touching event's timestamp.
     pub update_time: String,
-    /// Column name for the most recent transition of status into `done_status`
+    /// Column name for the most recent transition of status into a closed status
     /// (cleared while the task is currently not done).
     pub close_time: String,
 }
@@ -1382,9 +1408,9 @@ impl Config {
                         }
                         // Reachability is a STATUS-field notion (every state
                         // must be able to complete); other enums have no
-                        // equivalent of `done_status`.
-                        let done = (field == &w.status_field && !w.done_status.is_empty())
-                            .then_some(w.done_status.as_str());
+                        // equivalent of `closed_statuses`.
+                        let done = (field == &w.status_field && !w.closed_statuses.is_empty())
+                            .then_some(w.closed_statuses.as_slice());
                         Self::collect_transitions_problems(&ctx, schema, &kind, done, problems);
                     }
                 }
@@ -1397,15 +1423,15 @@ impl Config {
     /// as a key, a terminal state spelled `state = []`. Totality is what keeps
     /// an omission from silently freezing a state.
     ///
-    /// `done` carries the `[workflow] done_status` when this field IS the status
-    /// field, which additionally requires every state to REACH it: a workflow
+    /// `done` carries the `[workflow] closed_statuses` when this field IS the
+    /// status field, which additionally requires every state to REACH one of them: a workflow
     /// with a stranded subgraph (`implement <-> review` and no way out) declares
     /// tasks that can never be completed. Other enums have no such notion.
     fn collect_transitions_problems(
         ctx: &str,
         schema: &FieldSchema,
         kind: &FieldKind,
-        done: Option<&str>,
+        done: Option<&[String]>,
         problems: &mut Vec<String>,
     ) {
         let Some(transitions) = schema.transitions() else {
@@ -1470,21 +1496,29 @@ impl Config {
         }
     }
 
-    /// Every declared status must reach `done_status` by some path, or tasks in
-    /// it can never be completed. Walks the graph BACKWARDS from `done_status`
-    /// (a reverse reachability flood), so one traversal settles every state.
+    /// Every declared status must reach one of the `closed_statuses` by some
+    /// path, or tasks in it can never be completed. Walks the graph BACKWARDS
+    /// from every declared closed status (a multi-source reverse reachability
+    /// flood), so one traversal settles every state. A type may declare only a
+    /// subset of the closed statuses; it just needs at least one.
     fn collect_reachability_problems(
         ctx: &str,
         values: &[String],
         transitions: &BTreeMap<String, Vec<String>>,
-        done: &str,
+        closed: &[String],
         problems: &mut Vec<String>,
     ) {
-        if !values.iter().any(|v| v == done) {
+        let declared: Vec<&str> = closed
+            .iter()
+            .filter(|c| values.contains(c))
+            .map(String::as_str)
+            .collect();
+        if declared.is_empty() {
             // Every state would report as stranded; the real fault is upstream.
             problems.push(format!(
-                "{ctx}.transitions: `[workflow] done_status` is `{done}`, which is not one of \
-                 the declared values ({}) - no task of this type could ever be done",
+                "{ctx}.transitions: none of `[workflow] closed_statuses` ({}) is one of the \
+                 declared values ({}) - no task of this type could ever be done",
+                closed.join(", "),
                 values.join(", ")
             ));
             return;
@@ -1497,7 +1531,7 @@ impl Config {
             }
         }
         let mut reaches_done: BTreeSet<&str> = BTreeSet::new();
-        let mut queue = vec![done];
+        let mut queue = declared.clone();
         while let Some(state) = queue.pop() {
             if !reaches_done.insert(state) {
                 continue;
@@ -1513,9 +1547,14 @@ impl Config {
             .collect();
         if !stranded.is_empty() {
             problems.push(format!(
-                "{ctx}.transitions: state(s) {} cannot reach `{done}` - a task in them could \
-                 never be done",
-                stranded.join(", ")
+                "{ctx}.transitions: state(s) {} cannot reach {} - a task in them could never \
+                 be done",
+                stranded.join(", "),
+                declared
+                    .iter()
+                    .map(|c| format!("`{c}`"))
+                    .collect::<Vec<_>>()
+                    .join(" or ")
             ));
         }
     }
@@ -2103,11 +2142,29 @@ max_items = 2
     #[test]
     fn partial_config_keeps_other_defaults() {
         let parsed: Config =
-            toml_edit::de::from_str("[workflow]\ndone_status = \"closed\"\n").unwrap();
-        assert_eq!(parsed.workflow.done_status, "closed");
+            toml_edit::de::from_str("[workflow]\nclosed_statuses = [\"closed\", \"archived\"]\n")
+                .unwrap();
+        assert_eq!(parsed.workflow.closed_statuses, ["closed", "archived"]);
         assert_eq!(parsed.workflow.status_field, STATUS_KEY); // untouched default
         assert_eq!(parsed.compaction, CompactionConfig::default()); // whole section defaulted
         assert_eq!(parsed.merge, MergeConfig::default()); // whole section defaulted
+    }
+
+    #[test]
+    fn closed_statuses_loads_a_bare_string_and_the_legacy_done_status_key() {
+        let bare: Config =
+            toml_edit::de::from_str("[workflow]\nclosed_statuses = \"done\"\n").unwrap();
+        assert_eq!(bare.workflow.closed_statuses, ["done"]);
+        let legacy: Config =
+            toml_edit::de::from_str("[workflow]\ndone_status = \"shipped\"\n").unwrap();
+        assert_eq!(legacy.workflow.closed_statuses, ["shipped"]);
+        assert!(
+            toml_edit::de::from_str::<Config>(
+                "[workflow]\ndone_status = \"a\"\nclosed_statuses = [\"b\"]\n"
+            )
+            .is_err(),
+            "both spellings at once is ambiguous, so it's rejected"
+        );
     }
 
     #[test]
@@ -2142,7 +2199,7 @@ max_items = 2
             let toml = format!(
                 r#"
 [workflow]
-done_status = "done"
+closed_statuses = ["done", "dropped"]
 [task_types.t.fields.status]
 type = "enum"
 values = ["todo", "left", "right", "done"]
@@ -2159,7 +2216,7 @@ transitions = {transitions}
                 r#"{ todo = ["left", "right"], left = ["done"], right = ["left"], done = [] }"#
             )
             .is_ok(),
-            "a multi-hop path to done_status counts"
+            "a multi-hop path to a closed status counts"
         );
 
         // Sever the only exit: `right` and `left` now loop between themselves,
@@ -2170,7 +2227,8 @@ transitions = {transitions}
         .unwrap_err()
         .to_string();
         // Every stranded state named at once, in `values` order - and
-        // `done` absent from the list, since done_status reaches itself.
+        // `done` absent from the list, since a closed status reaches itself.
+        // `dropped` isn't declared by this type, so only `done` is named.
         assert!(
             err.contains("state(s) `todo`, `left`, `right` cannot reach `done`"),
             "{err}"

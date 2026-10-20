@@ -42,7 +42,7 @@ pub struct FieldFacts {
 #[derive(Serialize, Debug, Clone)]
 pub struct TypeFacts {
     pub name: String,
-    /// Whether reaching `done_status` closes a task of this type (the `closed` flag).
+    /// Whether the type's schema is closed - no fields beyond the declared ones.
     pub closed: bool,
     pub fields: Vec<FieldFacts>,
 }
@@ -78,7 +78,8 @@ pub struct PrimeFacts {
     /// The display name of the status field (`[workflow] status_field`).
     pub status_field: String,
     pub default_status: String,
-    pub done_status: String,
+    /// The status values that close a task (`[workflow] closed_statuses`).
+    pub closed_statuses: Vec<String>,
     /// The declared status enum values, if the status field is declared an enum
     /// (else empty - the store accepts free-form status strings).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -106,8 +107,10 @@ pub struct PrimeOutcome {
 /// frontend weaves from them is runnable against THIS store. Shared by the CLI
 /// primer and the `ta init` integration block.
 pub struct PrimeExamples {
-    /// A representative non-default, non-done status to claim work with.
+    /// A representative non-default, non-closed status to claim work with.
     pub claim: String,
+    /// The status to close work with: the first of `closed_statuses`.
+    pub close: String,
     /// The first declared type's name (or `task` when none is declared).
     pub type_name: String,
     /// That type's required fields as `name="..."` tokens (minus the status field,
@@ -127,9 +130,14 @@ pub fn examples(f: &PrimeFacts) -> PrimeExamples {
     let claim = f
         .statuses
         .iter()
-        .find(|s| *s != &f.default_status && *s != &f.done_status)
+        .find(|s| *s != &f.default_status && !f.closed_statuses.contains(s))
         .unwrap_or(&f.default_status)
         .clone();
+    let close = f
+        .closed_statuses
+        .first()
+        .map_or("closed", String::as_str)
+        .to_string();
 
     let first_type = f.task_types.first();
     let type_name = first_type.map_or("task", |t| t.name.as_str()).to_string();
@@ -163,12 +171,13 @@ pub fn examples(f: &PrimeFacts) -> PrimeExamples {
                 .find(|x| !x.required && !x.values.is_empty())
         })
         .map_or_else(
-            || format!("'{sf}!={}'", f.done_status),
+            || format!("'{sf}!={close}'"),
             |x| format!("'{}={}'", x.name, x.values[0]),
         );
 
     PrimeExamples {
         claim,
+        close,
         type_name,
         req_example,
         blocker,
@@ -242,7 +251,7 @@ fn build_facts(config: &Config, summary: &StatusSummary) -> PrimeFacts {
     PrimeFacts {
         status_field: workflow.status_field.clone(),
         default_status: workflow.default_status.clone(),
-        done_status: workflow.done_status.clone(),
+        closed_statuses: workflow.closed_statuses.clone(),
         statuses,
         type_field: workflow.type_field.clone(),
         untyped_tasks: workflow.untyped_tasks.as_str().to_string(),
@@ -274,7 +283,7 @@ mod tests {
         let facts = prime(&store_with_schema()).unwrap().facts;
 
         assert_eq!(facts.status_field, STATUS_FIELD);
-        assert_eq!(facts.done_status, DONE_STATUS);
+        assert_eq!(facts.closed_statuses, [DONE_STATUS]);
         assert_eq!(facts.default_status, DEFAULT_STATUS);
         assert_eq!(facts.type_field, TYPE_FIELD);
         assert_eq!(

@@ -1771,7 +1771,7 @@ required = true
             r#"
 [workflow]
 status_field = "{STATUS_FIELD}"
-done_status = "done"
+closed_statuses = ["done"]
 [task_types.job.fields.{STATUS_FIELD}]
 type = "enum"
 values = ["todo", "doing", "done"]

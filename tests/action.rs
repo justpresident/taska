@@ -105,7 +105,7 @@ fn drives_create_read_and_dep_through_the_action_api_only() {
     // cli's markdown rendering (an external frontend would render its own).
     let prime = action::prime(&store).unwrap();
     assert_eq!(prime.facts.status_field, STATUS_KEY);
-    assert_eq!(prime.facts.done_status, "closed");
+    assert_eq!(prime.facts.closed_statuses, ["closed"]);
     assert_eq!(prime.facts.summary.total, 2);
     assert!(
         prime

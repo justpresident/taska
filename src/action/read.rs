@@ -59,7 +59,7 @@ pub fn read(store: &impl EventStore) -> Result<Session, DynError> {
     // high-water mark - the cursor this read is as-of.
     let seq = mutations.last().map_or(0, |e| e.seq);
     let (mut state, orphans) =
-        Engine::materialize_report(baseline, mutations, &config.workflow.done_status);
+        Engine::materialize_report(baseline, mutations, &config.workflow.closed_statuses);
 
     let mut warnings = Vec::new();
     if !orphans.is_empty() {

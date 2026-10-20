@@ -19,8 +19,8 @@ use crate::storage::EventStore;
 /// Aggregate counts for `status`.
 ///
 /// Status values are user-defined, so the per-status buckets are *discovered*
-/// from the data rather than hardcoded - `done_status` is simply the bucket that
-/// also feeds the `closed` count. `blocked` and `ready` are COMPUTED from the
+/// from the data rather than hardcoded - the `closed_statuses` buckets are simply
+/// the ones that also feed the `closed` count. `blocked` and `ready` are COMPUTED from the
 /// dependency graph, never read from a status value: `ready` reuses the same set
 /// as `list --ready`, and among not-done tasks the two partition the set (a
 /// not-done task is blocked iff an existing dependency isn't done, else ready).
@@ -62,7 +62,7 @@ pub fn status_summary<S: BuildHasher>(
     workflow: &WorkflowConfig,
     blockers: &BTreeSet<String>,
 ) -> Result<StatusSummary, DynError> {
-    let (field, done) = (&workflow.status_field, &workflow.done_status);
+    let (field, done) = (&workflow.status_field, &workflow.closed_statuses);
     let mut by_status: BTreeMap<String, usize> = BTreeMap::new();
     let mut no_status = 0usize;
     for t in state.values() {

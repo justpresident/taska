@@ -60,7 +60,7 @@ pub(crate) fn materialize(
     Engine::materialize_state(
         baseline.to_vec(),
         log.to_vec(),
-        &config.workflow.done_status,
+        &config.workflow.closed_statuses,
     )
 }
 
@@ -89,7 +89,7 @@ pub(crate) fn inject_computed_columns(
             state,
             &blockers,
             &workflow.status_field,
-            &workflow.done_status,
+            &workflow.closed_statuses,
         );
         for (id, task) in state.iter_mut() {
             if let Some(&(unblocks, blocked_by)) = counts.get(id) {
@@ -107,7 +107,7 @@ pub(crate) fn inject_computed_columns(
             state,
             &hierarchy,
             &workflow.status_field,
-            &workflow.done_status,
+            &workflow.closed_statuses,
         );
         for (id, task) in state.iter_mut() {
             if let Some(&(done, total)) = progress.get(id) {
