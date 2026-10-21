@@ -140,8 +140,10 @@ enum Commands {
         /// (`unblocks`/`blocked_by`/`subtasks`). A MULTI-VALUED field (a set/
         /// array field, `deps`, or a relationship type) matches if ANY element
         /// does - `tags=urgent` (member), `scores>=5` (some score >= 5) - while
-        /// `!=`/`!~` hold when NONE does (so also when it's empty/absent). With
-        /// none given, lists every task.
+        /// `!=`/`!~` hold when NONE does (so also when it's empty/absent). A bare
+        /// word is a task id; several bare ids match ANY of them (`ta list a b
+        /// status=todo` = a or b, with status todo), and an unknown id is an
+        /// error. With none given, lists every task.
         #[arg(add = ArgValueCompleter::new(complete::criteria))]
         criteria: Vec<String>,
         /// Only tasks that are not done (status is not the configured done value)
@@ -168,7 +170,8 @@ enum Commands {
     /// prints); computed columns aren't available as filters.
     Watch {
         /// Filter criteria, same grammar as `ta list` (`field=value`, `field=~regex`,
-        /// `field!=value`, comparisons); with none given, every changed task matches.
+        /// `field!=value`, comparisons, or bare task ids); with none given, every
+        /// changed task matches.
         #[arg(add = ArgValueCompleter::new(complete::criteria))]
         criteria: Vec<String>,
         /// Only report tasks that are not done.

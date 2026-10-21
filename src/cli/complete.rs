@@ -18,15 +18,7 @@ fn candidates(values: impl IntoIterator<Item = String>) -> Vec<CompletionCandida
 
 /// Every task id in the store under the current dir.
 pub fn task_ids() -> Vec<CompletionCandidate> {
-    let Ok(store) = FileStore::discover() else {
-        return Vec::new();
-    };
-    let Ok(session) = crate::action::read(&store) else {
-        return Vec::new();
-    };
-    let mut ids: Vec<String> = session.state.keys().cloned().collect();
-    ids.sort();
-    candidates(ids)
+    candidates(task_id_names())
 }
 
 /// Built-in, computed, configured, and in-use column/field names (for
@@ -35,27 +27,56 @@ pub fn columns() -> Vec<CompletionCandidate> {
     candidates(column_names())
 }
 
-/// A `list` criterion / `dep` edge: complete the field/type name, or - once an
-/// operator (`=`, `>`, `=~`, ...) is typed - the value for that field.
+/// A criterion: complete a field name or a task id (a bare id is a criterion
+/// too), or - once an operator (`=`, `>`, `=~`, ...) is typed - the value for
+/// that field.
 pub fn criteria(current: &OsStr) -> Vec<CompletionCandidate> {
+    value_after_operator(current).unwrap_or_else(|| {
+        let mut names = field_names();
+        names.extend(task_id_names());
+        candidates(names)
+    })
+}
+
+/// A `dep add`/`dep remove` edge `type=target`: complete the relationship type,
+/// then (after `=`) the target task id.
+pub fn edges(current: &OsStr) -> Vec<CompletionCandidate> {
+    value_after_operator(current).unwrap_or_else(|| {
+        let types: BTreeSet<String> = FileStore::discover()
+            .map(|store| store.config().relationships.types.keys().cloned().collect())
+            .unwrap_or_default();
+        candidates(types)
+    })
+}
+
+/// Once `field<op>` is typed, the candidate values for that field (keeping the
+/// field and operator); `None` while no operator has been typed yet.
+fn value_after_operator(current: &OsStr) -> Option<Vec<CompletionCandidate>> {
     let cur = current.to_string_lossy();
-    if let Some(op) = cur.find(|c: char| "=!<>~".contains(c)) {
-        let field = &cur[..op];
-        // Keep the field + the operator the user already typed; complete the value.
-        let value_at = op
-            + cur[op..]
-                .chars()
-                .take_while(|c| "=!<>~".contains(*c))
-                .map(char::len_utf8)
-                .sum::<usize>();
-        let prefix = &cur[..value_at];
-        return candidates(
-            value_strings(field)
-                .into_iter()
-                .map(|v| format!("{prefix}{v}")),
-        );
-    }
-    candidates(field_names())
+    let op = cur.find(|c: char| "=!<>~".contains(c))?;
+    let field = &cur[..op];
+    // Keep the field + the operator the user already typed; complete the value.
+    let value_at = op
+        + cur[op..]
+            .chars()
+            .take_while(|c| "=!<>~".contains(*c))
+            .map(char::len_utf8)
+            .sum::<usize>();
+    let prefix = &cur[..value_at];
+    Some(candidates(
+        value_strings(field)
+            .into_iter()
+            .map(|v| format!("{prefix}{v}")),
+    ))
+}
+
+/// The discovered store's task ids (empty without a readable store).
+fn task_id_names() -> BTreeSet<String> {
+    FileStore::discover()
+        .ok()
+        .and_then(|store| crate::action::read(&store).ok())
+        .map(|session| session.state.into_keys().collect())
+        .unwrap_or_default()
 }
 
 // --- shared builders -------------------------------------------------------

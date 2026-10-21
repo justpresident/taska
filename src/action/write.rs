@@ -180,6 +180,15 @@ fn ensure_guard(
     if guard.is_empty() {
         return Ok(());
     }
+    // The guard already targets `id`, so a bare id there could only be
+    // always-false or redundant - and a typo would read as a lost race.
+    if let Some(bare) = crate::action::list::bare_ids(guard).first() {
+        return Err(format!(
+            "a guard can't select by id (`{bare}`) - `--if` takes conditions on `{id}` \
+             itself, e.g. `--if status=todo`"
+        )
+        .into());
+    }
     let mut vocab = Vocabulary::build(config, state, log);
     vocab.add_canonical(config, introduces);
     let fields = crate::action::list::criteria_fields(guard)?;

@@ -28,7 +28,7 @@ pub enum DepAction {
         #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         task: String,
         /// `type=target` pairs (each `type` must be a declared relationship type)
-        #[arg(required = true, add = ArgValueCompleter::new(complete::criteria))]
+        #[arg(required = true, add = ArgValueCompleter::new(complete::edges))]
         edges: Vec<String>,
     },
     /// Remove typed edge(s): `ta dep remove <task> depends_on=<other> ...`
@@ -36,7 +36,7 @@ pub enum DepAction {
         #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         task: String,
         /// `type=target` pairs to remove
-        #[arg(required = true, add = ArgValueCompleter::new(complete::criteria))]
+        #[arg(required = true, add = ArgValueCompleter::new(complete::edges))]
         edges: Vec<String>,
     },
     /// Dependency tree: `ta dep tree [<task> ...]` (roots default to tasks

@@ -101,6 +101,7 @@ pub fn poll(
         &fields.iter().map(String::as_str).collect::<Vec<_>>(),
         ColumnUse::Filter,
     )?;
+    list::check_ids(store, &after, &list::bare_ids(criteria))?;
     let watched = if columns.is_empty() {
         None
     } else {
@@ -168,7 +169,14 @@ pub fn validate(
             full_vocabulary(store)?
         };
     vocab.check(&names, ColumnUse::Filter)?;
-    resolve_columns(store.config(), &vocab, columns).map(|_| ())
+    resolve_columns(store.config(), &vocab, columns)?;
+    let ids = list::bare_ids(criteria);
+    if !ids.is_empty() {
+        let config = store.config();
+        let state = materialize(config, &store.load_baseline()?, &store.load_mutations()?);
+        list::check_ids(store, &state, &ids)?;
+    }
+    Ok(())
 }
 
 /// The watched set named by `columns` (display names).

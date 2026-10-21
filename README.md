@@ -402,6 +402,9 @@ Human output is **colored** when stdout is a terminal, and **consistently across
 | `field=~regex` | regex over the value's string form (perl/bash spelling) |
 | `field!~regex` | regex that does not match |
 | `field>value`, `field>=value`, `field<value`, `field<=value` | ordering - numbers numerically, strings/dates lexicographically; a cross-type compare never matches |
+| `api` (a bare word) | the task with that id. Several bare ids match **any** of them, AND-ed with the rest: `ta list api db status=todo` is "api or db, with status todo". An id the store never knew is an error with a did-you-mean (a deleted task's id still counts) |
+
+The same grammar - bare ids included - is taken by `ta watch` and `--if` guards; a guard rejects a bare id, since it already applies to the task being updated.
 
 `field` may be a task field, `id`, `deps` (a target under any relationship type), a relationship type or inverse name (`depends_on=db`, `subtask_of=epic`, `blocks=api`), or a computed column (`unblocks`, `blocked_by`, `subtasks`).
 

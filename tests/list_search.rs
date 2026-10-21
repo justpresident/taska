@@ -687,3 +687,103 @@ fn dep_tree_sorts_siblings_by_keys_including_computed_columns() {
     let (x, y) = (tree.find(" x").unwrap(), tree.find(" y").unwrap());
     assert!(x < y, "ascending flips it: {tree}");
 }
+
+/// A bare word in criteria is a task id. Several bare ids match ANY of them,
+/// and AND with the other criteria.
+#[test]
+fn bare_words_in_criteria_select_tasks_by_id() {
+    let dir = fresh_dir("bare-ids");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    for (id, status) in [("api", "todo"), ("db", "closed"), ("web", "todo")] {
+        ta(&dir, &["create", id, &format!("{STATUS_KEY}={status}")]);
+    }
+    let ids = |args: &[&str]| -> Vec<String> {
+        let mut all = vec!["list", "--columns", ID_KEY, "--sort", ID_KEY];
+        all.extend_from_slice(args);
+        ta(&dir, &all)
+            .lines()
+            .skip(1)
+            .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+            .collect()
+    };
+    assert_eq!(ids(&["api"]), ["api"]);
+    assert_eq!(ids(&["api", "db"]), ["api", "db"], "bare ids OR together");
+    assert_eq!(
+        ids(&["api", "db", &format!("{STATUS_KEY}=todo")]),
+        ["api"],
+        "and AND with the other criteria"
+    );
+
+    // An unknown id is an error with a did-you-mean...
+    let out = run(ta_bin(), &dir, &["list", "apj"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("no task `apj` - did you mean `api`?"), "{err}");
+    // ...but a deleted task's id is still a real id: no match, no error.
+    ta(&dir, &["delete", "web"]);
+    assert!(ta(&dir, &["list", "web"]).contains("(no matches)"));
+}
+
+/// `watch` rejects an unknown bare id up front instead of waiting on it.
+#[test]
+fn watch_rejects_an_unknown_bare_id_before_blocking() {
+    let dir = fresh_dir("bare-ids-watch");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    ta(&dir, &["create", "api", &format!("{STATUS_KEY}=todo")]);
+    let started = std::time::Instant::now();
+    let out = run(
+        ta_bin(),
+        &dir,
+        &["watch", "--since", "0", "--timeout", "30s", "apj"],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("did you mean `api`?"), "{err}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "no wait"
+    );
+    // A known bare id watches that task.
+    let out = run(
+        ta_bin(),
+        &dir,
+        &[
+            "watch",
+            "--since",
+            "0",
+            "--timeout",
+            "5s",
+            "--holdout",
+            "0s",
+            "api",
+        ],
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("api:"));
+}
+
+/// A guard already targets the updated task, so a bare id in `--if` is an
+/// error (exit 1) - never a guaranteed failed condition (exit 3).
+#[test]
+fn a_guard_cannot_select_by_id() {
+    let dir = fresh_dir("bare-ids-guard");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    ta(&dir, &["create", "api", &format!("{STATUS_KEY}=todo")]);
+    ta(&dir, &["create", "db", &format!("{STATUS_KEY}=todo")]);
+    let out = run(
+        ta_bin(),
+        &dir,
+        &[
+            "update",
+            "api",
+            &format!("{STATUS_KEY}=closed"),
+            "--if",
+            "db",
+        ],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("can't select by id (`db`)"), "{err}");
+}

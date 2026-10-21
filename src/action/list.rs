@@ -7,7 +7,7 @@
 //! column - rendering is the frontend's job.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -58,6 +58,7 @@ pub fn list_tasks(store: &impl EventStore, query: &ListQuery) -> Result<ListOutc
     let session = read(store)?;
     let mut state = session.state;
     warnings.extend(session.warnings);
+    check_ids(store, &state, &bare_ids(query.criteria))?;
 
     // The columns this query touches: what the frontend will display/sort, plus
     // the criterion fields (so a filter on `unblocks=0` injects the column without
@@ -249,6 +250,9 @@ enum Matcher {
     /// comparison only holds when the two share a comparable type (both numbers,
     /// strings, or bools) - a cross-type compare never matches.
     Cmp(FilterOp, Value),
+    /// The task id is one of these - what the bare words of a criteria list
+    /// compile to (several bare ids OR together, see [`compile_criteria`]).
+    OneOf(BTreeSet<String>),
 }
 
 /// What a criterion's field resolves against beyond the task itself: the
@@ -309,6 +313,9 @@ impl Criterion {
             Matcher::Re(re) => values.iter().any(|v| re.is_match(&value_string(v))),
             Matcher::NotRe(re) => !values.iter().any(|v| re.is_match(&value_string(v))),
             Matcher::Cmp(op, q) => values.iter().any(|v| cmp_holds(*op, v, q)),
+            Matcher::OneOf(ids) => values
+                .iter()
+                .any(|v| v.as_str().is_some_and(|s| ids.contains(s))),
         }
     }
 }
@@ -414,8 +421,64 @@ fn value_string(v: &Value) -> String {
     }
 }
 
+/// Compile a criteria list. Each `field<op>value` is its own criterion, AND-ed;
+/// the BARE words (no operator) are task ids and compile to ONE "id is one of"
+/// criterion, so `a b status=todo` means (a or b) and status=todo - a literal
+/// `id=a id=b` would match nothing.
 fn compile_criteria(raw: &[String]) -> Result<Vec<Criterion>, DynError> {
-    raw.iter().map(|r| compile_criterion(r)).collect()
+    let mut compiled: Vec<Criterion> = raw
+        .iter()
+        .filter(|r| !is_bare_id(r))
+        .map(|r| compile_criterion(r))
+        .collect::<Result<_, _>>()?;
+    let ids: BTreeSet<String> = bare_ids(raw).into_iter().map(str::to_string).collect();
+    if !ids.is_empty() {
+        compiled.push(Criterion {
+            field: ID_KEY.to_string(),
+            matcher: Matcher::OneOf(ids),
+        });
+    }
+    Ok(compiled)
+}
+
+/// Whether a criterion is a bare task id: no operator character at all. (A
+/// token holding one that isn't a valid operator stays a parse error.)
+fn is_bare_id(raw: &str) -> bool {
+    !raw.is_empty() && !raw.contains(['=', '>', '<', '!', '~'])
+}
+
+/// The bare task ids in a criteria list, in order.
+pub(crate) fn bare_ids(raw: &[String]) -> Vec<&str> {
+    raw.iter()
+        .map(String::as_str)
+        .filter(|r| is_bare_id(r))
+        .collect()
+}
+
+/// Reject an id the store has never known, with a did-you-mean.
+///
+/// Known = a task in `current` OR any id the baseline or retained log mentions,
+/// so a deleted task's id is still real (its history exists; `list` simply finds
+/// no match). Only an id missing from `current` costs a log read.
+pub(crate) fn check_ids(
+    store: &impl EventStore,
+    current: &HashMap<String, TaskState>,
+    ids: &[&str],
+) -> Result<(), DynError> {
+    if ids.iter().all(|id| current.contains_key(*id)) {
+        return Ok(());
+    }
+    let mut known: BTreeSet<String> = current.keys().cloned().collect();
+    known.extend(store.load_baseline()?.into_iter().map(|t| t.id));
+    known.extend(store.load_mutations()?.into_iter().map(|e| e.task_id));
+    ids.iter()
+        .find(|id| !known.contains(**id))
+        .map_or(Ok(()), |id| {
+            let hint = crate::schema::nearest_known(id, &known)
+                .map(|k| format!(" - did you mean `{k}`?"))
+                .unwrap_or_default();
+            Err(format!("no task `{id}`{hint}").into())
+        })
 }
 
 fn compile_criterion(raw: &str) -> Result<Criterion, DynError> {
@@ -476,7 +539,7 @@ fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
         .into());
     }
     Err(format!(
-        "invalid criterion `{raw}`: expected field=value, field=~regex, field!=value, field!~regex, or a comparison (field>value, field>=value, field<value, field<=value)"
+        "invalid criterion `{raw}`: expected a task id, field=value, field=~regex, field!=value, field!~regex, or a comparison (field>value, field>=value, field<value, field<=value)"
     )
     .into())
 }

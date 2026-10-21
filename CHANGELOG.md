@@ -8,6 +8,12 @@ git log.
 ## [Unreleased]
 
 ### Added
+- **A bare word in criteria selects a task by id.** `ta list api db
+  status=todo` means "api or db, with status todo" (several bare ids OR
+  together, then AND with the other criteria); `ta watch api` watches one
+  task. An unknown id is an error with a did-you-mean - a deleted task's id
+  still counts as known. `--if` guards reject a bare id. Previously a bare
+  word was a parse error. Shell completion offers task ids in criteria.
 - **Multi-key sort with per-key direction.** `--sort mgr,-priority` (on `list`
   and `dep tree`, and `[display] sort`) compares by each key in turn, with a
   leading `-` sorting that key descending; missing values sort last for every
