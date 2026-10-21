@@ -366,6 +366,8 @@ fn output_commands_are_format_and_color_consistent() {
         vec!["dep", "cycles"],
         vec!["dep", "plan", "a"],
         vec!["dep", "tree"],
+        vec!["history"],
+        vec!["history", "a"],
     ];
     for base in &commands {
         let label = base.join(" ");

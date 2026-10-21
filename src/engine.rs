@@ -207,101 +207,116 @@ impl Engine {
         let mut state_map: HashMap<String, TaskState> =
             baseline.into_iter().map(|t| (t.id.clone(), t)).collect();
         let mut orphans: Vec<u64> = Vec::new();
-
         for event in mutations {
-            let ts = event.timestamp;
-            match event.op {
-                OpType::Create => {
-                    // Re-creating an existing id refreshes its fields but keeps
-                    // any deps already attached.
-                    let entry =
-                        state_map
-                            .entry(event.task_id.clone())
-                            .or_insert_with(|| TaskState {
-                                id: event.task_id.clone(),
-                                relationships: BTreeMap::new(),
-                                custom_fields: serde_json::Map::new(),
-                                create_time: None,
-                                update_time: None,
-                                close_time: None,
-                            });
-                    let was_done = is_done(entry, STATUS_KEY, closed_statuses);
-                    apply_set(&mut entry.custom_fields, event.payload);
-                    // First Create wins for create_time (a re-Create keeps it).
-                    if entry.create_time.is_none() {
-                        entry.create_time = Some(ts);
-                    }
-                    entry.update_time = Some(ts);
-                    refresh_close_time(
-                        entry,
-                        was_done,
-                        is_done(entry, STATUS_KEY, closed_statuses),
-                        ts,
-                    );
-                }
-                OpType::Update => {
-                    if let Some(task) = state_map.get_mut(&event.task_id) {
-                        let was_done = is_done(task, STATUS_KEY, closed_statuses);
-                        apply_set(&mut task.custom_fields, event.payload);
-                        task.update_time = Some(ts);
-                        refresh_close_time(
-                            task,
-                            was_done,
-                            is_done(task, STATUS_KEY, closed_statuses),
-                            ts,
-                        );
-                    } else {
-                        orphans.push(event.seq);
-                    }
-                }
-                OpType::Append => {
-                    if let Some(task) = state_map.get_mut(&event.task_id) {
-                        apply_append(&mut task.custom_fields, event.payload);
-                        // Text accumulation touches the task but not its done
-                        // status, so no close_time recompute.
-                        task.update_time = Some(ts);
-                    } else {
-                        orphans.push(event.seq);
-                    }
-                }
-                OpType::Add | OpType::Remove => {
-                    if let Some(task) = state_map.get_mut(&event.task_id) {
-                        apply_accumulate(
-                            &mut task.custom_fields,
-                            event.payload,
-                            matches!(event.op, OpType::Add),
-                        );
-                        // Numeric/set accumulation never touches the status.
-                        task.update_time = Some(ts);
-                    } else {
-                        orphans.push(event.seq);
-                    }
-                }
-                OpType::AddEdge => {
-                    if let Some(task) = state_map.get_mut(&event.task_id) {
-                        apply_dep(task, &event.payload, true);
-                        // A dep change touches the task but never its status.
-                        task.update_time = Some(ts);
-                    } else {
-                        orphans.push(event.seq);
-                    }
-                }
-                OpType::RemoveEdge => {
-                    if let Some(task) = state_map.get_mut(&event.task_id) {
-                        apply_dep(task, &event.payload, false);
-                        task.update_time = Some(ts);
-                    } else {
-                        orphans.push(event.seq);
-                    }
-                }
-                OpType::Delete => {
-                    if state_map.remove(&event.task_id).is_none() {
-                        orphans.push(event.seq);
-                    }
-                }
+            let seq = event.seq;
+            if !Self::apply(&mut state_map, event, closed_statuses) {
+                orphans.push(seq);
             }
         }
         (state_map, orphans)
+    }
+
+    /// Fold ONE event into `state` - the step [`Engine::materialize_report`]
+    /// repeats, exposed so a caller can watch state evolve event by event
+    /// (`history` diffs each event's before/after in a single pass). Returns
+    /// `false` for an orphan: an event whose task didn't exist, which changes
+    /// nothing.
+    pub fn apply(
+        state_map: &mut HashMap<String, TaskState>,
+        event: MutationEvent,
+        closed_statuses: &[String],
+    ) -> bool {
+        let ts = event.timestamp;
+        match event.op {
+            OpType::Create => {
+                // Re-creating an existing id refreshes its fields but keeps
+                // any deps already attached.
+                let entry = state_map
+                    .entry(event.task_id.clone())
+                    .or_insert_with(|| TaskState {
+                        id: event.task_id.clone(),
+                        relationships: BTreeMap::new(),
+                        custom_fields: serde_json::Map::new(),
+                        create_time: None,
+                        update_time: None,
+                        close_time: None,
+                    });
+                let was_done = is_done(entry, STATUS_KEY, closed_statuses);
+                apply_set(&mut entry.custom_fields, event.payload);
+                // First Create wins for create_time (a re-Create keeps it).
+                if entry.create_time.is_none() {
+                    entry.create_time = Some(ts);
+                }
+                entry.update_time = Some(ts);
+                refresh_close_time(
+                    entry,
+                    was_done,
+                    is_done(entry, STATUS_KEY, closed_statuses),
+                    ts,
+                );
+            }
+            OpType::Update => {
+                if let Some(task) = state_map.get_mut(&event.task_id) {
+                    let was_done = is_done(task, STATUS_KEY, closed_statuses);
+                    apply_set(&mut task.custom_fields, event.payload);
+                    task.update_time = Some(ts);
+                    refresh_close_time(
+                        task,
+                        was_done,
+                        is_done(task, STATUS_KEY, closed_statuses),
+                        ts,
+                    );
+                } else {
+                    return false;
+                }
+            }
+            OpType::Append => {
+                if let Some(task) = state_map.get_mut(&event.task_id) {
+                    apply_append(&mut task.custom_fields, event.payload);
+                    // Text accumulation touches the task but not its done
+                    // status, so no close_time recompute.
+                    task.update_time = Some(ts);
+                } else {
+                    return false;
+                }
+            }
+            OpType::Add | OpType::Remove => {
+                if let Some(task) = state_map.get_mut(&event.task_id) {
+                    apply_accumulate(
+                        &mut task.custom_fields,
+                        event.payload,
+                        matches!(event.op, OpType::Add),
+                    );
+                    // Numeric/set accumulation never touches the status.
+                    task.update_time = Some(ts);
+                } else {
+                    return false;
+                }
+            }
+            OpType::AddEdge => {
+                if let Some(task) = state_map.get_mut(&event.task_id) {
+                    apply_dep(task, &event.payload, true);
+                    // A dep change touches the task but never its status.
+                    task.update_time = Some(ts);
+                } else {
+                    return false;
+                }
+            }
+            OpType::RemoveEdge => {
+                if let Some(task) = state_map.get_mut(&event.task_id) {
+                    apply_dep(task, &event.payload, false);
+                    task.update_time = Some(ts);
+                } else {
+                    return false;
+                }
+            }
+            OpType::Delete => {
+                if state_map.remove(&event.task_id).is_none() {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     /// Split point for the seq-ordered mutation log: events at indices

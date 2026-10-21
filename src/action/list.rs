@@ -219,6 +219,60 @@ pub(crate) fn unmet_criteria(
         .collect())
 }
 
+/// A filter compiled ONCE, then tested against single tasks - for a caller that
+/// evaluates the same filter many times (`history`, once per event). The same
+/// criteria grammar and `--open`/`--ready` rules as `list`; `state` must be
+/// display-shaped.
+pub(crate) struct TaskFilter {
+    compiled: Vec<Criterion>,
+    open: bool,
+    ready: bool,
+}
+
+impl TaskFilter {
+    pub(crate) fn new(criteria: &[String], open: bool, ready: bool) -> Result<Self, DynError> {
+        Ok(Self {
+            compiled: compile_criteria(criteria)?,
+            open,
+            ready,
+        })
+    }
+
+    /// Whether task `id` exists in `state` and passes the filter.
+    pub(crate) fn matches(
+        &self,
+        state: &HashMap<String, TaskState>,
+        id: &str,
+        config: &Config,
+    ) -> bool {
+        let Some(task) = state.get(id) else {
+            return false;
+        };
+        let w = &config.workflow;
+        if self.open && is_done(task, &w.status_field, &w.closed_statuses) {
+            return false;
+        }
+        // `--ready` (not done, deps satisfied) subsumes `--open`.
+        if self.ready {
+            let blockers = config.relationships.blocker_types();
+            if !graph::is_ready(task, state, &w.status_field, &w.closed_statuses, &blockers) {
+                return false;
+            }
+        }
+        let types = &config.relationships.types;
+        let rev = self
+            .compiled
+            .iter()
+            .any(|c| is_inverse_name(&c.field, types))
+            .then(|| inverse_index(state, types));
+        let ctx = FilterCtx {
+            types,
+            rev: rev.as_ref(),
+        };
+        self.compiled.iter().all(|c| c.matches(task, &ctx))
+    }
+}
+
 /// A filter operator. `=`/`!=` compare the field's value against a JSON-coerced
 /// query; `=~`/`!~` match a regex against the field's string form; `>`/`>=`/`<`/
 /// `<=` order it against the query (see [`Matcher::Cmp`]).

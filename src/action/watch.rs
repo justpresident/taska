@@ -185,7 +185,7 @@ pub fn validate(
 /// watch compares stored values, so a timestamp or graph column could never
 /// fire. `id` is accepted (it never changes). A relationship name, or an unknown
 /// one, gets the shared vocabulary error (`deps` / did-you-mean).
-fn resolve_columns(
+pub(crate) fn resolve_columns(
     config: &Config,
     vocab: &Vocabulary,
     columns: &[String],
@@ -215,7 +215,7 @@ fn resolve_columns(
 /// `task` narrowed to the watched columns (`deps` keeps its relationships), or
 /// `None` when it carries none of them - so a task gaining its first watched
 /// value reads as an addition, and one without any is no change at all.
-fn project(task: &TaskState, columns: &BTreeSet<String>) -> Option<TaskState> {
+pub(crate) fn project(task: &TaskState, columns: &BTreeSet<String>) -> Option<TaskState> {
     let custom_fields: serde_json::Map<String, serde_json::Value> = task
         .custom_fields
         .iter()

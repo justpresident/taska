@@ -28,6 +28,7 @@ pub mod compact;
 pub mod config;
 pub mod dep;
 pub mod edit;
+pub mod history;
 pub mod init;
 pub mod list;
 pub mod prime;

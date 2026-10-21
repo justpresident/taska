@@ -8,6 +8,15 @@ git log.
 ## [Unreleased]
 
 ### Added
+- **`ta history`** - the per-event log of matching tasks, `ta watch`'s
+  past-tense twin. It selects tasks exactly as `ta list` does (criteria,
+  `--open`/`--ready`, bare ids - `ta history api`; a deleted task by its last
+  state) and prints every event of each, oldest-first, with that event's own
+  `-`/`+` diff; undo compensations and merge resolutions are annotated.
+  `--since`, `--count N` (latest N), `--columns` (only events changing them)
+  and `--reverse` compose. Like `watch`, it ends with the cursor -
+  `{"cursor": N, "events": [...]}` in json - so a consumer can catch up with
+  `history` and continue with `watch --since <cursor>`.
 - **A bare word in criteria selects a task by id.** `ta list api db
   status=todo` means "api or db, with status todo" (several bare ids OR
   together, then AND with the other criteria); `ta watch api` watches one

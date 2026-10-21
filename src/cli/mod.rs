@@ -34,8 +34,9 @@ pub(crate) mod complete;
 use clap_complete::engine::{ArgValueCandidates, ArgValueCompleter};
 use commands::{
     cmd_compact, cmd_completions, cmd_config, cmd_create, cmd_delete, cmd_dep_group, cmd_edit,
-    cmd_init, cmd_list, cmd_prime, cmd_repair, cmd_resolve, cmd_self_update, cmd_show, cmd_status,
-    cmd_undo, cmd_update, cmd_watch, parse_duration, ConfigAction, DepAction, InstallScope,
+    cmd_history, cmd_init, cmd_list, cmd_prime, cmd_repair, cmd_resolve, cmd_self_update, cmd_show,
+    cmd_status, cmd_undo, cmd_update, cmd_watch, parse_duration, ConfigAction, DepAction,
+    InstallScope,
 };
 
 use crate::schema::FieldOps;
@@ -199,6 +200,43 @@ enum Commands {
         /// every field.
         #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(complete::columns))]
         columns: Vec<String>,
+        #[command(flatten)]
+        output: OutputArgs,
+    },
+    /// The per-event log of matching tasks, oldest-first: `ta history [criteria...]`
+    ///
+    /// `watch`'s past-tense twin: instead of waiting for new changes, replays the
+    /// retained log and prints every event of the tasks `ta list` would select - a `[seq:N] <time>
+    /// <op> <id>` header plus that event's `-`/`+` diff - then the cursor, the
+    /// `--since` a following `ta watch` continues from without gaps. Undo
+    /// compensations and merge resolutions are annotated. Compacted events are
+    /// gone; history starts at the oldest retained one.
+    History {
+        /// Filter criteria, same grammar as `ta list` (`field=value`, comparisons,
+        /// bare task ids - `ta history api`). They select tasks as `ta list` does,
+        /// by current state (a deleted task by its last state), and every event
+        /// of each selected task is shown.
+        #[arg(add = ArgValueCompleter::new(complete::criteria))]
+        criteria: Vec<String>,
+        /// Only report tasks that are not done.
+        #[arg(long)]
+        open: bool,
+        /// Only report tasks ready to work on: not done and every dependency done.
+        #[arg(long)]
+        ready: bool,
+        /// Only events after this mutation seq (default: all retained history).
+        #[arg(long)]
+        since: Option<u64>,
+        /// Only the last N matching events.
+        #[arg(long)]
+        count: Option<usize>,
+        /// Only events that changed these columns (comma-separated, as in `ta
+        /// watch`); each diff shows only them. Computed columns can't be used.
+        #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(complete::columns))]
+        columns: Vec<String>,
+        /// Newest-first instead of oldest-first.
+        #[arg(long)]
+        reverse: bool,
         #[command(flatten)]
         output: OutputArgs,
     },
@@ -902,6 +940,28 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             output,
         } => cmd_watch(
             store, &criteria, open, ready, since, timeout, holdout, &columns, &output,
+        ),
+        Commands::History {
+            criteria,
+            open,
+            ready,
+            since,
+            count,
+            columns,
+            reverse,
+            output,
+        } => cmd_history(
+            store,
+            &crate::action::history::HistoryQuery {
+                criteria: &criteria,
+                open,
+                ready,
+                since,
+                count,
+                columns: &columns,
+                reverse,
+            },
+            &output,
         ),
         Commands::Show { ids, display } => cmd_show(store, &ids, &display, &store.config().display),
         Commands::Edit {

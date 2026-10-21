@@ -318,22 +318,30 @@ pub fn ready_tasks<S: BuildHasher>(
     blockers: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     let order = validate_and_sort_dependencies(state, blockers)?;
-    let mut ready = Vec::new();
-    for id in order {
-        let Some(task) = state.get(&id) else {
-            continue;
-        };
-        if is_done(task, status_field, closed_statuses) {
-            continue;
-        }
-        let blocked = blocker_edges(task, blockers).into_iter().any(|(dep, _)| {
+    Ok(order
+        .into_iter()
+        .filter(|id| {
+            state
+                .get(id)
+                .is_some_and(|t| is_ready(t, state, status_field, closed_statuses, blockers))
+        })
+        .collect())
+}
+
+/// Whether one task is ready: not done, and no blocker dependency that exists
+/// is still open. The per-task rule behind [`ready_tasks`], for a caller that
+/// tests tasks one at a time (`history`, per event).
+pub fn is_ready<S: BuildHasher>(
+    task: &TaskState,
+    state: &HashMap<String, TaskState, S>,
+    status_field: &str,
+    closed_statuses: &[String],
+    blockers: &BTreeSet<String>,
+) -> bool {
+    !is_done(task, status_field, closed_statuses)
+        && !blocker_edges(task, blockers).into_iter().any(|(dep, _)| {
             state
                 .get(dep)
                 .is_some_and(|d| !is_done(d, status_field, closed_statuses))
-        });
-        if !blocked {
-            ready.push(id);
-        }
-    }
-    Ok(ready)
+        })
 }
