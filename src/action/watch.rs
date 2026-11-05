@@ -11,12 +11,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::action::columns::{full_vocabulary, ColumnUse, Vocabulary};
+use crate::action::columns::{full_vocabulary, reject_computed, ColumnUse, Vocabulary};
 use crate::action::{list, materialize, read};
 use crate::config::Config;
 use crate::error::DynError;
-use crate::model::{TaskState, BLOCKED_BY_KEY, DEPS_KEY, SUBTASKS_KEY, UNBLOCKS_KEY};
+use crate::model::{TaskState, DEPS_KEY};
 use crate::storage::EventStore;
+
+/// The command name the shared column checks report for a watch.
+const COMMAND: &str = "watch";
 
 /// One task that changed since the cursor: its state at the cursor (`before` -
 /// `None` if it was created since) and now (`after` - `None` if it was deleted).
@@ -47,12 +50,14 @@ pub struct WatchPoll {
 /// sees a task move into `x` and out of it, and a matching task's deletion (no
 /// current state at all) is the same rule. Two snapshots are compared, not
 /// every event between them, so a task that passes through the set entirely
-/// within one batch matches at neither end and goes unreported. Errors if `since` predates the retained log (compacted away).
+/// within one batch matches at neither end and goes unreported. Errors if
+/// `since` predates the retained log (compacted away).
 ///
-/// Criterion fields and a non-empty `columns` (display names) are checked as by
-/// [`validate`]. `columns` narrows the watch: only a change to one of them
-/// counts, and `before`/`after` carry only those columns. A task created or deleted without any of them set
-/// changes nothing watched, so it isn't reported. Empty = every field.
+/// Criterion fields, bare ids and a non-empty `columns` (display names) are
+/// checked as by [`validate`]. `columns` narrows the watch: only a change to
+/// one of them counts, and `before`/`after` carry only those columns. A task
+/// created or deleted without any of them set changes nothing watched, so it
+/// isn't reported. Empty = every field.
 pub fn poll(
     store: &impl EventStore,
     criteria: &[String],
@@ -96,16 +101,12 @@ pub fn poll(
     let mut after = materialize(config, &baseline, &muts);
     // Names checked against THIS snapshot (a frontend may skip `validate`).
     let vocab = Vocabulary::build(config, &after, &muts);
-    let fields = list::criteria_fields(criteria)?;
-    vocab.check(
-        &fields.iter().map(String::as_str).collect::<Vec<_>>(),
-        ColumnUse::Filter,
-    )?;
+    check_stored_filter(config, &vocab, &list::criteria_fields(criteria)?, COMMAND)?;
     list::check_ids(store, &after, &list::bare_ids(criteria))?;
     let watched = if columns.is_empty() {
         None
     } else {
-        Some(resolve_columns(config, &vocab, columns)?)
+        Some(resolve_columns(config, &vocab, columns, COMMAND)?)
     };
     read::rename_to_display(&mut before, config);
     read::rename_to_display(&mut after, config);
@@ -152,7 +153,8 @@ pub fn poll(
 /// silent wait until the timeout. See [`poll`].
 ///
 /// # Errors
-/// A malformed criterion, an unknown filter field, or an unwatchable column.
+/// A malformed criterion, an unknown or computed filter field, an unknown id,
+/// or an unwatchable column.
 pub fn validate(
     store: &impl EventStore,
     criteria: &[String],
@@ -168,8 +170,8 @@ pub fn validate(
         } else {
             full_vocabulary(store)?
         };
-    vocab.check(&names, ColumnUse::Filter)?;
-    resolve_columns(store.config(), &vocab, columns)?;
+    check_stored_filter(store.config(), &vocab, &fields, COMMAND)?;
+    resolve_columns(store.config(), &vocab, columns, COMMAND)?;
     let ids = list::bare_ids(criteria);
     if !ids.is_empty() {
         let config = store.config();
@@ -179,34 +181,43 @@ pub fn validate(
     Ok(())
 }
 
-/// The watched set named by `columns` (display names).
+/// Check the criterion `fields` of `command` (`watch`, `history`), which
+/// filters STORED state: each must be a known filter field, and not a computed
+/// column - known, but never stored, so it could never match there.
+pub(crate) fn check_stored_filter(
+    config: &Config,
+    vocab: &Vocabulary,
+    fields: &[String],
+    command: &str,
+) -> Result<(), DynError> {
+    let names: Vec<&str> = fields.iter().map(String::as_str).collect();
+    vocab.check(&names, ColumnUse::Filter)?;
+    reject_computed(
+        config,
+        &names,
+        &format!("`ta {command}` filters on stored values only, so it can't select by it"),
+    )
+}
+
+/// The watched set named by `columns` (display names) for `command` (`watch`,
+/// `history`).
 ///
 /// Watchable = any column of the store's vocabulary EXCEPT the computed ones -
-/// watch compares stored values, so a timestamp or graph column could never
-/// fire. `id` is accepted (it never changes). A relationship name, or an unknown
-/// one, gets the shared vocabulary error (`deps` / did-you-mean).
+/// both commands compare stored values, so a timestamp or graph column could
+/// never change. `id` is accepted (it never changes). A relationship name, or
+/// an unknown one, gets the shared vocabulary error (`deps` / did-you-mean).
 pub(crate) fn resolve_columns(
     config: &Config,
     vocab: &Vocabulary,
     columns: &[String],
+    command: &str,
 ) -> Result<BTreeSet<String>, DynError> {
-    let ts = &config.timestamps;
-    let computed = [
-        ts.create_time.as_str(),
-        ts.update_time.as_str(),
-        ts.close_time.as_str(),
-        UNBLOCKS_KEY,
-        BLOCKED_BY_KEY,
-        SUBTASKS_KEY,
-    ];
     for col in columns {
-        if !col.is_empty() && computed.contains(&col.as_str()) {
-            return Err(format!(
-                "`{col}` is a computed column - watch compares stored values only, so it \
-                 can't watch it"
-            )
-            .into());
-        }
+        reject_computed(
+            config,
+            &[col.as_str()],
+            &format!("`ta {command}` compares stored values only, so `--columns` can't name it"),
+        )?;
         vocab.check(&[col.as_str()], ColumnUse::List)?;
     }
     Ok(columns.iter().cloned().collect())

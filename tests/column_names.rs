@@ -208,3 +208,57 @@ fn a_declared_but_unused_field_is_accepted() {
     ta(&dir, &["list", "severity="]);
     ta(&dir, &["config", "set", "display.sort", "severity"]);
 }
+
+/// A computed column (timestamp or graph column) is a known name, but
+/// `history`, `watch` and `--if` guards compare STORED state, where one never
+/// appears - so each rejects it up front (exit 1) instead of matching nothing,
+/// waiting forever, or failing as a lost race (exit 3). `list` injects them
+/// and keeps accepting them.
+#[test]
+fn computed_columns_are_rejected_where_only_stored_values_are_compared() {
+    let dir = store("cols-computed");
+    assert!(ta(&dir, &["list", "unblocks>=1"]).contains('a'));
+
+    for criterion in ["unblocks>=1", "create_time>2000"] {
+        let err = rejects(&dir, &["history", criterion]);
+        assert!(
+            err.contains("is a computed column") && err.contains("`ta history`"),
+            "{criterion}: {err}"
+        );
+        let started = std::time::Instant::now();
+        let err = rejects(
+            &dir,
+            &["watch", criterion, "--since", "0", "--timeout", "30s"],
+        );
+        assert!(
+            err.contains("is a computed column") && err.contains("`ta watch`"),
+            "{criterion}: {err}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "rejected before blocking"
+        );
+    }
+
+    // `--columns` names the command it was given to, not always `watch`.
+    let err = rejects(&dir, &["history", "--columns", "update_time"]);
+    assert!(
+        err.contains("is a computed column") && err.contains("`ta history`"),
+        "{err}"
+    );
+
+    let err = rejects(
+        &dir,
+        &[
+            "update",
+            "a",
+            &format!("{STATUS_KEY}=in_progress"),
+            "--if",
+            "update_time>2000",
+        ],
+    );
+    assert!(
+        err.contains("is a computed column") && err.contains("`--if`"),
+        "{err}"
+    );
+}

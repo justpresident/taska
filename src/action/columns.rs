@@ -250,6 +250,42 @@ pub fn check_columns(
     vocabulary_for(store, names, usage)?.check(names, usage)
 }
 
+/// Whether `name` is a computed column: an enabled timestamp or a graph
+/// column (`unblocks`/`blocked_by`/`subtasks`). Its values are injected at
+/// read time and never stored.
+#[must_use]
+pub fn is_computed(config: &Config, name: &str) -> bool {
+    let ts = &config.timestamps;
+    !name.is_empty()
+        && [
+            ts.create_time.as_str(),
+            ts.update_time.as_str(),
+            ts.close_time.as_str(),
+            UNBLOCKS_KEY,
+            BLOCKED_BY_KEY,
+            SUBTASKS_KEY,
+        ]
+        .contains(&name)
+}
+
+/// Reject the first computed column in `names`.
+///
+/// For a surface that compares STORED state - `watch`, `history`, `--if`
+/// guards - where a computed column is a known name that could still never
+/// match. `why` completes the error: who compares what, and what it therefore
+/// can't do.
+///
+/// # Errors
+/// The first computed column named.
+pub fn reject_computed(config: &Config, names: &[&str], why: &str) -> Result<(), DynError> {
+    names
+        .iter()
+        .find(|n| is_computed(config, n))
+        .map_or(Ok(()), |name| {
+            Err(format!("`{name}` is a computed column - {why}").into())
+        })
+}
+
 /// A sort spec ([`crate::model::parse_sort`]) and where it came from - which
 /// decides what an unknown key costs (see [`check_sort`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -292,4 +328,28 @@ pub fn check_sort(
         .filter(|c| !vocab.accepts(c, ColumnUse::Sort))
         .map(|c| Warning::ConfigSort(vocab.unknown(c, ColumnUse::Sort)))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn computed_means_an_enabled_timestamp_or_a_graph_column() {
+        let mut config = Config::default();
+        let created = config.timestamps.create_time.clone();
+        assert!(is_computed(&config, &created));
+        assert!(is_computed(&config, UNBLOCKS_KEY));
+        assert!(!is_computed(&config, ID_KEY));
+        assert!(
+            !is_computed(&config, ""),
+            "a disabled timestamp's empty name"
+        );
+
+        // A disabled timestamp frees its name for an ordinary stored field.
+        config.timestamps.create_time = String::new();
+        assert!(!is_computed(&config, &created));
+        assert!(reject_computed(&config, &[created.as_str()], "-").is_ok());
+        assert!(reject_computed(&config, &[SUBTASKS_KEY], "-").is_err());
+    }
 }

@@ -106,10 +106,11 @@ enum Commands {
         #[arg(long)]
         new_field: bool,
         /// Apply ONLY if the task currently matches every condition (same syntax as
-        /// `ta list` filters, e.g. `--if status=todo --if owner=`). Checked
-        /// atomically under the store lock (compare-and-swap): if it doesn't hold,
-        /// the write is rejected with exit code 3 - so agents can race to claim a
-        /// task and exactly one wins. Repeatable (all must hold).
+        /// `ta list` filters, e.g. `--if status=todo --if owner=`, minus computed
+        /// columns). Checked atomically under the store lock (compare-and-swap):
+        /// if it doesn't hold, the write is rejected with exit code 3 - so agents
+        /// can race to claim a task and exactly one wins. Repeatable (all must
+        /// hold).
         #[arg(long = "if", value_name = "COND", add = ArgValueCompleter::new(complete::criteria))]
         guard: Vec<String>,
     },
@@ -123,8 +124,9 @@ enum Commands {
         #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         id: String,
         /// Delete ONLY if the task currently matches every condition (same syntax
-        /// as `ta list`; repeatable, all must hold). Checked atomically under the
-        /// store lock; fails with exit code 3 otherwise.
+        /// as `ta list`, minus computed columns; repeatable, all must hold).
+        /// Checked atomically under the store lock; fails with exit code 3
+        /// otherwise.
         #[arg(long = "if", value_name = "COND", add = ArgValueCompleter::new(complete::criteria))]
         guard: Vec<String>,
     },
@@ -147,7 +149,8 @@ enum Commands {
         /// error. With none given, lists every task.
         #[arg(add = ArgValueCompleter::new(complete::criteria))]
         criteria: Vec<String>,
-        /// Only tasks that are not done (status is not the configured done value)
+        /// Only tasks that are not done (status is not one of the configured
+        /// closed statuses)
         #[arg(long)]
         open: bool,
         /// Only tasks ready to work on: not done and every dependency done
@@ -162,17 +165,18 @@ enum Commands {
     /// or deleted with `seq` greater than `--since`, then prints a per-task diff of
     /// what changed and exits 0. A task counts if it matched at the cursor OR
     /// matches now, so leaving the filter (e.g. `status=in_progress` -> `closed`)
-    /// is reported like entering it. On the first change it waits `--holdout` to batch a
-    /// burst. The diff ends with the cursor it was computed at (`[seq:N]`;
-    /// `{"cursor": N, "changes": [...]}` in json) - the next `--since`, so a loop
-    /// resumes with nothing skipped or repeated. If nothing matches before
-    /// `--timeout`, prints `No updates yet` to stderr and exits 1. Seed the first
-    /// `--since` from `ta status --current` (or the `[seq:N]` any mutation
-    /// prints); computed columns aren't available as filters.
+    /// is reported like entering it. On the first change it waits `--holdout` to
+    /// batch a burst. The diff ends with the cursor it was computed at
+    /// (`[seq:N]`; `{"cursor": N, "changes": [...]}` in json) - the next
+    /// `--since`, so a loop resumes with nothing skipped or repeated. If nothing
+    /// matches before `--timeout`, prints `No updates yet` to stderr and exits 1.
+    /// Seed the first `--since` from `ta status --current` (or the `[seq:N]` any
+    /// mutation prints).
     Watch {
         /// Filter criteria, same grammar as `ta list` (`field=value`, `field=~regex`,
         /// `field!=value`, comparisons, or bare task ids); with none given, every
-        /// changed task matches.
+        /// changed task matches. Watch compares stored values, so a computed
+        /// column (timestamps, `unblocks`/`blocked_by`/`subtasks`) is rejected.
         #[arg(add = ArgValueCompleter::new(complete::criteria))]
         criteria: Vec<String>,
         /// Only report tasks that are not done.
@@ -196,8 +200,8 @@ enum Commands {
         /// Watch only these columns (comma-separated, as in `ta list`): a task is
         /// reported only when one of them changed, and its diff shows only them.
         /// Any task field, or `deps` for relationship changes; computed columns
-        /// (timestamps, `unblocks`/`blocked_by`/`subtasks`) can't be watched. Default:
-        /// every field.
+        /// (timestamps, `unblocks`/`blocked_by`/`subtasks`) can't be watched.
+        /// Default: every field.
         #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(complete::columns))]
         columns: Vec<String>,
         #[command(flatten)]
@@ -206,16 +210,19 @@ enum Commands {
     /// The per-event log of matching tasks, oldest-first: `ta history [criteria...]`
     ///
     /// `watch`'s past-tense twin: instead of waiting for new changes, replays the
-    /// retained log and prints every event of the tasks `ta list` would select - a `[seq:N] <time>
-    /// <op> <id>` header plus that event's `-`/`+` diff - then the cursor, the
-    /// `--since` a following `ta watch` continues from without gaps. Undo
+    /// retained log and prints every event of the tasks `ta list` would select -
+    /// a `[seq:N] <time> <op> <id>` header plus that event's `-`/`+` diff - then
+    /// the cursor, the `--since` a following `ta watch` continues from without
+    /// gaps. Undo
     /// compensations and merge resolutions are annotated. Compacted events are
     /// gone; history starts at the oldest retained one.
     History {
         /// Filter criteria, same grammar as `ta list` (`field=value`, comparisons,
         /// bare task ids - `ta history api`). They select tasks as `ta list` does,
         /// by current state (a deleted task by its last state), and every event
-        /// of each selected task is shown.
+        /// of each selected task is shown. History replays stored values, so a
+        /// computed column (timestamps, `unblocks`/`blocked_by`/`subtasks`) is
+        /// rejected.
         #[arg(add = ArgValueCompleter::new(complete::criteria))]
         criteria: Vec<String>,
         /// Only report tasks that are not done.

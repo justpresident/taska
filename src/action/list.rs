@@ -23,7 +23,7 @@ use crate::storage::EventStore;
 /// columns the frontend intends to display, and the sibling ordering.
 pub struct ListQuery<'a> {
     pub criteria: &'a [String],
-    /// Only not-done tasks (status is not the configured done value).
+    /// Only not-done tasks (status is not one of the configured closed statuses).
     pub open: bool,
     /// Only tasks ready to work on: not done and every dependency done. Implies
     /// (and subsumes) `open`.

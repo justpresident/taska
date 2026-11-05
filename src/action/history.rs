@@ -6,23 +6,27 @@
 //! the selected tasks with that event's own before/after - how a task got where
 //! it is. Tasks are selected exactly as `list` selects them (current state; a
 //! deleted task by its last state), so `history <filter>` is the history of
-//! what `list <filter>` shows. The
-//! frontend renders the per-field diff (`format::state_diff`, shared with
-//! `watch`/`undo`). The returned `cursor` is the log's high-water seq, so a
-//! caller can catch up with `history` and continue with `watch --since cursor`
-//! with nothing skipped or repeated.
+//! what `list <filter>` shows - except that a computed column (a timestamp,
+//! `unblocks`/`blocked_by`/`subtasks`) is rejected as a filter, since the
+//! replayed state never stores one. The frontend renders the per-field diff
+//! (`format::state_diff`, shared with `watch`/`undo`). The returned `cursor` is
+//! the log's high-water seq, so a caller can catch up with `history` and
+//! continue with `watch --since cursor` with nothing skipped or repeated.
 
 use std::collections::{BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 
-use crate::action::columns::{ColumnUse, Vocabulary};
+use crate::action::columns::Vocabulary;
 use crate::action::{list, watch};
 use crate::engine::Engine;
 use crate::error::DynError;
 use crate::model::{MutationEvent, OpType, TaskState};
 use crate::schema::rename_to_display;
 use crate::storage::EventStore;
+
+/// The command name the shared column checks report for a history read.
+const COMMAND: &str = "history";
 
 /// A `history` query (every name in DISPLAY form).
 pub struct HistoryQuery<'a> {
@@ -73,8 +77,8 @@ pub struct HistoryOutcome {
 /// Replay the retained log and collect the events of matching tasks.
 ///
 /// # Errors
-/// A malformed criterion, an unknown filter field / id / column, or a `since`
-/// below the compaction watermark (those events are gone).
+/// A malformed criterion, an unknown or computed filter field, an unknown id or
+/// column, or a `since` below the compaction watermark (those events are gone).
 pub fn history(store: &impl EventStore, query: &HistoryQuery) -> Result<HistoryOutcome, DynError> {
     let config = store.config();
     let baseline = store.load_baseline()?;
@@ -193,16 +197,17 @@ fn check_names(
         &config.workflow.closed_statuses,
     );
     let vocab = Vocabulary::build(config, &now, log);
-    let fields = list::criteria_fields(query.criteria)?;
-    vocab.check(
-        &fields.iter().map(String::as_str).collect::<Vec<_>>(),
-        ColumnUse::Filter,
+    watch::check_stored_filter(
+        config,
+        &vocab,
+        &list::criteria_fields(query.criteria)?,
+        COMMAND,
     )?;
     list::check_ids(store, &now, &list::bare_ids(query.criteria))?;
     if query.columns.is_empty() {
         return Ok(None);
     }
-    watch::resolve_columns(config, &vocab, query.columns).map(Some)
+    watch::resolve_columns(config, &vocab, query.columns, COMMAND).map(Some)
 }
 
 /// The command vocabulary for an event's op - what the user typed to make it.

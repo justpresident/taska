@@ -160,14 +160,14 @@ pub fn delete(
 ///
 /// Guards use display field names (identical to `ta list`), so the canonical
 /// `state` is shaped to a display view first (rename only - no computed/timestamp
-/// injection, same limitation as `watch`). A missing task is a plain error; an
-/// unmet guard carries exit code [`crate::error::ExitCode::Precondition`].
+/// injection, same as `watch`). A missing task is a plain error; an unmet guard
+/// carries exit code [`crate::error::ExitCode::Precondition`].
 ///
 /// Every guard field must be a known column - the store's vocabulary over this
 /// same `state`/`log`, plus the CANONICAL fields this write itself `introduces`
-/// (a first claim `owner=me --if owner=` names the field it creates). An
-/// unknown one is a plain error with a did-you-mean, never a failed condition:
-/// a typo must not read as "someone else got there first".
+/// (a first claim `owner=me --if owner=` names the field it creates) - and not a
+/// computed one, which this view never carries. Either is a plain error, never a
+/// failed condition: a typo must not read as "someone else got there first".
 fn ensure_guard(
     state: &HashMap<String, TaskState>,
     log: &[MutationEvent],
@@ -176,25 +176,30 @@ fn ensure_guard(
     guard: &[String],
     config: &crate::config::Config,
 ) -> Result<(), DynError> {
-    use crate::action::columns::{ColumnUse, Vocabulary};
+    use crate::action::columns::{reject_computed, ColumnUse, Vocabulary};
     if guard.is_empty() {
         return Ok(());
     }
     // The guard already targets `id`, so a bare id there could only be
     // always-false or redundant - and a typo would read as a lost race.
     if let Some(bare) = crate::action::list::bare_ids(guard).first() {
+        let w = &config.workflow;
         return Err(format!(
             "a guard can't select by id (`{bare}`) - `--if` takes conditions on `{id}` \
-             itself, e.g. `--if status=todo`"
+             itself, e.g. `--if {}={}`",
+            w.status_field, w.default_status
         )
         .into());
     }
     let mut vocab = Vocabulary::build(config, state, log);
     vocab.add_canonical(config, introduces);
     let fields = crate::action::list::criteria_fields(guard)?;
-    vocab.check(
-        &fields.iter().map(String::as_str).collect::<Vec<_>>(),
-        ColumnUse::Filter,
+    let names: Vec<&str> = fields.iter().map(String::as_str).collect();
+    vocab.check(&names, ColumnUse::Filter)?;
+    reject_computed(
+        config,
+        &names,
+        "an `--if` guard compares stored values only, so it can't test it",
     )?;
     let mut display = state.clone();
     crate::action::read::rename_to_display(&mut display, config);

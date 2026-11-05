@@ -52,7 +52,11 @@ git log.
   still works. `ta config set` rejects an unknown `[display] sort` or
   `column_max_width` key and `ta config validate` reports one; a bad
   configured sort only warns on reads. Shell completion offers exactly the
-  accepted names.
+  accepted names. A computed column (a timestamp, `unblocks`, `blocked_by`,
+  `subtasks`) is rejected the same way where only stored values are compared -
+  `history` and `watch` criteria and `--columns`, and `--if` guards - instead
+  of matching nothing, waiting until the timeout, or failing as a lost race;
+  `list`, `show` and `dep tree` keep computing them.
 
 ### Changed
 - **`ta watch` reports tasks leaving the filter, not only entering it.** A
