@@ -1,6 +1,6 @@
 [package]
 name = "taska"
-version = "1.4.0"
+version = "1.5.0"
 edition = "2021"
 # std's File::lock (the mutation log's writer lock) is the newest API in use.
 rust-version = "1.89"

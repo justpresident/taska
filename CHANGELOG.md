@@ -7,6 +7,19 @@ git log.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-05
+
+`ta history` shows how tasks got where they are, `ta watch` hands back a
+resumable cursor and can watch selected columns, criteria take bare task ids,
+`--sort` takes several keys, and more than one status can close a task. Every
+surface that takes a column name rejects one it can't resolve, with a
+did-you-mean, instead of silently matching nothing.
+
+Two JSON outputs change shape (`ta watch` and `ta prime`, marked **Breaking
+for JSON consumers** below), and so do several signatures of the `taska`
+library crate (the last entry under Changed). Check those if you script
+against `--format json` or depend on the crate.
+
 ### Added
 - **`ta history`** - the per-event log of matching tasks, `ta watch`'s
   past-tense twin. It selects tasks exactly as `ta list` does (criteria,
@@ -35,13 +48,11 @@ git log.
   greyed-out rendering. Moving between two closed statuses keeps the original
   `close_time`. With a `transitions` workflow, every state must reach at least
   one closed status declared by that type.
-
 - **`ta watch --columns a,b`** watches only those columns: a task is reported
   only when one of them changed, and its diff shows only them. Any task field,
   or `deps` for relationship changes. Computed columns (timestamps,
   `unblocks`/`blocked_by`/`subtasks`) and unknown names are rejected up front
   (with a did-you-mean) instead of waiting forever.
-
 - **Unknown column names are rejected everywhere, with a did-you-mean.**
   `--columns`, `--sort` (each key), filter criteria, `--if` guards and
   `watch --columns` used to accept any name - an unknown sort key silently
@@ -74,16 +85,25 @@ git log.
 - **`[workflow] done_status` is renamed `closed_statuses`.** Existing configs
   keep working unchanged: `done_status = "closed"` still loads (as a one-item
   list), and `ta config set workflow.closed_statuses ...` replaces the old key.
-  `ta prime --format json` reports `closed_statuses` (an array) in place of
-  `done_status`.
+  **Breaking for JSON consumers:** `ta prime --format json` reports
+  `closed_statuses` (an array) in place of `done_status`.
 - **Building from source needs Rust 1.89 or newer** (`rust-version` is now
   declared). The event log's writer lock uses the standard library's
   `File::lock` instead of the `fd-lock` crate - the same `flock` / `LockFileEx`
   lock underneath, so an older and a newer `ta` still exclude each other.
 - **One TOML library instead of two.** Config, the `ta edit` document and
   `ta config set` all go through `toml_edit`; the `toml` crate is no longer a
-  dependency. CLI output is unchanged. For library users,
-  `taska::action::config::get` and `list` now return `toml_edit::Value`.
+  dependency. CLI output is unchanged.
+- **Library API (the `taska` crate).** `model::is_done`,
+  `Engine::materialize_state`/`materialize_report` and the `graph` readiness
+  and progress helpers take `closed_statuses: &[String]` instead of one done
+  status, and `WorkflowConfig::done_status` is now
+  `closed_statuses: Vec<String>`. `model::task_cmp` takes `&[SortKey]` (from
+  `model::parse_sort`), and `ListQuery::sort`/`TreeQuery::sort` are an
+  `action::columns::SortSpec`. `action::watch::poll` takes the watched
+  `columns` and returns a `WatchPoll` (cursor + updates).
+  `action::config::get`/`list` return `toml_edit::Value`. `action::Warning`
+  gains a `ConfigSort` variant.
 
 ## [1.4.0] - 2026-09-25
 
