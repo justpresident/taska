@@ -7,6 +7,11 @@ git log.
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-23
+
+A fix for stores that keep their data outside the repository. Nothing changes
+for a store whose data lives in the repo.
+
 ### Fixed
 - **`ta init` and `ta prime` no longer tell agents to commit a log this repo
   doesn't hold.** When `[store] dir` keeps the data outside the checkout (in
