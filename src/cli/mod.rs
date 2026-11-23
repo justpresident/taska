@@ -978,7 +978,9 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             toml: _,
         } => cmd_edit(store, &id, create, json),
         Commands::Status { current, output } => cmd_status(store, current, &output),
-        Commands::Prime { output } => cmd_prime(store, &output),
+        Commands::Prime { output } => {
+            cmd_prime(store, crate::scm::data_in_checkout(store), &output)
+        }
         Commands::Undo {
             seq,
             count,

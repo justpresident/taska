@@ -285,6 +285,49 @@ fn data_in_another_repo_is_wired_there_and_not_committed_here() {
     assert_eq!(rows(&log), before + 1, "committed there, so compensated");
 }
 
+/// The agent guidance - `init`'s block and `ta prime` - tells agents to commit
+/// `.taska/` with the code only while the data lives in this checkout. Data in
+/// another repo or in none has nothing to commit here, so re-running `init`
+/// re-syncs the block without that habit and `prime` leaves it out, and moving
+/// the data back into the project brings it back in both.
+#[test]
+fn commit_advice_follows_the_data() {
+    let (root, proj) = project("store-dir-agent-block");
+    let block = || fs::read_to_string(proj.join("AGENTS.md")).unwrap();
+    let prime = || ta(&proj, &["prime"]);
+    let advises_commit = |text: &str| {
+        [
+            "same commit as the code",
+            "commit those first",
+            "commit `.taska/` with the code",
+        ]
+        .iter()
+        .any(|advice| text.contains(advice))
+    };
+    assert!(advises_commit(&block()), "default layout: {}", block());
+    assert!(advises_commit(&prime()), "default layout: {}", prime());
+
+    let tasks_repo = root.join("tasks-repo");
+    fs::create_dir_all(&tasks_repo).unwrap();
+    init_repo(&tasks_repo);
+    for elsewhere in ["../../tasks-repo/proj", "../../no-repo"] {
+        set_store_dir(&proj, elsewhere);
+        ta(&proj, &["init", "--no-commit"]);
+        let text = block();
+        assert!(!advises_commit(&text), "{elsewhere}: {text}");
+        assert!(text.contains("ta prime"), "the rest stays: {text}");
+        assert_eq!(text.matches("BEGIN TASKA INTEGRATION").count(), 1);
+        let guide = prime();
+        assert!(!advises_commit(&guide), "{elsewhere}: {guide}");
+        assert!(guide.contains("## Working a task"), "{guide}");
+    }
+
+    set_store_dir(&proj, "../tasks");
+    ta(&proj, &["init", "--no-commit"]);
+    assert!(advises_commit(&block()), "back in the project: {}", block());
+    assert!(advises_commit(&prime()), "back in the project: {}", prime());
+}
+
 /// Two branches that set the same field of `t` to different values, then a merge
 /// of `feature` into `main`. Returns the merge's output.
 fn conflicting_merge(proj: &Path) -> Output {

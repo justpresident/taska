@@ -111,9 +111,12 @@ pub fn init(commit: bool) -> Result<InitOutcome, DynError> {
     scm::setup(&data_dir)?;
 
     // The block is config-AGNOSTIC (durable bare commands + working habits +
-    // pointers to `ta prime`/`--help`), so it needs nothing from the store and
-    // never drifts as the config changes - `ta prime` carries the dynamic detail.
-    let agent_files = sync_agent_files(&repo_root, &integration_block())?;
+    // pointers to `ta prime`/`--help`) - `ta prime` carries the dynamic detail.
+    // The one thing it takes from the store is whether the data lives in this
+    // checkout: data moved out of it (`[store] dir` in another repo, or in none)
+    // has nothing to commit alongside this repo's code.
+    let block = integration_block(scm::data_in_checkout(&store));
+    let agent_files = sync_agent_files(&repo_root, &block)?;
 
     // Commit only what this run touched: the store, the merge-driver registration,
     // and an agent file we actually wrote (Created/Updated) - never one left
@@ -229,15 +232,26 @@ fn splice_block(existing: &str, block: &str) -> Option<String> {
     Some(out)
 }
 
+/// The working habit that keeps the log in step with the code - only for a store
+/// whose data lives in the same checkout as the agent file.
+const COMMIT_HABIT: &str = "- Commit the `.taska/` change in the same commit as the code it \
+                            describes; if the store has pending changes unrelated to what \
+                            you're starting, commit those first.";
+
 /// Build the marker-delimited integration block.
 ///
 /// Deliberately CONFIG-AGNOSTIC: bare command shapes (placeholders, not this
 /// store's field/status/type/relationship names), the durable working habits,
 /// and pointers to `ta prime` (for the dynamic, config-tailored schema and
 /// examples) and `ta <command> --help` (for flags). Because it names nothing that
-/// can change, it never drifts as the config evolves - the same block fits every
-/// store, and re-running `init` only rewrites it when this guidance text changes.
-fn integration_block() -> String {
+/// can change, it never drifts as the schema evolves - re-running `init` only
+/// rewrites it when this guidance text changes, or when `[store] dir` moves the
+/// data into or out of this checkout.
+///
+/// `data_in_checkout` is false when the data files live outside the repo that
+/// holds the agent file. The block then leaves out the habit of committing
+/// `.taska/` with the code, which would contradict where the store keeps its log.
+fn integration_block(data_in_checkout: bool) -> String {
     // Bare command shapes - `<field>`/`<type>`/`<target>` placeholders, never a
     // configured name. The aligned comments line up via the longest command.
     let cmds: [(&str, &str); 6] = [
@@ -267,6 +281,11 @@ fn integration_block() -> String {
         .map(|(c, n)| format!("{c:<width$}  # {n}"))
         .collect::<Vec<_>>()
         .join("\n");
+    let commit_habit = if data_in_checkout {
+        format!("\n{COMMIT_HABIT}")
+    } else {
+        String::new()
+    };
 
     let body = format!(
         "## Task tracking (taska)\n\
@@ -290,9 +309,7 @@ fn integration_block() -> String {
          (`<field>=@FILE`) instead of quoting on the command line (`+=`/`-=` accept `@` too).\n\
          - Set prerequisites with `ta dep add`, and append progress to related tasks \
          (`<field>+=...`) as things change so the trail stays current.\n\
-         - Read a task's full, untruncated notes with `ta show <id> --full`.\n\
-         - Commit the `.taska/` change in the same commit as the code it describes; if the \
-         store has pending changes unrelated to what you're starting, commit those first."
+         - Read a task's full, untruncated notes with `ta show <id> --full`.{commit_habit}"
     );
     let hash = short_hash(&body);
     format!("{BLOCK_BEGIN} v{BLOCK_VERSION} hash:{hash} -->\n{body}\n{BLOCK_END}")
@@ -314,7 +331,7 @@ mod tests {
 
     #[test]
     fn block_is_marker_delimited_and_config_agnostic() {
-        let b = integration_block();
+        let b = integration_block(true);
         assert!(b.starts_with(BLOCK_BEGIN), "begins with the marker: {b}");
         assert!(b.contains("hash:"), "carries a content hash: {b}");
         assert!(
@@ -350,6 +367,27 @@ mod tests {
             b.contains("unrelated to what you're starting"),
             "commit hygiene: {b}"
         );
+    }
+
+    /// Data kept outside this checkout has nothing to commit with this repo's
+    /// code, so that habit - and only that one - is left out.
+    #[test]
+    fn block_drops_only_the_commit_habit_when_the_data_is_elsewhere() {
+        let here = integration_block(true);
+        let elsewhere = integration_block(false);
+        assert!(here.contains(COMMIT_HABIT), "{here}");
+        assert!(
+            !elsewhere.contains("same commit") && !elsewhere.contains("commit those first"),
+            "{elsewhere}"
+        );
+        // Past the BEGIN marker (whose hash differs), the blocks differ only by
+        // that bullet.
+        let body = |b: &str| b.lines().skip(1).collect::<Vec<_>>().join("\n");
+        assert_eq!(
+            body(&here).replace(&format!("\n{COMMIT_HABIT}"), ""),
+            body(&elsewhere)
+        );
+        assert_ne!(here.lines().next(), elsewhere.lines().next(), "own hash");
     }
 
     #[test]

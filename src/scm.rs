@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::error::DynError;
-use crate::storage::{BASELINE_FILE, MUTATIONS_FILE, STORE_DIR_NAME};
+use crate::storage::{FileStore, BASELINE_FILE, MUTATIONS_FILE, STORE_DIR_NAME};
 
 const LOG_DRIVER: &str = "taska-merge-driver";
 const BASELINE_DRIVER: &str = "taska-baseline-keep-ours";
@@ -146,6 +146,21 @@ pub fn committed_registration_paths(data_dir: &Path) -> Vec<PathBuf> {
 pub fn same_checkout(a: &Path, b: &Path) -> bool {
     let root = |p: &Path| detect_scm(p).and_then(|(_, root)| std::fs::canonicalize(root).ok());
     matches!((root(a), root(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// Whether the project's own commits carry the store's log.
+///
+/// True for the default layout (even with no SCM at all), and for a `[store]
+/// dir` elsewhere only when the project's checkout holds it. When this is
+/// false, another repository versions the log, or none does. The
+/// agent guidance (`init`'s block, `ta prime`) then doesn't tell agents to
+/// commit `.taska/` with the code.
+pub fn data_in_checkout(store: &FileStore) -> bool {
+    !store.data_relocated()
+        || matches!(
+            (store.repo_root(), store.data_dir()),
+            (Some(project), Ok(data)) if same_checkout(project, data)
+        )
 }
 
 /// Where the git attributes mapping a store's data files to the drivers live,

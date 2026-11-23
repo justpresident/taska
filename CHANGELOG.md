@@ -7,6 +7,15 @@ git log.
 
 ## [Unreleased]
 
+### Fixed
+- **`ta init` and `ta prime` no longer tell agents to commit a log this repo
+  doesn't hold.** When `[store] dir` keeps the data outside the checkout (in
+  another repository, or in none), the agent-integration block `ta init` writes
+  into `AGENTS.md`/`CLAUDE.md` leaves out "Commit the `.taska/` change in the
+  same commit as the code it describes", and the `ta prime` guide drops its
+  commit-with-the-code advice too. Re-run `ta init` to refresh an existing
+  block. Stores whose data lives in the checkout get the same text as before.
+
 ## [1.5.0] - 2026-11-05
 
 `ta history` shows how tasks got where they are, `ta watch` hands back a

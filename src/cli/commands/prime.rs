@@ -12,14 +12,21 @@ use crate::error::DynError;
 use crate::format::{render_args, OutputArgs};
 use crate::storage::EventStore;
 
-pub fn cmd_prime(store: &impl EventStore, output: &OutputArgs) -> Result<(), DynError> {
+/// `data_in_checkout` says whether the project's commits carry the log (see
+/// [`crate::scm::data_in_checkout`]); when they don't, the guide leaves out the
+/// advice to commit `.taska/` with the code.
+pub fn cmd_prime(
+    store: &impl EventStore,
+    data_in_checkout: bool,
+    output: &OutputArgs,
+) -> Result<(), DynError> {
     let outcome = prime(store)?;
     for warning in render_warnings(&outcome.warnings) {
         eprintln!("{warning}");
     }
     for line in render_args(
         output,
-        || render_guide(&outcome.facts),
+        || render_guide(&outcome.facts, data_in_checkout),
         // The facts are a plain serializable struct, so `to_value` can't fail in
         // practice; `unwrap_or_default` mirrors the serialization idiom in `render_args`.
         || serde_json::to_value(&outcome.facts).unwrap_or_default(),
@@ -239,18 +246,33 @@ fn schema_section(f: &PrimeFacts) -> String {
 }
 
 /// Render the config-tailored markdown primer.
-fn render_guide(f: &PrimeFacts) -> String {
+///
+/// With `data_in_checkout` false (`[store] dir` keeps the log in another
+/// repository, or in none), the three places that tell agents to commit `.taska/`
+/// with the code are left out - this repo's commits can't carry the log.
+fn render_guide(f: &PrimeFacts, data_in_checkout: bool) -> String {
     let sf = &f.status_field;
     let ex = examples(f);
     let s = &f.summary;
+    let (commit_with_code, history, commit_after_close) = if data_in_checkout {
+        (
+            ", and commit the `.taska/` change in the same commit as the code it describes",
+            "Keep git history coherent: the eventlog change and the code it describes belong in \
+             one commit - if the store has pending `.taska/` changes unrelated to what you're \
+             starting, commit those first.\n\
+             \n",
+            " - then commit `.taska/` with the code",
+        )
+    } else {
+        ("", "", "")
+    };
 
     format!(
         "# taska (`ta`) - task & dependency tracker for this repo\n\
          \n\
          Tasks live in an append-only log in `.taska/`, replayed to current state; branches \
          reconcile automatically via a git merge driver. Drive the store ONLY through `ta` \
-         (never hand-edit `.taska/*.jsonl`), and commit the `.taska/` change in the same \
-         commit as the code it describes.\n\
+         (never hand-edit `.taska/*.jsonl`){commit_with_code}.\n\
          \n\
          ## Schema (dynamic - defined by `.taska/config.toml`, not hardcoded)\n\
          Field names, statuses, types, and relationships are THIS store's config; another \
@@ -277,14 +299,11 @@ fn render_guide(f: &PrimeFacts) -> String {
          {write_block}\n\
          ```\n\
          \n\
-         Keep git history coherent: the eventlog change and the code it describes belong in one \
-         commit - if the store has pending `.taska/` changes unrelated to what you're starting, \
-         commit those first.\n\
-         \n\
+         {history}\
          ## Working a task\n\
          1. `ta list --ready` - pick actionable work.  2. `ta update <id> {sf}={claim}` - \
-         claim it.  3. do it, appending notes as you go.  4. `ta update <id> {sf}={done}` - \
-         then commit `.taska/` with the code.  5. file the follow-ups you discover.\n\
+         claim it.  3. do it, appending notes as you go.  4. `ta update <id> {sf}={done}`\
+         {commit_after_close}.  5. file the follow-ups you discover.\n\
          \n\
          {open} open ({ready} ready, {blocked} blocked), {closed} closed. Re-run `ta prime` \
          to refresh.\n",
@@ -311,7 +330,7 @@ mod tests {
     use crate::test_support::{store_renamed, store_with_schema};
 
     fn guide() -> String {
-        render_guide(&prime(&store_with_schema()).unwrap().facts)
+        render_guide(&prime(&store_with_schema()).unwrap().facts, true)
     }
 
     #[test]
@@ -393,9 +412,40 @@ mod tests {
         );
     }
 
+    /// With the log kept outside this checkout, nothing in the guide tells an
+    /// agent to commit `.taska/` with the code; the rest of it still reads whole.
+    #[test]
+    fn guide_drops_the_commit_advice_when_the_data_is_elsewhere() {
+        let facts = prime(&store_with_schema()).unwrap().facts;
+        let here = render_guide(&facts, true);
+        let elsewhere = render_guide(&facts, false);
+        for advice in [
+            "in the same commit as the code",
+            "Keep git history coherent",
+            "then commit `.taska/` with the code",
+        ] {
+            assert!(here.contains(advice), "{advice}: {here}");
+            assert!(!elsewhere.contains(advice), "{advice}: {elsewhere}");
+        }
+        assert!(
+            elsewhere.contains("(never hand-edit `.taska/*.jsonl`).\n"),
+            "{elsewhere}"
+        );
+        assert!(
+            elsewhere.contains("```\n\n## Working a task\n"),
+            "{elsewhere}"
+        );
+        assert!(
+            elsewhere.contains(&format!(
+                "ta update <id> {STATUS_FIELD}={DONE_STATUS}`.  5. file the follow-ups"
+            )),
+            "{elsewhere}"
+        );
+    }
+
     #[test]
     fn guide_is_free_form_when_no_schema_is_declared() {
-        let g = render_guide(&prime(&store_renamed()).unwrap().facts);
+        let g = render_guide(&prime(&store_renamed()).unwrap().facts, true);
         assert!(
             g.contains("free-form") && g.contains("any field name is accepted"),
             "explains the free-form fallback: {g}"
