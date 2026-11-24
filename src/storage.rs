@@ -94,12 +94,6 @@ pub trait EventStore {
     /// Replace the baseline with `baseline` and rewrite the log to contain
     /// exactly `retained` (the recent events kept for merge reconciliation).
     fn compact(&self, baseline: &[TaskState], retained: &[MutationEvent]) -> Result<(), DynError>;
-    /// Rewrite the mutation log to contain exactly `events`, returning the watch
-    /// cursor over the rewritten log (taken under the same lock), leaving the
-    /// baseline untouched. A rewrite computed from an earlier read - previewed,
-    /// then confirmed - goes through [`FileStore::rewrite_mutations`] instead,
-    /// which re-reads the log under the lock.
-    fn replace_mutations(&self, events: &[MutationEvent]) -> Result<u64, DynError>;
 }
 
 /// The store directory walk-up discovery looks for and `ta init` creates.
@@ -556,31 +550,6 @@ impl EventStore for FileStore {
         // the high-water), while the log lock is still held.
         self.number(retained, true)?;
         Ok(())
-    }
-
-    /// Rewrite the log in place with exactly `events`, leaving the baseline alone.
-    /// Mirrors `compact`'s log-rewrite under the same exclusive lock so a
-    /// concurrent `append_events` can't slip an event in mid-rewrite. Unlike
-    /// `compact` it never touches the baseline - dropping no-op orphans is
-    /// state-neutral, so there is nothing to fold.
-    fn replace_mutations(&self, events: &[MutationEvent]) -> Result<u64, DynError> {
-        let mut locked_file = self.open_log_locked(
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false), // we truncate explicitly under the lock, below
-        )?;
-
-        locked_file.set_len(0)?;
-        locked_file.seek(SeekFrom::Start(0))?;
-        for event in events {
-            writeln!(locked_file, "{}", serde_json::to_string(event)?)?;
-        }
-        locked_file.flush()?;
-        // Events may have left the log: drop their arrival entries, keeping the
-        // high-water so the cursor never goes backwards.
-        Ok(self.number(events, true)?.cursor)
     }
 }
 

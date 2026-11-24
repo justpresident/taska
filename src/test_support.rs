@@ -55,10 +55,6 @@ impl EventStore for InMemoryStore {
         *self.events.borrow_mut() = retained.to_vec();
         Ok(())
     }
-    fn replace_mutations(&self, events: &[MutationEvent]) -> Result<u64, DynError> {
-        *self.events.borrow_mut() = events.to_vec();
-        self.cursor(events)
-    }
 }
 
 /// An in-memory store with the computed-timestamp columns disabled, for tests
