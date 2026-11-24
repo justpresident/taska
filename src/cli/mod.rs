@@ -105,9 +105,10 @@ enum Commands {
         /// name is rejected as a likely typo - did-you-mean included).
         #[arg(long)]
         new_field: bool,
-        /// Apply ONLY if the task currently matches every condition (same syntax as
-        /// `ta list` filters, e.g. `--if status=todo --if owner=`, minus computed
-        /// columns). Checked atomically under the store lock (compare-and-swap):
+        /// Apply ONLY if the task currently matches every condition (the `ta list`
+        /// filter grammar, minus computed columns, with equality spelled `==` -
+        /// a bare `=` assigns), e.g. `--if status==todo --if owner==`. One
+        /// condition per `--if`. Checked atomically under the store lock (compare-and-swap):
         /// if it doesn't hold, the write is rejected with exit code 3 - so agents
         /// can race to claim a task and exactly one wins. Repeatable (all must
         /// hold).
@@ -123,8 +124,9 @@ enum Commands {
     Delete {
         #[arg(add = ArgValueCandidates::new(complete::task_ids))]
         id: String,
-        /// Delete ONLY if the task currently matches every condition (same syntax
-        /// as `ta list`, minus computed columns; repeatable, all must hold).
+        /// Delete ONLY if the task currently matches every condition (the `ta list`
+        /// grammar, minus computed columns, equality spelled `==`, e.g.
+        /// `--if status==done`; one condition per `--if`, all must hold).
         /// Checked atomically under the store lock; fails with exit code 3
         /// otherwise.
         #[arg(long = "if", value_name = "COND", add = ArgValueCompleter::new(complete::criteria))]
@@ -1076,6 +1078,7 @@ pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
         raw: Map::new(),
     };
     for token in fields {
+        reject_condition_token(token)?;
         let (key_part, val) = token.split_once('=').ok_or_else(|| {
             format!("invalid field `{token}` (expected key=value, key+=value, or key-=value)")
         })?;
@@ -1098,6 +1101,25 @@ pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
             )
             .into());
         }
+        // One command, one meaning per field: a field set (`=`) twice, or both
+        // set and accumulated (`+=`/`-=`), is ambiguous - which value did the
+        // caller mean? Reject it rather than letting the last token silently win.
+        // Repeated `+=`/`-=` alone are fine: they accumulate in token order.
+        let accumulated = |k: &str| {
+            ops.append.iter().chain(&ops.subtract).any(|(a, _)| a == k)
+        };
+        let conflict = match operator {
+            '=' if ops.set.contains_key(key) => Some("set more than once"),
+            '=' if accumulated(key) => Some("both set and changed with +=/-="),
+            '+' | '-' if ops.set.contains_key(key) => Some("both set and changed with +=/-="),
+            _ => None,
+        };
+        if let Some(why) = conflict {
+            return Err(format!(
+                "field `{key}` is {why} in one command - give each field a single assignment"
+            )
+            .into());
+        }
         let value = field_value(key, val)?;
         match operator {
             // Lists (not maps), in token order, so repeated `field+=`/`field-=`
@@ -1116,6 +1138,28 @@ pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
         }
     }
     Ok(ops)
+}
+
+/// Reject a field token that is spelled like a CONDITION (`key==v`, `key!=v`,
+/// `key=~re`, `key!~re`, `key<v`, `key<=v`, `key>v`, `key>=v`): in a write command
+/// conditions belong after `--if` (one per `--if`, which takes a single value),
+/// and silently assigning such a token would write something the caller never
+/// meant. A value that really starts with `=` or `~` can be passed JSON-quoted.
+fn reject_condition_token(token: &str) -> Result<(), DynError> {
+    let key_end = token.find(['=', '!', '<', '>', '~']).unwrap_or(token.len());
+    let (key, rest) = token.split_at(key_end);
+    let looks_like_condition = ["==", "!=", "=~", "!~", "<", ">"]
+        .iter()
+        .any(|op| rest.starts_with(op));
+    if key.is_empty() || !looks_like_condition {
+        return Ok(());
+    }
+    Err(format!(
+        "`{token}` looks like a condition, not an assignment: conditions go after `--if`, one \
+         per `--if` (`--if {token}`); assignments use `{key}=value`. To set a value that starts \
+         with `=` or `~`, quote it as JSON: `{key}='\"...\"'`."
+    )
+    .into())
 }
 
 /// Resolve one `key=value` value: `@file`/`@-` (file or stdin, verbatim string),
@@ -1307,6 +1351,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_field_ops_rejects_a_field_assigned_twice() {
+        for tokens in [
+            vec!["status=done", "status=accepted"],
+            vec!["status=done", "status+=x"],
+            vec!["log+=a", "log=b"],
+            vec!["points-=1", "points=4"],
+        ] {
+            let tokens: Vec<String> = tokens.iter().map(|t| (*t).to_string()).collect();
+            let err = parse_field_ops(&tokens).err().map(|e| e.to_string());
+            assert!(
+                err.as_deref().is_some_and(|e| e.contains("single assignment")),
+                "{tokens:?} must be rejected, got {err:?}"
+            );
+        }
+        // Repeated accumulation is not a conflict: it adds up in token order.
+        assert!(parse_field_ops(&["log+=a".into(), "log+=b".into(), "log-=c".into()]).is_ok());
+    }
+
+    #[test]
     fn parse_field_ops_splits_operators_and_keeps_raw_tokens() {
         let FieldOps {
             set,
@@ -1355,9 +1418,6 @@ mod tests {
             "tags+=b".into(),
             "scores-=1".into(),
             "scores-=2".into(),
-            // Repeated `=` stays last-wins (a map): you're choosing one value.
-            "title=first".into(),
-            "title=second".into(),
         ])
         .unwrap();
         assert_eq!(
@@ -1374,11 +1434,7 @@ mod tests {
                 ("scores".to_string(), serde_json::json!(2)),
             ]
         );
-        assert_eq!(
-            set["title"],
-            serde_json::json!("second"),
-            "`=` is last-wins"
-        );
+        assert!(set.is_empty(), "no `=` tokens: {set:?}");
     }
 
     #[test]

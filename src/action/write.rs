@@ -107,6 +107,7 @@ pub fn update(
     allow_new_fields: bool,
     guard: &[String],
 ) -> Result<WriteOutcome, DynError> {
+    crate::action::list::reject_bare_equals(guard)?;
     let config = store.config().clone();
     let new_fields = RefCell::new(Vec::new());
     let appended = store.append_checked(&|baseline, log| {
@@ -141,6 +142,7 @@ pub fn delete(
     id: &str,
     guard: &[String],
 ) -> Result<WriteOutcome, DynError> {
+    crate::action::list::reject_bare_equals(guard)?;
     let draft = MutationEvent::new(OpType::Delete, id, Map::new());
     let config = store.config().clone();
     let appended = store.append_checked(&|baseline, log| {
@@ -170,7 +172,7 @@ pub fn delete(
 ///
 /// Every guard field must be a known column - the store's vocabulary over this
 /// same `state`/`log`, plus the CANONICAL fields this write itself `introduces`
-/// (a first claim `owner=me --if owner=` names the field it creates) - and not a
+/// (a first claim `owner=me --if owner==` names the field it creates) - and not a
 /// computed one, which this view never carries. Either is a plain error, never a
 /// failed condition: a typo must not read as "someone else got there first".
 fn ensure_guard(
@@ -191,7 +193,7 @@ fn ensure_guard(
         let w = &config.workflow;
         return Err(format!(
             "a guard can't select by id (`{bare}`) - `--if` takes conditions on `{id}` \
-             itself, e.g. `--if {}={}`",
+             itself, e.g. `--if {}=={}`",
             w.status_field, w.default_status
         )
         .into());

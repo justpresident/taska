@@ -82,7 +82,7 @@ fn show_columns_accept_relationships_but_not_typos() {
 #[test]
 fn unknown_filter_field_is_rejected_but_known_ones_work() {
     let dir = store("cols-filter");
-    let err = rejects(&dir, &["list", "statsu=todo"]);
+    let err = rejects(&dir, &["list", "statsu==todo"]);
     assert!(err.contains("unknown filter field `statsu`"), "{err}");
     assert!(
         err.contains(&format!("did you mean `{STATUS_KEY}`?")),
@@ -119,19 +119,19 @@ fn guards_reject_unknown_fields_but_know_the_fields_their_write_adds() {
             "a",
             &format!("{STATUS_KEY}=in_progress"),
             "--if",
-            "statsu=todo",
+            "statsu==todo",
         ],
     );
     assert!(
         err.contains(&format!("did you mean `{STATUS_KEY}`?")),
         "{err}"
     );
-    let err = rejects(&dir, &["delete", "a", "--if", "mrg=amy"]);
+    let err = rejects(&dir, &["delete", "a", "--if", "mrg==amy"]);
     assert!(err.contains("did you mean `mgr`?"), "{err}");
     // A first claim names the very field it introduces.
     ta(
         &dir,
-        &["update", "b", "owner=me", "--new-field", "--if", "owner="],
+        &["update", "b", "owner=me", "--new-field", "--if", "owner=="],
     );
     assert!(ta(&dir, &["show", "b"]).contains("owner"));
 }

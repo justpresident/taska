@@ -495,6 +495,24 @@ fn compile_criteria(raw: &[String]) -> Result<Vec<Criterion>, DynError> {
     Ok(compiled)
 }
 
+/// Reject write-guard (`--if`) conditions spelled with a bare `=`: in a write
+/// command `key=value` ASSIGNS, so a guard's equality must be `==` - otherwise a
+/// condition written after one `--if` (which takes a single value) silently
+/// becomes an assignment. Read filters (`list`/`watch`/`history`) assign nothing
+/// and keep accepting `=`.
+pub(crate) fn reject_bare_equals(guard: &[String]) -> Result<(), DynError> {
+    for raw in guard {
+        if let Ok((field, FilterOp::Eq, value, "=")) = split_criterion_spelled(raw) {
+            return Err(format!(
+                "`--if {raw}`: a condition's equality is `==` (`--if {field}=={value}`); a bare \
+                 `=` assigns a field. Give each condition its own `--if`."
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 /// Whether a criterion is a bare task id: no operator character at all. (A
 /// token holding one that isn't a valid operator stays a parse error.)
 fn is_bare_id(raw: &str) -> bool {
@@ -553,16 +571,23 @@ fn compile_criterion(raw: &str) -> Result<Criterion, DynError> {
 }
 
 /// Split `field<op>value` at its FIRST operator, so an operator character inside
-/// the value (e.g. a regex's `~`) doesn't fool the parser. The regex match is
+/// the value (e.g. a regex's `~`) doesn't fool the parser. Equality is `==`
+/// (or a bare `=` in read filters - see [`bare_equals`]); the regex match is
 /// `=~` (perl/bash spelling), its negation `!~`. `=`/`!`/`>`/`<` peek the next
-/// byte for their two-char forms (`=~`, `!=`, `!~`, `>=`, `<=`); a bare `!` or
-/// `~` is not an operator.
+/// byte for their two-char forms (`==`, `=~`, `!=`, `!~`, `>=`, `<=`); a bare `!`
+/// or `~` is not an operator.
 fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
+    split_criterion_spelled(raw).map(|(field, op, value, _)| (field, op, value))
+}
+
+/// [`split_criterion`] plus the operator as written (`=`, `==`, `!=`, ...).
+fn split_criterion_spelled(raw: &str) -> Result<(&str, FilterOp, &str, &str), DynError> {
     let bytes = raw.as_bytes();
     for (i, &c) in bytes.iter().enumerate() {
         let (op, len) = match c {
             b'=' => match bytes.get(i + 1) {
                 Some(b'~') => (FilterOp::Re, 2), // `=~` regex match
+                Some(b'=') => (FilterOp::Eq, 2), // `==` equality
                 _ => (FilterOp::Eq, 1),
             },
             b'>' => match bytes.get(i + 1) {
@@ -583,7 +608,7 @@ fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
         if i == 0 {
             return Err(format!("invalid criterion `{raw}`: empty field name").into());
         }
-        return Ok((&raw[..i], op, &raw[i + len..]));
+        return Ok((&raw[..i], op, &raw[i + len..], &raw[i..i + len]));
     }
     // A bare `~` was the old regex spelling - point it at `=~`.
     if raw.contains('~') {
@@ -593,7 +618,7 @@ fn split_criterion(raw: &str) -> Result<(&str, FilterOp, &str), DynError> {
         .into());
     }
     Err(format!(
-        "invalid criterion `{raw}`: expected a task id, field=value, field=~regex, field!=value, field!~regex, or a comparison (field>value, field>=value, field<value, field<=value)"
+        "invalid criterion `{raw}`: expected a task id, field==value (or field=value in a read filter), field=~regex, field!=value, field!~regex, or a comparison (field>value, field>=value, field<value, field<=value)"
     )
     .into())
 }

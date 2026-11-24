@@ -161,7 +161,7 @@ fn write_commands(f: &PrimeFacts, ex: &PrimeExamples) -> String {
         ),
         (
             format!(
-                "ta update <id> {sf}={} --if {sf}={}",
+                "ta update <id> {sf}={} --if {sf}=={}",
                 ex.claim, f.default_status
             ),
             "claim atomically: applies only if still current (exit 3 if you lost)".to_string(),

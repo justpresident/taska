@@ -227,7 +227,7 @@ fn conditional_write_is_an_atomic_compare_and_swap() {
         subtract: vec![],
         raw: Map::new(),
     };
-    let todo = || vec![format!("{STATUS_KEY}=todo")];
+    let todo = || vec![format!("{STATUS_KEY}==todo")];
 
     // Guard holds (status is todo): the claim applies.
     let ok = action::write::update(&store, "t", &claim("in_progress"), false, &todo()).unwrap();
@@ -276,7 +276,7 @@ fn conditional_write_is_an_atomic_compare_and_swap() {
             .code(),
         taska::error::ExitCode::Precondition
     );
-    action::write::delete(&store, "t", &[format!("{STATUS_KEY}=in_progress")]).unwrap();
+    action::write::delete(&store, "t", &[format!("{STATUS_KEY}==in_progress")]).unwrap();
     assert!(
         !action::read(&store).unwrap().state.contains_key("t"),
         "conditional delete removed the task once its guard held"

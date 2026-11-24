@@ -720,7 +720,7 @@ fn conditional_update_claims_atomically_and_exits_3_on_loss() {
                 "t",
                 &format!("{STATUS_FIELD}=in_progress"),
                 "--if",
-                &format!("{STATUS_FIELD}=todo"),
+                &format!("{STATUS_FIELD}==todo"),
             ],
         )
     };
@@ -752,7 +752,7 @@ fn conditional_update_claims_atomically_and_exits_3_on_loss() {
     let bad = run(
         ta_bin(),
         &dir,
-        &["delete", "t", "--if", &format!("{STATUS_FIELD}=todo")],
+        &["delete", "t", "--if", &format!("{STATUS_FIELD}==todo")],
     );
     assert_eq!(bad.status.code(), Some(3), "wrong-condition delete exits 3");
     ta(
@@ -761,7 +761,7 @@ fn conditional_update_claims_atomically_and_exits_3_on_loss() {
             "delete",
             "t",
             "--if",
-            &format!("{STATUS_FIELD}=in_progress"),
+            &format!("{STATUS_FIELD}==in_progress"),
         ],
     );
     let gone = run(ta_bin(), &dir, &["show", "t"]);
@@ -1049,4 +1049,70 @@ fn concurrent_writers_never_share_a_seq_or_lose_a_task() {
     for i in 0..WRITERS {
         assert!(list.contains(&format!("\"t{i}\"")), "t{i} missing:\n{list}");
     }
+}
+
+/// One command, one meaning per field: `create`/`update` reject a field set twice
+/// (or both set and accumulated) instead of letting the last token silently win,
+/// and write nothing.
+#[test]
+fn a_field_assigned_twice_is_rejected_and_writes_nothing() {
+    let dir = fresh_dir("field-assigned-twice");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
+    let before = std::fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+
+    for args in [
+        vec!["update", "a", &format!("{STATUS_FIELD}=done"), &format!("{STATUS_FIELD}=closed")][..].to_vec(),
+        vec!["update", "a", "note=x", "note+=y", "--new-field"],
+        vec!["create", "b", "note=x", "note=y", "--new-field"],
+    ] {
+        let args: Vec<&str> = args.iter().map(|s| &**s).collect();
+        let out = run(ta_bin(), &dir, &args);
+        assert!(!out.status.success(), "{args:?} must fail");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("single assignment"),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let after = std::fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    assert_eq!(before, after, "a rejected command writes nothing");
+}
+
+/// In a write command `key=value` assigns, so `--if` conditions spell equality
+/// `==`, and a positional token spelled like a condition is rejected - the
+/// mistake that used to turn an intended second condition into a silent write.
+#[test]
+fn conditions_use_double_equals_and_never_pass_for_assignments() {
+    let dir = fresh_dir("guard-double-equals");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "t", &format!("{STATUS_FIELD}=open"), "owner=x", "--new-field"]);
+    let log = || std::fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    let before = log();
+    let fails = |args: &[&str], needle: &str| {
+        let out = run(ta_bin(), &dir, args);
+        assert!(!out.status.success(), "{args:?} must fail");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(needle), "{args:?}: {err}");
+    };
+
+    // The original trap: a bare `=` condition after `--if`.
+    let done = format!("{STATUS_FIELD}=done");
+    let accepted = format!("{STATUS_FIELD}==accepted");
+    fails(&["update", "t", &done, "--if", "owner=x"], "equality is `==`");
+    // A second condition written after ONE `--if` lands as a positional token.
+    fails(&["update", "t", &done, "--if", "owner==x", &accepted], "looks like a condition");
+    for token in ["priority>=3", "owner!=y", "title=~re"] {
+        fails(&["update", "t", token], "looks like a condition");
+    }
+    fails(&["delete", "t", "--if", "owner=x"], "equality is `==`");
+    assert_eq!(before, log(), "every rejected command wrote nothing");
+
+    // The right spellings work: `==` guards, and `==` also filters in `list`.
+    ta(&dir, &["update", "t", &done, "--if", "owner==x", "--if", &format!("{STATUS_FIELD}==open")]);
+    assert!(lists_task(&ta(&dir, &["list", "owner==x"]), "t"));
+    assert!(lists_task(&ta(&dir, &["list", "owner=x"]), "t"), "read filters keep `=`");
+    // A value that really starts with `~` can be set JSON-quoted.
+    ta(&dir, &["update", "t", "dir=\"~/work\"", "--new-field"]);
+    assert!(ta(&dir, &["show", "t"]).contains("~/work"));
 }

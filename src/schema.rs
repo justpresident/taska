@@ -36,8 +36,9 @@ use crate::model::{
 /// The CLI builds it from `key=value` / `key+=value` / `key-=value` tokens
 /// (`cli::parse_field_ops`); any other frontend can construct it directly.
 pub struct FieldOps {
-    /// Fields to **set** (`=`), values JSON-guessed. A map, so a repeated `key=`
-    /// is last-wins (you're choosing the field's value).
+    /// Fields to **set** (`=`), values JSON-guessed. A map: a field has one value
+    /// per write, so the CLI rejects a repeated `key=` (or a key both set and
+    /// accumulated) rather than letting the last token win.
     pub set: Map<String, Value>,
     /// `+=` operands, in token ORDER as `(field, value)` - a list, not a map, so
     /// repeated `field+=` on one field accumulate instead of overwriting

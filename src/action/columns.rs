@@ -104,7 +104,7 @@ impl Vocabulary {
     /// The full vocabulary over RAW (canonical) `state` and the retained `log`:
     /// [`Vocabulary::from_config`] plus every field a task uses and every field
     /// the retained history ever wrote - so a field just cleared from every task
-    /// stays filterable (a `--if owner=` claim must keep working once nobody
+    /// stays filterable (a `--if owner==` claim must keep working once nobody
     /// holds a claim). Only compaction forgets a field.
     #[must_use]
     pub fn build(
