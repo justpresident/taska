@@ -18,6 +18,12 @@
 //! never committed. On a store that has no file yet, the existing events are
 //! seeded with their own seqs, so cursors handed out before this file existed
 //! stay valid; a log that has never been merged keeps arrival == seq.
+//!
+//! The cursor is the file's HIGH-WATER arrival number, not the highest number of
+//! an event still in the log, so it never goes backwards: when events leave the
+//! log (an undo truncating uncommitted events, `resolve` pruning orphans,
+//! compaction folding the prefix), their entries are pruned but the high-water is
+//! kept as a bare `{"n": N}` entry, and the next new event is numbered above it.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -68,7 +74,16 @@ fn digest(event: &MutationEvent) -> String {
 #[derive(Serialize, Deserialize)]
 struct Entry {
     n: u64,
+    /// The event's digest; empty for the high-water marker kept by a prune.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     k: String,
+}
+
+/// The arrival numbers of a log, plus the cursor: the high-water number this
+/// clone has ever handed out (never lower than any number in `numbers`).
+pub struct Numbered {
+    pub numbers: Vec<u64>,
+    pub cursor: u64,
 }
 
 /// The arrival number of every event in `log`, in log order, recording numbers
@@ -77,6 +92,13 @@ struct Entry {
 /// use, appended to as new events arrive, and rewritten without stale entries
 /// once compaction has folded most of what it records into the baseline.
 pub fn arrivals(path: &Path, log: &[MutationEvent]) -> Result<Vec<u64>, DynError> {
+    Ok(number(path, log, false)?.numbers)
+}
+
+/// [`arrivals`] plus the cursor. With `prune`, the file is rewritten to hold only
+/// the events still in `log` plus the high-water marker - for callers that just
+/// removed events from the log (undo, resolve, compaction).
+pub fn number(path: &Path, log: &[MutationEvent], prune: bool) -> Result<Numbered, DynError> {
     let fresh = !path.exists();
     let mut file = OpenOptions::new()
         .read(true)
@@ -99,7 +121,9 @@ pub fn arrivals(path: &Path, log: &[MutationEvent]) -> Result<Vec<u64>, DynError
         // its event gets a fresh number (reported once more), never a skip.
         if let Ok(entry) = serde_json::from_str::<Entry>(&line) {
             max = max.max(entry.n);
-            known.entry(entry.k).or_insert(entry.n);
+            if !entry.k.is_empty() {
+                known.entry(entry.k).or_insert(entry.n);
+            }
         }
     }
 
@@ -122,24 +146,32 @@ pub fn arrivals(path: &Path, log: &[MutationEvent]) -> Result<Vec<u64>, DynError
         numbers.push(n);
     }
 
-    if known.len() > 2 * log.len() + PRUNE_SLACK {
-        rewrite(&mut file, log, &numbers)?;
+    if prune || known.len() > 2 * log.len() + PRUNE_SLACK {
+        rewrite(&mut file, log, &numbers, max)?;
     } else if !new.is_empty() {
         for entry in &new {
             writeln!(file, "{}", serde_json::to_string(entry)?)?;
         }
         file.flush()?;
     }
-    Ok(numbers)
+    Ok(Numbered {
+        numbers,
+        cursor: max,
+    })
 }
 
 /// Entries kept beyond the retained log before the file is rewritten.
 const PRUNE_SLACK: usize = 1000;
 
 /// Rewrite the file with only the events still in the log - entries for events
-/// compaction folded into the baseline can never be looked up again.
-fn rewrite(file: &mut File, log: &[MutationEvent], numbers: &[u64]) -> Result<(), DynError> {
-    let mut body = String::new();
+/// that left it can never be looked up again - plus a bare high-water marker, so
+/// the cursor and the next number never go backwards.
+fn rewrite(file: &mut File, log: &[MutationEvent], numbers: &[u64], high_water: u64) -> Result<(), DynError> {
+    let mut body = serde_json::to_string(&Entry {
+        n: high_water,
+        k: String::new(),
+    })?;
+    body.push('\n');
     for (event, &n) in log.iter().zip(numbers) {
         body.push_str(&serde_json::to_string(&Entry { n, k: digest(event) })?);
         body.push('\n');
@@ -150,8 +182,9 @@ fn rewrite(file: &mut File, log: &[MutationEvent], numbers: &[u64]) -> Result<()
     Ok(())
 }
 
-/// The cursor a read hands out: the highest arrival number (0 on an empty log).
-pub fn cursor(numbers: &[u64]) -> u64 {
+/// The highest of `numbers` (0 when empty) - the cursor of a store with no
+/// arrivals file, whose numbers are the events' seqs.
+pub fn max_of(numbers: &[u64]) -> u64 {
     numbers.iter().copied().max().unwrap_or(0)
 }
 
@@ -238,6 +271,22 @@ mod tests {
         let mut renumbered = log;
         renumbered[1].seq = 9;
         assert_eq!(arrivals(&path, &renumbered).unwrap(), first);
+    }
+
+    #[test]
+    fn removing_events_prunes_their_entries_but_never_lowers_the_cursor() {
+        let path = scratch("prune");
+        let log = vec![ev(1, 0, "a"), ev(2, 1, "b"), ev(3, 2, "c")];
+        assert_eq!(number(&path, &log, false).unwrap().cursor, 3);
+        // An undo truncates c: its entry goes, the cursor stays at 3.
+        let truncated = &log[..2];
+        let after = number(&path, truncated, true).unwrap();
+        assert_eq!((after.numbers.clone(), after.cursor), (vec![1, 2], 3));
+        let body = fs::read_to_string(&path).unwrap();
+        assert_eq!(body.lines().count(), 3, "marker + a + b, no entry for c:\n{body}");
+        // The next event is numbered above the high-water, not reusing 3.
+        let next = [truncated, &[ev(3, 9, "d")]].concat();
+        assert_eq!(number(&path, &next, false).unwrap().numbers, vec![1, 2, 4]);
     }
 
     #[test]

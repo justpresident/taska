@@ -86,7 +86,7 @@ pub fn history(store: &impl EventStore, query: &HistoryQuery) -> Result<HistoryO
     let config = store.config();
     let baseline = store.load_baseline()?;
     let log = store.load_mutations()?;
-    let cursor = crate::arrival::cursor(&store.arrivals(&log)?);
+    let cursor = store.cursor(&log)?;
     // The watermark: everything at or below it lives only in the baseline.
     let watermark = log.first().map_or(0, |e| e.seq.saturating_sub(1));
     if let Some(since) = query.since {

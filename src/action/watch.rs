@@ -89,7 +89,7 @@ pub fn poll(
     }
 
     // Fast path: nothing newer than the cursor.
-    let cursor = crate::arrival::cursor(&arrived);
+    let cursor = store.cursor(&muts)?;
     if since >= cursor {
         return Ok(WatchPoll {
             cursor,

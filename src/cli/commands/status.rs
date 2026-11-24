@@ -41,7 +41,7 @@ pub fn cmd_status(
     // for a watcher that starts without writing first. 0 on an empty log.
     if cursor {
         let log = store.load_mutations()?;
-        let cursor = crate::arrival::cursor(&store.arrivals(&log)?);
+        let cursor = store.cursor(&log)?;
         for line in render_args(
             output,
             || cursor.to_string(),

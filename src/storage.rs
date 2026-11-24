@@ -51,6 +51,12 @@ pub trait EventStore {
     fn arrivals(&self, log: &[MutationEvent]) -> Result<Vec<u64>, DynError> {
         Ok(log.iter().map(|e| e.seq).collect())
     }
+    /// The watch cursor for `log`: the high-water arrival number this clone has
+    /// handed out, never lower than an earlier cursor (see [`crate::arrival`]).
+    /// A store with no arrivals file uses the highest seq.
+    fn cursor(&self, log: &[MutationEvent]) -> Result<u64, DynError> {
+        Ok(crate::arrival::max_of(&self.arrivals(log)?))
+    }
     /// A cheap change fingerprint of the mutation log - `(len, mtime)` of the log
     /// file - so a poller (`watch`) can skip a full read+parse when nothing moved.
     /// `None` for a store that can't stat it (e.g. the in-memory test store), which
@@ -77,7 +83,7 @@ pub trait EventStore {
         self.append_events(&built)?;
         let log = self.load_mutations()?;
         let events = log[log.len() - built.len()..].to_vec();
-        let cursor = crate::arrival::cursor(&self.arrivals(&log)?);
+        let cursor = self.cursor(&log)?;
         Ok(Appended { events, cursor })
     }
     /// Replace the baseline with `baseline` and rewrite the log to contain
@@ -220,6 +226,23 @@ impl FileStore {
             .into());
         }
         Ok(dir)
+    }
+
+    /// Number `log`'s events in this clone's arrivals file (creating it, and
+    /// keeping it git-ignored, on first use); `prune` drops entries for events no
+    /// longer in the log. See [`crate::arrival`].
+    fn number(&self, log: &[MutationEvent], prune: bool) -> Result<crate::arrival::Numbered, DynError> {
+        let dir = self.data_dir()?;
+        let path = dir.join(crate::arrival::ARRIVALS_FILE);
+        if !path.exists() {
+            // Per-clone state: keep it out of git before it first appears.
+            crate::arrival::ensure_ignored(
+                &dir.join(GITIGNORE_FILE),
+                &gitignore_body(),
+                LEGACY_GITIGNORE_BODY,
+            )?;
+        }
+        crate::arrival::number(&path, log, prune)
     }
 
     /// Whether the data lives somewhere other than beside `config.toml` - a
@@ -390,17 +413,11 @@ impl EventStore for FileStore {
     }
 
     fn arrivals(&self, log: &[MutationEvent]) -> Result<Vec<u64>, DynError> {
-        let dir = self.data_dir()?;
-        let path = dir.join(crate::arrival::ARRIVALS_FILE);
-        if !path.exists() {
-            // Per-clone state: keep it out of git before it first appears.
-            crate::arrival::ensure_ignored(
-                &dir.join(GITIGNORE_FILE),
-                &gitignore_body(),
-                LEGACY_GITIGNORE_BODY,
-            )?;
-        }
-        crate::arrival::arrivals(&path, log)
+        Ok(self.number(log, false)?.numbers)
+    }
+
+    fn cursor(&self, log: &[MutationEvent]) -> Result<u64, DynError> {
+        Ok(self.number(log, false)?.cursor)
     }
 
     fn log_fingerprint(&self) -> Option<(u64, std::time::SystemTime)> {
@@ -466,7 +483,7 @@ impl EventStore for FileStore {
         // Number the new events while the write lock is still held: nothing can
         // land between this write and the cursor it reports.
         log.extend(sequenced.iter().cloned());
-        let cursor = crate::arrival::cursor(&self.arrivals(&log)?);
+        let cursor = self.cursor(&log)?;
         Ok(Appended {
             events: sequenced,
             cursor,
@@ -500,6 +517,9 @@ impl EventStore for FileStore {
             writeln!(locked_file, "{}", serde_json::to_string(event)?)?;
         }
         locked_file.flush()?;
+        // The folded events left the log: drop their arrival entries (keeping
+        // the high-water), while the log lock is still held.
+        self.number(retained, true)?;
         Ok(())
     }
 
@@ -523,7 +543,9 @@ impl EventStore for FileStore {
             writeln!(locked_file, "{}", serde_json::to_string(event)?)?;
         }
         locked_file.flush()?;
-        Ok(crate::arrival::cursor(&self.arrivals(events)?))
+        // Events may have left the log: drop their arrival entries, keeping the
+        // high-water so the cursor never goes backwards.
+        Ok(self.number(events, true)?.cursor)
     }
 }
 

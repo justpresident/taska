@@ -369,3 +369,30 @@ fn undo_seq_with_count_walks_older() {
         "undoing seq 4,3,2 walks the status back to v0"
     );
 }
+
+/// Undoing an uncommitted event truncates it from the log. Its arrival entry goes
+/// with it, but the cursor never goes backwards: the undo prints a cursor no lower
+/// than the write's, and the next write is numbered above both.
+#[test]
+fn undo_truncation_prunes_its_arrival_but_keeps_the_cursor_monotonic() {
+    let dir = fresh_dir("undo-arrival-prune");
+    init_renamed_open(&dir);
+    let cursor_of = |out: &str| -> u64 {
+        out.split("[cursor:")
+            .nth(1)
+            .and_then(|t| t.split(']').next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no [cursor:N] in {out:?}"))
+    };
+    ta(&dir, &["create", "a"]);
+    let wrote = cursor_of(&ta(&dir, &["create", "b"]));
+    let undone = cursor_of(&ta(&dir, &["undo", "--force"]));
+    assert!(undone >= wrote, "undo cursor {undone} must not go below the write's {wrote}");
+
+    let arrivals = std::fs::read_to_string(dir.join(".taska/arrivals.jsonl")).unwrap();
+    let keyed = arrivals.lines().filter(|l| l.contains("\"k\"")).count();
+    assert_eq!(keyed, 1, "only a's entry remains (plus the high-water marker):\n{arrivals}");
+
+    let next = cursor_of(&ta(&dir, &["create", "c"]));
+    assert!(next > wrote, "the next write is numbered above the old high-water: {next} vs {wrote}");
+}

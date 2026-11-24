@@ -57,7 +57,7 @@ impl EventStore for InMemoryStore {
     }
     fn replace_mutations(&self, events: &[MutationEvent]) -> Result<u64, DynError> {
         *self.events.borrow_mut() = events.to_vec();
-        Ok(crate::arrival::cursor(&self.arrivals(events)?))
+        self.cursor(events)
     }
 }
 
