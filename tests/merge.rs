@@ -725,7 +725,7 @@ fn merge_repoints_an_undo_at_its_targets_restacked_seq() {
     git(&dir, &["checkout", "-q", "feature"]);
     ta(&dir, &["update", "base", &format!("{STATUS_FIELD}=b")]);
     git(&dir, &["commit", "-aqm", "update on feature"]);
-    ta(&dir, &["undo", "--force"]); // committed, so it appends a compensation
+    ta_tty(&dir, &["undo", "--force"]); // committed, so it appends a compensation
     git(&dir, &["commit", "-aqm", "undo on feature"]);
 
     git(&dir, &["checkout", "-q", "main"]);

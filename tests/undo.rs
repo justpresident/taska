@@ -14,7 +14,7 @@ fn undo_uncommitted_truncates_the_tail() {
     let before = rows(&log);
 
     // Nothing is committed, so undo just truncates the last (uncommitted) event.
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
     assert_eq!(rows(&log), before - 1, "one event truncated from the log");
 
     let list = ta(&dir, &["list"]);
@@ -33,7 +33,7 @@ fn undo_count_removes_the_last_n() {
     let log = dir.join(".taska/mutations.jsonl");
     let before = rows(&log);
 
-    ta(&dir, &["undo", "--count", "2", "--force"]);
+    ta_tty(&dir, &["undo", "--count", "2", "--force"]);
     assert_eq!(rows(&log), before - 2, "two events truncated");
 
     let list = ta(&dir, &["list"]);
@@ -58,7 +58,7 @@ fn undo_committed_appends_a_compensating_event() {
     let log = dir.join(".taska/mutations.jsonl");
     let before = rows(&log);
 
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
     assert_eq!(
         rows(&log),
         before + 1,
@@ -89,7 +89,7 @@ fn undo_committed_unsets_a_newly_added_field() {
 
     // Undo the committed field-add. The compensating Update must UNSET the field
     // (via the null convention), and the log must grow rather than shrink.
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
     assert_eq!(rows(&log), before + 1, "compensating event appended");
 
     let json = ta(&dir, &["show", "a", "--format", "json"]);
@@ -113,7 +113,7 @@ fn undo_remove_truncates_committed_and_warns() {
     let before = rows(&log);
 
     // --remove on a committed event truncates (log shrinks) and warns on stderr.
-    let out = run(ta_bin(), &dir, &["undo", "--remove", "--force"]);
+    let out = run_tty(&dir, &["undo", "--remove", "--force"]);
     assert!(out.status.success(), "undo --remove should succeed");
     assert_eq!(
         rows(&log),
@@ -138,7 +138,7 @@ fn undo_remove_truncates_committed_and_warns() {
 fn undo_with_empty_log_is_a_noop() {
     let dir = fresh_dir("undo-empty");
     init_renamed_open(&dir);
-    let out = ta(&dir, &["undo", "--force"]);
+    let out = ta_tty(&dir, &["undo", "--force"]);
     assert!(out.contains("Nothing to undo"), "got: {out}");
 }
 
@@ -157,7 +157,7 @@ fn undo_committed_compensates_typed_edges() {
     // compensation appended) and the edge must be gone from state.
     let log = dir.join(".taska/mutations.jsonl");
     let before = rows(&log);
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
     assert_eq!(
         rows(&log),
         before + 1,
@@ -181,7 +181,7 @@ fn undo_committed_compensates_typed_edges() {
     ta(&dir, &["dep", "remove", "a", &format!("{INFO}=b")]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "removed"]);
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
     assert!(
         ta(&dir, &["show", "a", "--format", "json"])
             .contains(&format!(r#""{DEPS_KEY}":{{"{INFO}":["b"]}}"#)),
@@ -208,7 +208,7 @@ fn undo_compensates_committed_events_in_a_nested_store() {
 
     let log = sub.join(".taska/mutations.jsonl");
     let before = rows(&log);
-    ta(&sub, &["undo", "--force"]);
+    ta_tty(&sub, &["undo", "--force"]);
     assert_eq!(
         rows(&log),
         before + 1,
@@ -233,7 +233,7 @@ fn undo_preview_renders_a_field_diff_of_changed_columns() {
     // of ONLY the lines that change: current-state lines marked `-`, reverted `+`.
     // Field keys are CANONICAL (the events are), so status shows as `status`; a
     // reverted edge shows as its bare `type: target` line.
-    let out = ta(&dir, &["undo", "--count", "2", "--force"]);
+    let out = ta_tty(&dir, &["undo", "--count", "2", "--force"]);
     assert!(out.contains("Undoing 2 event(s)"), "header: {out}");
     assert!(
         out.contains(&format!("- {STATUS_KEY}: closed")),
@@ -269,15 +269,15 @@ fn undo_walks_back_through_committed_history() {
             .contains(&format!(r#""{STATUS_FIELD}":"{val}""#))
     };
     assert!(shows("s3"), "starts at s3");
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
     assert!(shows("s2"), "undo #1 -> s2");
     // The crux: a second undo must walk to s1, NOT redo s3.
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
     assert!(
         shows("s1"),
         "undo #2 walks back to s1, never redoes its own compensation"
     );
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
     assert!(shows("s0"), "undo #3 -> s0");
 }
 
@@ -292,7 +292,7 @@ fn undo_records_the_undone_seq_in_meta() {
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "h"]);
 
-    ta(&dir, &["undo", "--force"]); // undoes seq 2, appends a marked compensation
+    ta_tty(&dir, &["undo", "--force"]); // undoes seq 2, appends a marked compensation
     let log = std::fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     assert!(
         log.contains(r#""_meta":{"undoes":2}"#),
@@ -314,14 +314,14 @@ fn undo_seq_targets_a_specific_event_and_validates_it() {
 
     // Undo the mid-history seq 2 (shadowed by seq 3, so state stays p2) - it is
     // still recorded as undone.
-    ta(&dir, &["undo", "--seq", "2", "--force"]);
+    ta_tty(&dir, &["undo", "--seq", "2", "--force"]);
     assert!(
         ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(r#""{STATUS_FIELD}":"p2""#)),
         "seq 2 was shadowed by seq 3, so state is unchanged"
     );
 
     // Re-undoing the same seq is rejected.
-    let out = run(ta_bin(), &dir, &["undo", "--seq", "2", "--force"]);
+    let out = run_tty(&dir, &["undo", "--seq", "2", "--force"]);
     assert!(
         !out.status.success(),
         "re-undo of an already-undone seq must fail"
@@ -333,7 +333,7 @@ fn undo_seq_targets_a_specific_event_and_validates_it() {
     );
 
     // An unknown seq is rejected.
-    let out = run(ta_bin(), &dir, &["undo", "--seq", "999", "--force"]);
+    let out = run_tty(&dir, &["undo", "--seq", "999", "--force"]);
     assert!(
         !out.status.success()
             && String::from_utf8_lossy(&out.stderr).contains("no event with seq 999"),
@@ -343,7 +343,7 @@ fn undo_seq_targets_a_specific_event_and_validates_it() {
 
     // A plain `undo` now skips the already-undone seq 2 and reverses seq 3. With
     // both seq 2 and seq 3 undone, only the create (p0) survives.
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
     assert!(
         ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(r#""{STATUS_FIELD}":"p0""#)),
         "the next undo skips undone seq 2 and reverts seq 3, leaving only p0"
@@ -363,7 +363,7 @@ fn undo_seq_with_count_walks_older() {
     git(&dir, &["commit", "-qm", "h"]);
 
     // From seq 4, undo 3 events going older (seq 4, 3, 2), leaving only the create.
-    ta(&dir, &["undo", "--seq", "4", "--count", "3", "--force"]);
+    ta_tty(&dir, &["undo", "--seq", "4", "--count", "3", "--force"]);
     assert!(
         ta(&dir, &["show", "a", "--format", "json"]).contains(&format!(r#""{STATUS_FIELD}":"v0""#)),
         "undoing seq 4,3,2 walks the status back to v0"
@@ -386,7 +386,7 @@ fn undo_truncation_prunes_its_arrival_but_keeps_the_cursor_monotonic() {
     };
     ta(&dir, &["create", "a"]);
     let wrote = cursor_of(&ta(&dir, &["create", "b"]));
-    let undone = cursor_of(&ta(&dir, &["undo", "--force"]));
+    let undone = cursor_of(&ta_tty(&dir, &["undo", "--force"]));
     assert!(undone >= wrote, "undo cursor {undone} must not go below the write's {wrote}");
 
     let arrivals = std::fs::read_to_string(dir.join(".taska/arrivals.jsonl")).unwrap();
@@ -417,7 +417,26 @@ fn undo_refuses_when_the_log_changed_while_its_prompt_was_open() {
         assert!(lists_task(&list, id), "{id} must survive:\n{list}");
     }
     // Re-running sees the new event and undoes it, the newest.
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
     let list = ta(&dir, &["list"]);
     assert!(!lists_task(&list, "landed-during-prompt") && lists_task(&list, "b"), "{list}");
+}
+
+/// `undo` is for a human at a terminal: without one it refuses - even with
+/// `--force`, which only skips the prompt - names the alternative, and writes
+/// nothing. (Every other undo test runs it on a pseudo-terminal.)
+#[test]
+fn undo_refuses_without_an_interactive_terminal() {
+    let dir = fresh_dir("undo-needs-terminal");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a"]);
+    let log = dir.join(".taska/mutations.jsonl");
+    let before = std::fs::read_to_string(&log).unwrap();
+    for args in [&["undo"][..], &["undo", "--force"], &["undo", "--seq", "1", "--force"]] {
+        let out = run(ta_bin(), &dir, args);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{args:?} must fail");
+        assert!(err.contains("interactive terminal") && err.contains("ta update"), "{args:?}: {err}");
+    }
+    assert_eq!(before, std::fs::read_to_string(&log).unwrap(), "nothing written");
 }

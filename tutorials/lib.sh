@@ -73,6 +73,28 @@ run() {
   return $status
 }
 
+# run_tty <cmd...> - like `run`, for interactive-only commands (`ta undo` refuses
+# unless stdin is a terminal). On a terminal it is just `run`; unattended (tests,
+# CI, piped stdin) it gives the command a pseudo-terminal through script(1),
+# feeding it this function's own stdin - so `echo n | run_tty ta undo` still
+# answers the prompt.
+run_tty() {
+  if [ -t 0 ]; then
+    run "$@"
+    return $?
+  fi
+  printf '%s$ %s%s\n' "$_C_BOLD" "$(shell_quote "$@")" "$_C_RESET"
+  local status
+  if [ "$(uname)" = "Darwin" ]; then
+    script -q /dev/null "$@"
+  else
+    script -qec "$(shell_quote "$@")" /dev/null
+  fi
+  status=$?
+  printf '\n'
+  return $status
+}
+
 # pause - wait for the learner to press Enter to execute the shown command.
 # Skipped (returns immediately) when stdin is not a TTY or
 # TUTORIAL_NONINTERACTIVE=1, so the scripts run unattended in tests/CI.

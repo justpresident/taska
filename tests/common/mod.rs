@@ -161,11 +161,12 @@ pub fn append_orphan_update(log: &Path, task_id: &str) {
 pub fn ta_with_prompt_open(dir: &Path, args: &[&str], meanwhile: impl FnOnce(), answer: &str) -> Output {
     use std::io::{Read, Write};
     use std::process::Stdio;
+    let (mut terminal, stdin) = pty();
     let mut child = Command::new(ta_bin())
         .args(args)
         .current_dir(dir)
         .env("PATH", path_with_bin())
-        .stdin(Stdio::piped())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -179,11 +180,63 @@ pub fn ta_with_prompt_open(dir: &Path, args: &[&str], meanwhile: impl FnOnce(), 
         seen.push(byte[0]);
     }
     meanwhile();
-    writeln!(child.stdin.take().unwrap(), "{answer}").unwrap();
+    writeln!(terminal, "{answer}").unwrap();
     let mut rest = Vec::new();
     stderr.read_to_end(&mut rest).unwrap();
     seen.extend(rest);
     let mut out = child.wait_with_output().unwrap();
     out.stderr = seen;
     out
+}
+
+/// A pseudo-terminal: `(controlling side, a Stdio for the child's stdin)`. What the
+/// test writes to the controlling side, the child reads as typed input, and the
+/// child's stdin IS a terminal - for commands that run only interactively.
+pub fn pty() -> (fs::File, std::process::Stdio) {
+    use std::os::fd::FromRawFd;
+    let (mut controller, mut child_side) = (0, 0);
+    // SAFETY: openpty only writes the two fds through the valid pointers we pass;
+    // the name/termios/winsize arguments are optional and passed as null.
+    let rc = unsafe {
+        libc::openpty(
+            &mut controller,
+            &mut child_side,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    assert_eq!(rc, 0, "openpty failed");
+    // SAFETY: both fds were just opened by openpty and are owned by nothing else.
+    unsafe {
+        (
+            fs::File::from_raw_fd(controller),
+            std::process::Stdio::from(fs::File::from_raw_fd(child_side)),
+        )
+    }
+}
+
+/// [`run`] `ta` with a terminal on stdin (and nothing typed), for interactive-only
+/// commands such as `undo`.
+pub fn run_tty(dir: &Path, args: &[&str]) -> Output {
+    let (_terminal, stdin) = pty();
+    Command::new(ta_bin())
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path_with_bin())
+        .stdin(stdin)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to spawn `ta {}`: {}", args.join(" "), e))
+}
+
+/// [`ta`] with a terminal on stdin: asserts success and returns stdout.
+pub fn ta_tty(dir: &Path, args: &[&str]) -> String {
+    let out = run_tty(dir, args);
+    assert!(
+        out.status.success(),
+        "`ta {}` failed:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
 }

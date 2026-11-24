@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # 04-undo.sh - reversing the last event(s) safely, committed vs uncommitted.
 #
+# 'ta undo' is interactive only - a convenience for humans, it refuses unless stdin
+# is a terminal (scripts and agents correct mistakes with a plain write instead).
 # 'ta undo' has two paths, chosen by whether the undone events are git-committed:
 #   - uncommitted  -> truncate the log's tail (they were never shared).
 #   - committed    -> append a COMPENSATING event (keeps shared history intact).
@@ -28,7 +30,7 @@ run ta show deploy
 
 say "Undo it. The event was never committed, so undo TRUNCATES it. The preview is a"
 say "'-/+' diff of every column that changes - status and priority revert, owner drops."
-run ta undo --force
+run_tty ta undo --force
 run ta show deploy
 
 # -------------------------------------------------------------------------
@@ -41,7 +43,7 @@ run ta show deploy
 
 say "Undo the committed append. taska keeps history intact and APPENDS a compensating"
 say "event; the diff shows 'notes' reverting to its pre-append value:"
-run ta undo --force
+run_tty ta undo --force
 run ta show deploy
 say "The log GREW (a compensating event) rather than shrinking:"
 run tail -n 2 .taska/mutations.jsonl
@@ -57,7 +59,7 @@ run ta dep add deploy depends_on=db
 run ta show deploy
 
 say "...then undo BOTH with --count 2 (the edge AND the region set fall away)."
-run ta undo --count 2 --force
+run_tty ta undo --count 2 --force
 run ta show deploy
 
 # -------------------------------------------------------------------------
@@ -66,9 +68,9 @@ run ta show deploy
 say "Unset a field with '=null' (the null-unset convention removes 'priority')."
 run ta update deploy priority=null
 say "Without --force, undo asks y/N and defaults to NO. The preview shows it WOULD"
-say "re-add 'priority'; we pipe 'n' to decline, so nothing changes (and it won't hang)."
-# Feed 'n' so the prompt is answered even with no TTY; the decline is expected.
-echo n | run ta undo || true
+say "re-add 'priority'; we answer 'n' to decline, so nothing changes."
+# Feed 'n' so the prompt is answered unattended too; the decline is expected.
+echo n | run_tty ta undo || true
 say "Declined - priority is still unset:"
 run ta show deploy
 
@@ -78,5 +80,5 @@ run ta show deploy
 say "'--remove' forces truncation even of COMMITTED events - rewriting shared history."
 say "Commit first so the unset is committed, then watch the loud DANGER warning."
 run git commit -q -am "commit before --remove"
-run ta undo --remove --force || true
+run_tty ta undo --remove --force || true
 say "--remove rewrote committed history; only ever do this for events never shared."

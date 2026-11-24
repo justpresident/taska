@@ -347,6 +347,10 @@ enum Commands {
     /// keeps walking older, skipping anything already undone (it never bounces on
     /// its own compensations). `--seq S` targets a specific event; `--count N`
     /// undoes N events from the start point, going older.
+    ///
+    /// Interactive only: a convenience for humans, it refuses unless stdin is a
+    /// terminal, even with `--force`. Scripts and agents correct a mistake with
+    /// an ordinary `ta update`/`ta dep` write instead.
     Undo {
         /// Undo the specific event at this seq - its position in this log, as
         /// `ta history` lists it (not a watch cursor). Default: the most recent

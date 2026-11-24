@@ -293,6 +293,6 @@ fn hg_merge_tools_follow_a_relocated_data_dir() {
     // event is committed, so it's compensated rather than truncated.
     let log = dir.join("tasks/mutations.jsonl");
     let before = rows(&log);
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
     assert_eq!(rows(&log), before + 1, "committed event compensated");
 }

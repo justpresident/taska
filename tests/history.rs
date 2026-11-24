@@ -115,7 +115,7 @@ fn undo_compensations_are_annotated() {
                                                  // Committed, so undo appends a compensation instead of truncating.
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-qm", "work"]);
-    ta(&dir, &["undo", "--force"]);
+    ta_tty(&dir, &["undo", "--force"]);
 
     let out = ta(&dir, &["history", "api"]);
     assert!(out.contains("(undoes seq 2)"), "{out}");

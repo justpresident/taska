@@ -198,7 +198,7 @@ fn undo_respects_history_committed_in_a_relocated_dir() {
 
     let log = proj.join("tasks/mutations.jsonl");
     let before = rows(&log);
-    ta(&proj, &["undo", "--force"]);
+    ta_tty(&proj, &["undo", "--force"]);
     assert_eq!(
         rows(&log),
         before + 1,
@@ -281,7 +281,7 @@ fn data_in_another_repo_is_wired_there_and_not_committed_here() {
     git(&tasks_repo, &["commit", "-qm", "tasks"]);
     let log = tasks_repo.join("proj/mutations.jsonl");
     let before = rows(&log);
-    ta(&proj, &["undo", "--force"]);
+    ta_tty(&proj, &["undo", "--force"]);
     assert_eq!(rows(&log), before + 1, "committed there, so compensated");
 }
 

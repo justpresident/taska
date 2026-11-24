@@ -20,6 +20,12 @@ use crate::storage::FileStore;
 /// compensating events - each marked `_undoes=<seq>` - for committed or buried
 /// targets. Only events still in the log can be undone; anything folded into the
 /// baseline by compaction is out of reach.
+///
+/// Interactive only: `undo` is a convenience for a human at a terminal, so it
+/// refuses when stdin is not one - even with `--force`, which only skips the
+/// prompt. An agent or script corrects a mistake with an ordinary write instead;
+/// that also never depends on a `seq` that a merge may have renumbered between
+/// reading `ta history` and acting on it.
 pub fn cmd_undo(
     store: &FileStore,
     seq: Option<u64>,
@@ -27,6 +33,12 @@ pub fn cmd_undo(
     force: bool,
     remove: bool,
 ) -> Result<(), DynError> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err("`ta undo` runs only in an interactive terminal: it is a convenience for \
+                    humans. To correct a mistake from a script or an agent, write the right \
+                    value with `ta update` (or `ta dep`) instead."
+            .into());
+    }
     let Some(undo) = plan(store, seq, count, remove)? else {
         println!("Nothing to undo.");
         return Ok(());
