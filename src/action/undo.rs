@@ -335,9 +335,11 @@ pub fn apply(store: &FileStore, plan: &UndoPlan) -> Result<u64, DynError> {
         if current == plan.base {
             Ok(plan.new_log.clone())
         } else {
-            Err("the log changed since this undo was previewed (a write or a sync landed in \
+            Err(
+                "the log changed since this undo was previewed (a write or a sync landed in \
                  between); nothing was undone - run `ta undo` again to see the new preview"
-                .into())
+                    .into(),
+            )
         }
     })
 }

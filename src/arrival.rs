@@ -136,7 +136,11 @@ pub fn number(path: &Path, log: &[MutationEvent], prune: bool) -> Result<Numbere
             None => {
                 // Seed a brand-new file with the events' own seqs, so existing
                 // seq cursors keep meaning the same events.
-                let n = if fresh { event.seq.max(max + 1) } else { max + 1 };
+                let n = if fresh {
+                    event.seq.max(max + 1)
+                } else {
+                    max + 1
+                };
                 max = n;
                 known.insert(k.clone(), n);
                 new.push(Entry { n, k });
@@ -166,14 +170,22 @@ const PRUNE_SLACK: usize = 1000;
 /// Rewrite the file with only the events still in the log - entries for events
 /// that left it can never be looked up again - plus a bare high-water marker, so
 /// the cursor and the next number never go backwards.
-fn rewrite(file: &mut File, log: &[MutationEvent], numbers: &[u64], high_water: u64) -> Result<(), DynError> {
+fn rewrite(
+    file: &mut File,
+    log: &[MutationEvent],
+    numbers: &[u64],
+    high_water: u64,
+) -> Result<(), DynError> {
     let mut body = serde_json::to_string(&Entry {
         n: high_water,
         k: String::new(),
     })?;
     body.push('\n');
     for (event, &n) in log.iter().zip(numbers) {
-        body.push_str(&serde_json::to_string(&Entry { n, k: digest(event) })?);
+        body.push_str(&serde_json::to_string(&Entry {
+            n,
+            k: digest(event),
+        })?);
         body.push('\n');
     }
     file.set_len(0)?;
@@ -192,7 +204,11 @@ pub fn max_of(numbers: &[u64]) -> u64 {
 /// git: a taska-written ignore file from before this file existed is replaced
 /// with the current one; a user's own gets the line appended. A directory with
 /// no `.gitignore` is left alone (`ta init` writes one).
-pub fn ensure_ignored(gitignore: &Path, current_body: &str, legacy_body: &str) -> Result<(), DynError> {
+pub fn ensure_ignored(
+    gitignore: &Path,
+    current_body: &str,
+    legacy_body: &str,
+) -> Result<(), DynError> {
     let Ok(body) = fs::read_to_string(gitignore) else {
         return Ok(());
     };
@@ -202,7 +218,11 @@ pub fn ensure_ignored(gitignore: &Path, current_body: &str, legacy_body: &str) -
     if body == legacy_body {
         fs::write(gitignore, current_body)?;
     } else {
-        let sep = if body.is_empty() || body.ends_with('\n') { "" } else { "\n" };
+        let sep = if body.is_empty() || body.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
         fs::write(gitignore, format!("{body}{sep}{ARRIVALS_FILE}\n"))?;
     }
     Ok(())
@@ -249,7 +269,10 @@ mod tests {
         // a1/a2, which this clone has never seen.
         let path = scratch("restack");
         let (base, b1, b2) = (ev(1, 0, "base"), ev(2, 5, "b1"), ev(3, 6, "b2"));
-        assert_eq!(arrivals(&path, &[base.clone(), b1.clone(), b2.clone()]).unwrap(), vec![1, 2, 3]);
+        assert_eq!(
+            arrivals(&path, &[base.clone(), b1.clone(), b2.clone()]).unwrap(),
+            vec![1, 2, 3]
+        );
 
         let (a1, a2) = (ev(2, 1, "a1"), ev(3, 2, "a2"));
         let (mut b1r, mut b2r) = (b1, b2);
@@ -283,7 +306,11 @@ mod tests {
         let after = number(&path, truncated, true).unwrap();
         assert_eq!((after.numbers.clone(), after.cursor), (vec![1, 2], 3));
         let body = fs::read_to_string(&path).unwrap();
-        assert_eq!(body.lines().count(), 3, "marker + a + b, no entry for c:\n{body}");
+        assert_eq!(
+            body.lines().count(),
+            3,
+            "marker + a + b, no entry for c:\n{body}"
+        );
         // The next event is numbered above the high-water, not reusing 3.
         let next = [truncated, &[ev(3, 9, "d")]].concat();
         assert_eq!(number(&path, &next, false).unwrap().numbers, vec![1, 2, 4]);
@@ -294,11 +321,22 @@ mod tests {
         let dir = scratch("ignore").parent().unwrap().to_path_buf();
         let gi = dir.join(".gitignore");
         fs::write(&gi, "merge-conflict.json\n").unwrap();
-        ensure_ignored(&gi, "merge-conflict.json\narrivals.jsonl\n", "merge-conflict.json\n").unwrap();
-        assert_eq!(fs::read_to_string(&gi).unwrap(), "merge-conflict.json\narrivals.jsonl\n");
+        ensure_ignored(
+            &gi,
+            "merge-conflict.json\narrivals.jsonl\n",
+            "merge-conflict.json\n",
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(&gi).unwrap(),
+            "merge-conflict.json\narrivals.jsonl\n"
+        );
 
         fs::write(&gi, "target/").unwrap();
         ensure_ignored(&gi, "x", "merge-conflict.json\n").unwrap();
-        assert_eq!(fs::read_to_string(&gi).unwrap(), "target/\narrivals.jsonl\n");
+        assert_eq!(
+            fs::read_to_string(&gi).unwrap(),
+            "target/\narrivals.jsonl\n"
+        );
     }
 }

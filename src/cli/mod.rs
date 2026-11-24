@@ -1109,9 +1109,7 @@ pub(crate) fn parse_field_ops(fields: &[String]) -> Result<FieldOps, DynError> {
         // set and accumulated (`+=`/`-=`), is ambiguous - which value did the
         // caller mean? Reject it rather than letting the last token silently win.
         // Repeated `+=`/`-=` alone are fine: they accumulate in token order.
-        let accumulated = |k: &str| {
-            ops.append.iter().chain(&ops.subtract).any(|(a, _)| a == k)
-        };
+        let accumulated = |k: &str| ops.append.iter().chain(&ops.subtract).any(|(a, _)| a == k);
         let conflict = match operator {
             '=' if ops.set.contains_key(key) => Some("set more than once"),
             '=' if accumulated(key) => Some("both set and changed with +=/-="),
@@ -1365,7 +1363,8 @@ mod tests {
             let tokens: Vec<String> = tokens.iter().map(|t| (*t).to_string()).collect();
             let err = parse_field_ops(&tokens).err().map(|e| e.to_string());
             assert!(
-                err.as_deref().is_some_and(|e| e.contains("single assignment")),
+                err.as_deref()
+                    .is_some_and(|e| e.contains("single assignment")),
                 "{tokens:?} must be rejected, got {err:?}"
             );
         }

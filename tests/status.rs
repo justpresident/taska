@@ -25,7 +25,10 @@ fn status_current_tracks_the_high_water_seq() {
         created.contains(&format!("[cursor:{}]", c1.trim())),
         "create={created:?} cursor={c1:?}"
     );
-    assert!(!created.contains("[seq:"), "a mutation prints a cursor, not a seq: {created:?}");
+    assert!(
+        !created.contains("[seq:"),
+        "a mutation prints a cursor, not a seq: {created:?}"
+    );
 
     let created2 = ta(&dir, &["create", "bar"]);
     let c2 = ta(&dir, &["status", "--cursor"]);
@@ -37,7 +40,11 @@ fn status_current_tracks_the_high_water_seq() {
         c2.trim().parse::<u64>().unwrap() > c1.trim().parse::<u64>().unwrap(),
         "cursor advances: {c1:?} -> {c2:?}"
     );
-    assert_eq!(ta(&dir, &["status", "--current"]).trim(), "2", "high-water seq");
+    assert_eq!(
+        ta(&dir, &["status", "--current"]).trim(),
+        "2",
+        "high-water seq"
+    );
 
     // JSON forms for scripting: `{"seq":N}` and `{"cursor":N}`.
     let j = ta(&dir, &["status", "--current", "--format", "json"]);
@@ -68,7 +75,10 @@ fn seq_and_cursor_name_different_events_after_a_restacking_pull() {
     ta(&a, &["create", "base"]);
     git(&a, &["add", "-A"]);
     git(&a, &["commit", "-qm", "init"]);
-    git(&root, &["clone", "-q", a.to_str().unwrap(), b.to_str().unwrap()]);
+    git(
+        &root,
+        &["clone", "-q", a.to_str().unwrap(), b.to_str().unwrap()],
+    );
     git(&b, &["config", "user.email", "test@taska.dev"]);
     git(&b, &["config", "user.name", "Taska Test"]);
     ta(&b, &["status"]); // registers the merge driver in the clone
@@ -79,8 +89,21 @@ fn seq_and_cursor_name_different_events_after_a_restacking_pull() {
     let wrote = ta(&b, &["create", "b1"]);
     assert!(wrote.contains("[cursor:2]"), "{wrote:?}");
     git(&b, &["commit", "-aqm", "B work"]);
-    git(&a, &["pull", "-q", "--no-rebase", "--no-edit", b.to_str().unwrap(), "main"]);
-    git(&b, &["pull", "-q", "--ff-only", a.to_str().unwrap(), "main"]);
+    git(
+        &a,
+        &[
+            "pull",
+            "-q",
+            "--no-rebase",
+            "--no-edit",
+            b.to_str().unwrap(),
+            "main",
+        ],
+    );
+    git(
+        &b,
+        &["pull", "-q", "--ff-only", a.to_str().unwrap(), "main"],
+    );
 
     assert_eq!(ta(&b, &["status", "--current"]).trim(), "4");
     assert_eq!(ta(&b, &["status", "--cursor"]).trim(), "4");
@@ -93,7 +116,15 @@ fn seq_and_cursor_name_different_events_after_a_restacking_pull() {
     let out = run(
         ta_bin(),
         &b,
-        &["watch", "--since", "2", "--timeout", "3s", "--holdout", "0s"],
+        &[
+            "watch",
+            "--since",
+            "2",
+            "--timeout",
+            "3s",
+            "--holdout",
+            "0s",
+        ],
     );
     let watched = String::from_utf8_lossy(&out.stdout);
     assert!(

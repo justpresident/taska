@@ -16,7 +16,9 @@ use serde_json::{json, Value};
 
 use crate::action::watch::{poll, validate};
 use crate::error::DynError;
-use crate::format::{cursor_tag, render_args, render_diff_lines, state_diff, want_color, OutputArgs};
+use crate::format::{
+    cursor_tag, render_args, render_diff_lines, state_diff, want_color, OutputArgs,
+};
 use crate::storage::EventStore;
 
 /// How often to re-check the log while blocking.

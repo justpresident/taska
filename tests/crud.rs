@@ -1062,7 +1062,13 @@ fn a_field_assigned_twice_is_rejected_and_writes_nothing() {
     let before = std::fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
 
     for args in [
-        vec!["update", "a", &format!("{STATUS_FIELD}=done"), &format!("{STATUS_FIELD}=closed")][..].to_vec(),
+        vec![
+            "update",
+            "a",
+            &format!("{STATUS_FIELD}=done"),
+            &format!("{STATUS_FIELD}=closed"),
+        ][..]
+            .to_vec(),
         vec!["update", "a", "note=x", "note+=y", "--new-field"],
         vec!["create", "b", "note=x", "note=y", "--new-field"],
     ] {
@@ -1086,7 +1092,16 @@ fn a_field_assigned_twice_is_rejected_and_writes_nothing() {
 fn conditions_use_double_equals_and_never_pass_for_assignments() {
     let dir = fresh_dir("guard-double-equals");
     init_renamed_open(&dir);
-    ta(&dir, &["create", "t", &format!("{STATUS_FIELD}=open"), "owner=x", "--new-field"]);
+    ta(
+        &dir,
+        &[
+            "create",
+            "t",
+            &format!("{STATUS_FIELD}=open"),
+            "owner=x",
+            "--new-field",
+        ],
+    );
     let log = || std::fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
     let before = log();
     let fails = |args: &[&str], needle: &str| {
@@ -1099,9 +1114,15 @@ fn conditions_use_double_equals_and_never_pass_for_assignments() {
     // The original trap: a bare `=` condition after `--if`.
     let done = format!("{STATUS_FIELD}=done");
     let accepted = format!("{STATUS_FIELD}==accepted");
-    fails(&["update", "t", &done, "--if", "owner=x"], "equality is `==`");
+    fails(
+        &["update", "t", &done, "--if", "owner=x"],
+        "equality is `==`",
+    );
     // A second condition written after ONE `--if` lands as a positional token.
-    fails(&["update", "t", &done, "--if", "owner==x", &accepted], "looks like a condition");
+    fails(
+        &["update", "t", &done, "--if", "owner==x", &accepted],
+        "looks like a condition",
+    );
     for token in ["priority>=3", "owner!=y", "title=~re"] {
         fails(&["update", "t", token], "looks like a condition");
     }
@@ -1111,14 +1132,31 @@ fn conditions_use_double_equals_and_never_pass_for_assignments() {
     let comma = format!("owner==x,{STATUS_FIELD}==open");
     let ne = format!("owner==x {STATUS_FIELD}!=done");
     for guard in [both.as_str(), comma.as_str(), ne.as_str()] {
-        fails(&["update", "t", &done, "--if", guard], "holds more than one condition");
+        fails(
+            &["update", "t", &done, "--if", guard],
+            "holds more than one condition",
+        );
     }
     assert_eq!(before, log(), "every rejected command wrote nothing");
 
     // The right spellings work: `==` guards, and `==` also filters in `list`.
-    ta(&dir, &["update", "t", &done, "--if", "owner==x", "--if", &format!("{STATUS_FIELD}==open")]);
+    ta(
+        &dir,
+        &[
+            "update",
+            "t",
+            &done,
+            "--if",
+            "owner==x",
+            "--if",
+            &format!("{STATUS_FIELD}==open"),
+        ],
+    );
     assert!(lists_task(&ta(&dir, &["list", "owner==x"]), "t"));
-    assert!(lists_task(&ta(&dir, &["list", "owner=x"]), "t"), "read filters keep `=`");
+    assert!(
+        lists_task(&ta(&dir, &["list", "owner=x"]), "t"),
+        "read filters keep `=`"
+    );
     // A value that really contains an operator is compared JSON-quoted.
     ta(&dir, &["update", "t", "note=\"a==b\"", "--new-field"]);
     ta(&dir, &["update", "t", "owner=y", "--if", "note==\"a==b\""]);

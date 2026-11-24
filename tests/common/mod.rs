@@ -158,7 +158,12 @@ pub fn append_orphan_update(log: &Path, task_id: &str) {
 /// Run `ta ARGS`, wait until it shows its `[y/N]` confirmation prompt, run
 /// `meanwhile` (another write landing while the prompt is open), then answer
 /// `answer`. Returns the prompted command's output.
-pub fn ta_with_prompt_open(dir: &Path, args: &[&str], meanwhile: impl FnOnce(), answer: &str) -> Output {
+pub fn ta_with_prompt_open(
+    dir: &Path,
+    args: &[&str],
+    meanwhile: impl FnOnce(),
+    answer: &str,
+) -> Output {
     use std::io::{Read, Write};
     use std::process::Stdio;
     let (mut terminal, stdin) = pty();
@@ -176,7 +181,12 @@ pub fn ta_with_prompt_open(dir: &Path, args: &[&str], meanwhile: impl FnOnce(), 
     let mut byte = [0u8; 1];
     while !String::from_utf8_lossy(&seen).contains("[y/N]") {
         let n = stderr.read(&mut byte).unwrap();
-        assert!(n > 0, "`ta {}` exited before prompting:\n{}", args.join(" "), String::from_utf8_lossy(&seen));
+        assert!(
+            n > 0,
+            "`ta {}` exited before prompting:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&seen)
+        );
         seen.push(byte[0]);
     }
     meanwhile();

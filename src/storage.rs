@@ -78,7 +78,10 @@ pub trait EventStore {
         let log = self.load_mutations()?;
         let built = build(&baseline, &log)?;
         if built.is_empty() {
-            return Ok(Appended { events: built, cursor: 0 });
+            return Ok(Appended {
+                events: built,
+                cursor: 0,
+            });
         }
         self.append_events(&built)?;
         let log = self.load_mutations()?;
@@ -231,7 +234,11 @@ impl FileStore {
     /// Number `log`'s events in this clone's arrivals file (creating it, and
     /// keeping it git-ignored, on first use); `prune` drops entries for events no
     /// longer in the log. See [`crate::arrival`].
-    fn number(&self, log: &[MutationEvent], prune: bool) -> Result<crate::arrival::Numbered, DynError> {
+    fn number(
+        &self,
+        log: &[MutationEvent],
+        prune: bool,
+    ) -> Result<crate::arrival::Numbered, DynError> {
         let dir = self.data_dir()?;
         let path = dir.join(crate::arrival::ARRIVALS_FILE);
         if !path.exists() {
@@ -361,7 +368,10 @@ impl FileStore {
 
 /// The `.gitignore` [`FileStore::provision`] writes into a data directory.
 fn gitignore_body() -> String {
-    format!("{CONFLICT_MARKER_FILE}\n{}\n", crate::arrival::ARRIVALS_FILE)
+    format!(
+        "{CONFLICT_MARKER_FILE}\n{}\n",
+        crate::arrival::ARRIVALS_FILE
+    )
 }
 
 /// The ignore file `ta init` wrote before arrival numbers existed; upgraded to

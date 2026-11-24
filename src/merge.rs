@@ -830,8 +830,10 @@ fn assemble(
     merged.extend(appended);
 
     // Re-point appended undo compensations at their targets' merged seqs.
-    let theirs_key_at: HashMap<u64, String> = theirs.iter().map(|e| (e.seq, content_key(e))).collect();
-    let merged_seq_of: HashMap<String, u64> = merged.iter().map(|e| (content_key(e), e.seq)).collect();
+    let theirs_key_at: HashMap<u64, String> =
+        theirs.iter().map(|e| (e.seq, content_key(e))).collect();
+    let merged_seq_of: HashMap<String, u64> =
+        merged.iter().map(|e| (content_key(e), e.seq)).collect();
     for event in merged.iter_mut().filter(|e| e.seq >= next) {
         let Some(target) = event.undoes() else {
             continue;
@@ -1220,7 +1222,15 @@ mod tests {
             ev(6, 0, OpType::Create, "f", &[]),
         ];
         let anc: Vec<MutationEvent> = (1..=5)
-            .map(|s| ev(s, 0, OpType::Create, &["a", "b", "c", "d", "e"][s as usize - 1], &[]))
+            .map(|s| {
+                ev(
+                    s,
+                    0,
+                    OpType::Create,
+                    &["a", "b", "c", "d", "e"][s as usize - 1],
+                    &[],
+                )
+            })
             .collect();
         assert!(
             rewritten_shared_seqs(&anc, &ours, &theirs).is_empty(),
@@ -1317,7 +1327,11 @@ mod tests {
         let merged = merge_events(&anc, &ours, &theirs, Strategy::Ours).0;
         let seqs: Vec<(u64, &str)> = merged.iter().map(|e| (e.seq, e.task_id.as_str())).collect();
         assert_eq!(seqs, vec![(1, "base"), (2, "o"), (3, "base"), (4, "base")]);
-        assert_eq!(merged[3].undoes(), Some(3), "undo re-pointed at x's merged seq");
+        assert_eq!(
+            merged[3].undoes(),
+            Some(3),
+            "undo re-pointed at x's merged seq"
+        );
 
         // Its identity is unchanged by the rewrite, so a later merge with theirs
         // still recognizes it (no duplicate undo).
@@ -1343,9 +1357,17 @@ mod tests {
 
         let merged = merge_events(&anc, &ours, &theirs, Strategy::Ours).0;
         let ids: Vec<&str> = merged.iter().map(|e| e.task_id.as_str()).collect();
-        assert_eq!(ids, vec!["base", "c1", "y1", "a1"], "each event exactly once");
+        assert_eq!(
+            ids,
+            vec!["base", "c1", "y1", "a1"],
+            "each event exactly once"
+        );
         let seqs: Vec<u64> = merged.iter().map(|e| e.seq).collect();
-        assert_eq!(seqs, vec![1, 2, 3, 4], "ours keeps its seqs; theirs appended above");
+        assert_eq!(
+            seqs,
+            vec![1, 2, 3, 4],
+            "ours keeps its seqs; theirs appended above"
+        );
     }
 
     #[test]

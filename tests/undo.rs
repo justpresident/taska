@@ -387,14 +387,23 @@ fn undo_truncation_prunes_its_arrival_but_keeps_the_cursor_monotonic() {
     ta(&dir, &["create", "a"]);
     let wrote = cursor_of(&ta(&dir, &["create", "b"]));
     let undone = cursor_of(&ta_tty(&dir, &["undo", "--force"]));
-    assert!(undone >= wrote, "undo cursor {undone} must not go below the write's {wrote}");
+    assert!(
+        undone >= wrote,
+        "undo cursor {undone} must not go below the write's {wrote}"
+    );
 
     let arrivals = std::fs::read_to_string(dir.join(".taska/arrivals.jsonl")).unwrap();
     let keyed = arrivals.lines().filter(|l| l.contains("\"k\"")).count();
-    assert_eq!(keyed, 1, "only a's entry remains (plus the high-water marker):\n{arrivals}");
+    assert_eq!(
+        keyed, 1,
+        "only a's entry remains (plus the high-water marker):\n{arrivals}"
+    );
 
     let next = cursor_of(&ta(&dir, &["create", "c"]));
-    assert!(next > wrote, "the next write is numbered above the old high-water: {next} vs {wrote}");
+    assert!(
+        next > wrote,
+        "the next write is numbered above the old high-water: {next} vs {wrote}"
+    );
 }
 
 /// A write that lands while the undo preview is waiting for confirmation must not
@@ -406,12 +415,23 @@ fn undo_refuses_when_the_log_changed_while_its_prompt_was_open() {
     init_renamed_open(&dir);
     ta(&dir, &["create", "a"]);
     ta(&dir, &["create", "b"]);
-    let out = ta_with_prompt_open(&dir, &["undo"], || {
-        ta(&dir, &["create", "landed-during-prompt"]);
-    }, "y");
+    let out = ta_with_prompt_open(
+        &dir,
+        &["undo"],
+        || {
+            ta(&dir, &["create", "landed-during-prompt"]);
+        },
+        "y",
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "undo must fail, got success:\n{stderr}");
-    assert!(stderr.contains("changed since this undo was previewed"), "got: {stderr}");
+    assert!(
+        !out.status.success(),
+        "undo must fail, got success:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("changed since this undo was previewed"),
+        "got: {stderr}"
+    );
     let list = ta(&dir, &["list"]);
     for id in ["a", "b", "landed-during-prompt"] {
         assert!(lists_task(&list, id), "{id} must survive:\n{list}");
@@ -419,7 +439,10 @@ fn undo_refuses_when_the_log_changed_while_its_prompt_was_open() {
     // Re-running sees the new event and undoes it, the newest.
     ta_tty(&dir, &["undo", "--force"]);
     let list = ta(&dir, &["list"]);
-    assert!(!lists_task(&list, "landed-during-prompt") && lists_task(&list, "b"), "{list}");
+    assert!(
+        !lists_task(&list, "landed-during-prompt") && lists_task(&list, "b"),
+        "{list}"
+    );
 }
 
 /// `undo` is for a human at a terminal: without one it refuses - even with
@@ -432,11 +455,22 @@ fn undo_refuses_without_an_interactive_terminal() {
     ta(&dir, &["create", "a"]);
     let log = dir.join(".taska/mutations.jsonl");
     let before = std::fs::read_to_string(&log).unwrap();
-    for args in [&["undo"][..], &["undo", "--force"], &["undo", "--seq", "1", "--force"]] {
+    for args in [
+        &["undo"][..],
+        &["undo", "--force"],
+        &["undo", "--seq", "1", "--force"],
+    ] {
         let out = run(ta_bin(), &dir, args);
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{args:?} must fail");
-        assert!(err.contains("interactive terminal") && err.contains("ta update"), "{args:?}: {err}");
+        assert!(
+            err.contains("interactive terminal") && err.contains("ta update"),
+            "{args:?}: {err}"
+        );
     }
-    assert_eq!(before, std::fs::read_to_string(&log).unwrap(), "nothing written");
+    assert_eq!(
+        before,
+        std::fs::read_to_string(&log).unwrap(),
+        "nothing written"
+    );
 }

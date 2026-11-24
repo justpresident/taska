@@ -447,7 +447,10 @@ fn watch_reports_events_merged_in_below_the_cursor() {
     ta(&a, &["create", "base"]);
     git(&a, &["add", "-A"]);
     git(&a, &["commit", "-qm", "init"]);
-    git(&root, &["clone", "-q", a.to_str().unwrap(), b.to_str().unwrap()]);
+    git(
+        &root,
+        &["clone", "-q", a.to_str().unwrap(), b.to_str().unwrap()],
+    );
     git(&b, &["config", "user.email", "test@taska.dev"]);
     git(&b, &["config", "user.name", "Taska Test"]);
     ta(&b, &["status"]); // registers the merge driver in the clone
@@ -465,16 +468,43 @@ fn watch_reports_events_merged_in_below_the_cursor() {
         .to_string();
 
     // A pulls B: b1 is restacked above a1.
-    git(&a, &["pull", "-q", "--no-rebase", "--no-edit", b.to_str().unwrap(), "main"]);
+    git(
+        &a,
+        &[
+            "pull",
+            "-q",
+            "--no-rebase",
+            "--no-edit",
+            b.to_str().unwrap(),
+            "main",
+        ],
+    );
     // B pulls A's merge (a fast-forward).
-    git(&b, &["pull", "-q", "--ff-only", a.to_str().unwrap(), "main"]);
+    git(
+        &b,
+        &["pull", "-q", "--ff-only", a.to_str().unwrap(), "main"],
+    );
 
     let out = run(
         ta_bin(),
         &b,
-        &["watch", "--since", &cursor, "--timeout", "3s", "--holdout", "0s"],
+        &[
+            "watch",
+            "--since",
+            &cursor,
+            "--timeout",
+            "3s",
+            "--holdout",
+            "0s",
+        ],
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("a1:"), "a1 merged in below the cursor was skipped:\n{stdout}");
-    assert!(!stdout.contains("b1:"), "b1 was already seen at the cursor but re-reported:\n{stdout}");
+    assert!(
+        stdout.contains("a1:"),
+        "a1 merged in below the cursor was skipped:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("b1:"),
+        "b1 was already seen at the cursor but re-reported:\n{stdout}"
+    );
 }

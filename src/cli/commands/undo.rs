@@ -34,10 +34,12 @@ pub fn cmd_undo(
     remove: bool,
 ) -> Result<(), DynError> {
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        return Err("`ta undo` runs only in an interactive terminal: it is a convenience for \
+        return Err(
+            "`ta undo` runs only in an interactive terminal: it is a convenience for \
                     humans. To correct a mistake from a script or an agent, write the right \
                     value with `ta update` (or `ta dep`) instead."
-            .into());
+                .into(),
+        );
     }
     let Some(undo) = plan(store, seq, count, remove)? else {
         println!("Nothing to undo.");

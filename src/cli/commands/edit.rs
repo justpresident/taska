@@ -96,7 +96,11 @@ pub fn cmd_edit(
         EditMode::Update => "Updated task",
         EditMode::Create => "Created task",
     };
-    println!("{} {verb} {}", cursor_tag(outcome.cursor, color), task_ref(id, color));
+    println!(
+        "{} {verb} {}",
+        cursor_tag(outcome.cursor, color),
+        task_ref(id, color)
+    );
     Ok(())
 }
 

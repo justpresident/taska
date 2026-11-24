@@ -11,7 +11,8 @@ use serde_json::{json, Value};
 use crate::action::history::{history, op_label, HistoryEntry, HistoryQuery};
 use crate::error::DynError;
 use crate::format::{
-    cursor_tag, render_args, render_diff_lines, seq_tag, state_diff, task_ref, want_color, OutputArgs,
+    cursor_tag, render_args, render_diff_lines, seq_tag, state_diff, task_ref, want_color,
+    OutputArgs,
 };
 use crate::storage::EventStore;
 

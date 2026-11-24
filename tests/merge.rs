@@ -695,9 +695,14 @@ fn merge_after_a_restacked_merge_keeps_every_event_exactly_once() {
     for id in ["base", "a1", "c1", "y1"] {
         let creates = log
             .lines()
-            .filter(|l| l.contains("\"op\":\"Create\"") && l.contains(&format!("\"task_id\":\"{id}\"")))
+            .filter(|l| {
+                l.contains("\"op\":\"Create\"") && l.contains(&format!("\"task_id\":\"{id}\""))
+            })
             .count();
-        assert_eq!(creates, 1, "{id} created {creates} times in the merged log:\n{log}");
+        assert_eq!(
+            creates, 1,
+            "{id} created {creates} times in the merged log:\n{log}"
+        );
     }
 }
 

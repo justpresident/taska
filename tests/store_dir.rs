@@ -446,6 +446,12 @@ fn resolve_advice_follows_the_data() {
     assert!(!merge.status.success(), "default `surface` fails the merge");
     let elsewhere = ta(&proj, &["resolve"]);
     assert!(!elsewhere.contains(commit_advice), "{elsewhere}");
-    assert!(elsewhere.contains("outside this project") && elsewhere.contains("tasks-repo"), "{elsewhere}");
-    assert!(elsewhere.contains("finish the merge where it ran"), "{elsewhere}");
+    assert!(
+        elsewhere.contains("outside this project") && elsewhere.contains("tasks-repo"),
+        "{elsewhere}"
+    );
+    assert!(
+        elsewhere.contains("finish the merge where it ran"),
+        "{elsewhere}"
+    );
 }
