@@ -7,7 +7,49 @@ git log.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-24
+
+Merges stop losing events, and watch cursors survive them. The merge driver
+matches events by content, so repeated syncs between clones no longer drop or
+duplicate events. A watch cursor is a per-clone arrival number that no merge
+renumbers. Write commands also get stricter about what they accept.
+
+Several CLI changes break scripts written for 1.5 (marked **Breaking** below).
+They are: `--if` equality is `==`, a field may be assigned only once per
+command, `ta undo` runs only in a terminal, and mutations print `[cursor:N]`.
+So do a few signatures of the `taska` library crate (the last entry under
+Changed, and Removed).
+
 ### Fixed
+- **Merges no longer lose or duplicate events across repeated syncs.** The
+  driver split the logs at the ancestor's highest seq. But a merge renumbers
+  the events it brings in, so the next merge between the same branches took a
+  renumbered event for shared history: it dropped one copy and appended the
+  other again, with only a warning and exit 0. Three clones syncing through
+  one remote lost a third of their events. Events are now matched across the
+  three logs by content. Ours keeps its order and its seqs, and theirs' new
+  events and the resolutions are appended above them. An appended undo
+  compensation is re-pointed at the event it undoes, as numbered in the
+  merged log.
+- **`ta watch` no longer skips or repeats events after a merge.** A seq cursor
+  could skip an event that a pull inserted below it, or repeat one it moved
+  above it. Cursors are now arrival numbers (see Changed).
+- **`ta undo` and `ta resolve` can't overwrite a write that lands while their
+  prompt is open.** Both apply under the write lock against the log as it is
+  then. `undo` refuses if the log changed since its preview, or if a commit
+  landed (which changes what it may truncate rather than compensate); re-run
+  it to see the new preview. `resolve` drops orphans by content, so a
+  renumbered orphan is still found and a new event is kept, and it drops only
+  events that are still orphans: one that applies to a task again (say, the
+  delete that orphaned it was reverted meanwhile) is kept and reported.
+- **`--if "owner==me status==open"` is rejected** with a hint to give each
+  condition its own `--if`. It used to compare `owner` against the literal
+  string `me status==open` and fail the guard (exit 3). A JSON-quoted value is
+  still taken literally.
+- **`ta resolve` gives the right advice when the data lives outside the
+  project** (`[store] dir` in another repository, or in none). It names the
+  data directory and says to finish the merge where it ran, instead of telling
+  you to stage and commit in this project.
 - **Mercurial: taska's merge tools merge only the task log and baseline.** With
   no `ui.merge` set, hg merges a file its `[merge-patterns]` don't cover with
   the highest-priority tool in `[merge-tools]`, and that was taska's. So in an
@@ -17,12 +59,58 @@ git log.
   which takes them out of that fallback but not out of their own patterns. The
   next `ta` command in each clone rewrites the `.hg/hgrc` block.
 - **Mercurial: the store's per-clone files are ignored.** Classic hg doesn't
-  read `.gitignore`, so the merge-conflict marker could be committed by `hg add
-  .taska` or `hg commit -A`. taska now lists the data directory's per-clone
-  files in the repository's `.hgignore`, as rooted `rootglob:` lines (`ta init`
-  creates and commits the file; any `ta` command adds missing lines).
-  `.gitignore` gets the same upkeep: a data directory's own `.gitignore` that
-  lacks one of the files gets the line appended.
+  read `.gitignore`, so `hg add .taska` or `hg commit -A` could commit the
+  merge-conflict marker. taska now lists the data directory's per-clone files
+  (the marker and `arrivals.jsonl`) in the repository's `.hgignore` as rooted
+  `rootglob:` lines. `ta init` creates and commits the file, and any `ta`
+  command adds lines it is missing. The data directory's `.gitignore` gets the
+  same upkeep: one that lacks a line gets it appended.
+
+### Changed
+- **Breaking: watch cursors are not seqs.** A seq is an event's position in
+  one branch's log, which a merge can renumber. A cursor is this clone's
+  arrival number for the newest event it holds, kept in `arrivals.jsonl`
+  beside the log. That file is per clone and never committed.
+  - Every mutation prints `[cursor:N]` (it printed `[seq:N]`), computed under
+    the write lock.
+  - `ta watch --since` takes a cursor and closes with one.
+  - `ta history` closes with `[cursor:N]`. Its event headers keep `[seq:N]`,
+    which is what `ta history --since` and `ta undo --seq` take.
+  - New `ta status --cursor` (`{"cursor": N}` in json) seeds a watch loop that
+    starts without a write.
+  - `ta status --current` still prints the high-water seq (`{"seq": N}`). That
+    is no longer a watch cursor, so seed `--since` from `--cursor` or from
+    your write's own `[cursor:N]`. On a store that has never merged, the two
+    numbers agree.
+- **Breaking: `--if` conditions spell equality `==`** (`--if status==todo
+  --if owner==`). In a write command `key=value` assigns, so a bare `=` in an
+  `--if` is rejected with a hint. Write one condition per `--if`. Read filters
+  (`list`, `watch`, `history`) assign nothing, so they keep accepting `=` and
+  also accept `==`. `ta prime` and the README use `==`.
+- **Breaking: a field assigned twice in one `create`/`update` is rejected** -
+  `status=a status=b`, or `=` together with `+=`/`-=` on the same field. The
+  last token used to win silently. Repeated `+=`/`-=` still accumulate in
+  order.
+- **Breaking: an assignment spelled like a condition is rejected** (`key==v`,
+  `key!=v`, `key=~re`, `key!~re`, `key<v`, `key<=v`, `key>v`, `key>=v`), with a
+  pointer to `--if`. To set a value that starts with `=` or `~`, pass it
+  JSON-quoted: `dir='"~/work"'`.
+- **Breaking: `ta undo` runs only in an interactive terminal**, even with
+  `--force` (which only skips the prompt). Undo is a convenience for a human.
+  A script or an agent corrects a mistake with an ordinary `ta update` or `ta
+  dep` write, which also doesn't depend on a seq that a sync may renumber.
+- **Library (`taska` crate):** `EventStore::append_checked` returns
+  `Appended { events, cursor }`. `EventStore` gains defaulted `arrivals` and
+  `cursor` methods. `action::dep::apply_edges` returns `Appended`,
+  `action::write::WriteOutcome` gains `cursor`, and `action::undo::apply`
+  returns the cursor. New: `FileStore::rewrite_mutations` (a rewrite applied
+  against the current log, under the lock), the `arrival` module, and
+  `storage::PER_CLONE_FILES`.
+
+### Removed
+- **Library:** `EventStore::replace_mutations` (implementors no longer provide
+  it; rewrites go through `FileStore::rewrite_mutations`) and
+  `action::undo::UndoPlan::last_seq`.
 
 ## [1.5.1] - 2026-11-23
 
