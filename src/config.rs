@@ -499,9 +499,9 @@ pub struct WorkflowConfig {
     /// write, `action::read` maps it back on read - so renaming it is free.
     pub status_field: String,
     /// The status values that close a task - reaching ANY of them counts as
-    /// done (readiness, `--open`, `close_time`, the done styling). Loads from
-    /// the pre-rename single-string key `done_status` too, and accepts a bare
-    /// string for either spelling.
+    /// done (readiness, `--open`, `close_time`, the done styling). Accepts a bare
+    /// string. Also loads from the pre-rename key `done_status`, which is
+    /// deprecated (see [`deprecations`]).
     #[serde(alias = "done_status", deserialize_with = "one_or_many")]
     pub closed_statuses: Vec<String>,
     /// Status stamped onto a new task when `ta create` doesn't set the status
@@ -524,6 +524,39 @@ pub struct WorkflowConfig {
     /// non-conformance report), `deny` (a type is mandatory: any write to an
     /// untyped task is rejected until one is set).
     pub untyped_tasks: UntypedTasks,
+}
+
+/// The deprecated keys a `config.toml`'s text still spells, one user-facing
+/// message each (empty when there are none, or when the text doesn't parse -
+/// loading reports that).
+///
+/// Today that is `[workflow] done_status`, the pre-rename name of
+/// `closed_statuses`. It still loads through a serde alias, which can't say
+/// which name it read - hence this look at the text. The message carries the
+/// `ta config set` that replaces it with the same statuses; that `set` also
+/// removes the old key.
+pub fn deprecations(raw: &str) -> Vec<String> {
+    let Ok(doc) = raw.parse::<toml_edit::DocumentMut>() else {
+        return Vec::new();
+    };
+    let Some(value) = doc.get("workflow").and_then(|w| w.get("done_status")) else {
+        return Vec::new();
+    };
+    let statuses: Option<Vec<&str>> = match value.as_value() {
+        Some(toml_edit::Value::String(s)) => Some(vec![s.value().as_str()]),
+        Some(toml_edit::Value::Array(list)) => list.iter().map(toml_edit::Value::as_str).collect(),
+        _ => None,
+    };
+    let fix = statuses
+        .and_then(|s| serde_json::to_string(&s).ok())
+        .map_or_else(
+            || "rename it to `closed_statuses`".to_string(),
+            |list| format!("replace it with `ta config set workflow.closed_statuses '{list}'`"),
+        );
+    vec![format!(
+        "`[workflow] done_status` is deprecated and will stop loading in the next major \
+         release: it is the old name of `closed_statuses` - {fix}"
+    )]
 }
 
 /// Deserialize a string list that may also be written as one bare string, so
@@ -2157,6 +2190,32 @@ max_items = 2
         assert_eq!(parsed.workflow.status_field, STATUS_KEY); // untouched default
         assert_eq!(parsed.compaction, CompactionConfig::default()); // whole section defaulted
         assert_eq!(parsed.merge, MergeConfig::default()); // whole section defaulted
+    }
+
+    #[test]
+    fn the_legacy_done_status_key_is_reported_with_its_replacement() {
+        let one = deprecations("[workflow]\ndone_status = \"shipped\"\n");
+        assert_eq!(one.len(), 1, "{one:?}");
+        assert!(
+            one[0].contains("ta config set workflow.closed_statuses '[\"shipped\"]'"),
+            "{one:?}"
+        );
+        let many = deprecations("[workflow]\ndone_status = [\"a\", \"b\"]\n");
+        assert!(many[0].contains(r#"'["a","b"]'"#), "{many:?}");
+        let inline = deprecations("workflow = { done_status = \"x\" }\n");
+        assert_eq!(inline.len(), 1, "an inline table counts too: {inline:?}");
+        for clean in [
+            "",
+            "[workflow]\nclosed_statuses = [\"closed\"]\n",
+            "[other]\ndone_status = \"x\"\n",
+            "not toml = = =",
+        ] {
+            assert!(deprecations(clean).is_empty(), "{clean:?}");
+        }
+        assert!(
+            deprecations(&default_toml()).is_empty(),
+            "the template spells `closed_statuses`"
+        );
     }
 
     #[test]

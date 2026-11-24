@@ -100,6 +100,16 @@ pub fn validate(store: &FileStore) -> Result<ValidateReport, DynError> {
     })
 }
 
+/// The deprecation warnings for the store's `config.toml` (see
+/// [`crate::config::deprecations`]); none when the file is absent or unreadable
+/// (loading the store reports that).
+#[must_use]
+pub fn deprecations(store: &FileStore) -> Vec<String> {
+    std::fs::read_to_string(store.base_dir.join(CONFIG_FILE))
+        .map(|raw| crate::config::deprecations(&raw))
+        .unwrap_or_default()
+}
+
 /// Set one config value (comment-preserving), validating before writing.
 ///
 /// An invalid edit (unknown key, bad type/enum, `keep_events` below the floor) is

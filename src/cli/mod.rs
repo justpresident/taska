@@ -801,6 +801,7 @@ pub fn run() -> Result<(), DynError> {
         } => {
             let store = FileStore::discover()?;
             enforce_config(store.config())?;
+            warn_deprecations(&store);
             // v1 repair can't read a pre-1.0 store either - refuse rather than
             // load-and-rewrite it (which would drop the legacy edges).
             refuse_if_legacy(&store)?;
@@ -819,10 +820,21 @@ pub fn run() -> Result<(), DynError> {
         store_command => {
             let store = FileStore::discover()?;
             enforce_config(store.config())?;
+            warn_deprecations(&store);
             enforce_format(&store)?;
             warn_scm_health(&store);
             dispatch_store_command(store_command, &store)
         }
+    }
+}
+
+/// Print a warning for each deprecated key the store's `config.toml` still spells
+/// (see [`crate::action::config::deprecations`]). Warning-only: the key still
+/// loads, and every store-backed command (plus `config validate`) says so until
+/// it is replaced.
+pub(crate) fn warn_deprecations(store: &FileStore) {
+    for message in crate::action::config::deprecations(store) {
+        eprintln!("warning: {message}");
     }
 }
 

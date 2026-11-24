@@ -18,7 +18,8 @@ Several CLI changes break scripts written for 1.5 (marked **Breaking** below).
 They are: `--if` equality is `==`, a field may be assigned only once per
 command, `ta undo` runs only in a terminal, and mutations print `[cursor:N]`.
 So do a few signatures of the `taska` library crate (the last entry under
-Changed, and Removed).
+Changed, and Removed). `[workflow] done_status` still loads but now warns
+(Deprecated).
 
 ### Fixed
 - **Merges no longer lose or duplicate events across repeated syncs.** The
@@ -106,6 +107,14 @@ Changed, and Removed).
   returns the cursor. New: `FileStore::rewrite_mutations` (a rewrite applied
   against the current log, under the lock), the `arrival` module, and
   `storage::PER_CLONE_FILES`.
+
+### Deprecated
+- **`[workflow] done_status`**, the old name of `closed_statuses`. It still
+  loads, but every `ta` command that reads the store (and `ta config
+  validate`) warns, quoting the command that replaces it with the same
+  statuses: `ta config set workflow.closed_statuses '["shipped"]'` (setting
+  the new key also removes the old one). The next major release stops loading
+  it.
 
 ### Removed
 - **Library:** `EventStore::replace_mutations` (implementors no longer provide

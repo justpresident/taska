@@ -338,3 +338,49 @@ fn transitions_must_be_total_reachable_and_speak_the_enum() {
         "non-enum rejected: {non_enum}"
     );
 }
+
+/// `[workflow] done_status`, the pre-rename spelling of `closed_statuses`, still
+/// loads but is deprecated: every store command (and `config validate`) warns,
+/// with a `ta config set` that replaces it. Running that silences the warning.
+#[test]
+fn the_legacy_done_status_key_loads_with_a_deprecation_warning() {
+    let dir = fresh_dir("config-done-status");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    fs::write(
+        dir.join(".taska/config.toml"),
+        "[workflow]\ndone_status = \"shipped\"\n",
+    )
+    .unwrap();
+    let fix = r#"ta config set workflow.closed_statuses '["shipped"]'"#;
+
+    ta(&dir, &["create", "t", &format!("{STATUS_KEY}=shipped")]);
+    let list = run(ta_bin(), &dir, &["list", "--open"]);
+    let stderr = String::from_utf8_lossy(&list.stderr);
+    assert!(
+        stderr.contains("`[workflow] done_status` is deprecated") && stderr.contains(fix),
+        "{stderr}"
+    );
+    assert!(
+        !lists_task(&String::from_utf8_lossy(&list.stdout), "t"),
+        "it still loads: `shipped` closes the task"
+    );
+    let validate = run(ta_bin(), &dir, &["config", "validate"]);
+    assert!(String::from_utf8_lossy(&validate.stderr).contains(fix));
+
+    ta(
+        &dir,
+        &[
+            "config",
+            "set",
+            "workflow.closed_statuses",
+            r#"["shipped"]"#,
+        ],
+    );
+    let list = run(ta_bin(), &dir, &["list"]);
+    assert!(
+        !String::from_utf8_lossy(&list.stderr).contains("deprecated"),
+        "{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+}

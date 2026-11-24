@@ -38,6 +38,7 @@ pub fn cmd_config(store: &FileStore, action: ConfigAction) -> Result<(), DynErro
 /// existing tasks is listed as warnings, not errors - grandfathered data is
 /// read-tolerated by design.
 fn cmd_config_validate(store: &FileStore) -> Result<(), DynError> {
+    crate::cli::warn_deprecations(store);
     let report = crate::action::config::validate(store)?;
     for warning in crate::cli::render_warnings(&report.read_warnings) {
         eprintln!("{warning}");
