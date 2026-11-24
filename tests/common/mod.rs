@@ -154,3 +154,36 @@ pub fn append_orphan_update(log: &Path, task_id: &str) {
     ));
     fs::write(log, content).unwrap();
 }
+
+/// Run `ta ARGS`, wait until it shows its `[y/N]` confirmation prompt, run
+/// `meanwhile` (another write landing while the prompt is open), then answer
+/// `answer`. Returns the prompted command's output.
+pub fn ta_with_prompt_open(dir: &Path, args: &[&str], meanwhile: impl FnOnce(), answer: &str) -> Output {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+    let mut child = Command::new(ta_bin())
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path_with_bin())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let mut seen = Vec::new();
+    let mut byte = [0u8; 1];
+    while !String::from_utf8_lossy(&seen).contains("[y/N]") {
+        let n = stderr.read(&mut byte).unwrap();
+        assert!(n > 0, "`ta {}` exited before prompting:\n{}", args.join(" "), String::from_utf8_lossy(&seen));
+        seen.push(byte[0]);
+    }
+    meanwhile();
+    writeln!(child.stdin.take().unwrap(), "{answer}").unwrap();
+    let mut rest = Vec::new();
+    stderr.read_to_end(&mut rest).unwrap();
+    seen.extend(rest);
+    let mut out = child.wait_with_output().unwrap();
+    out.stderr = seen;
+    out
+}

@@ -396,3 +396,28 @@ fn undo_truncation_prunes_its_arrival_but_keeps_the_cursor_monotonic() {
     let next = cursor_of(&ta(&dir, &["create", "c"]));
     assert!(next > wrote, "the next write is numbered above the old high-water: {next} vs {wrote}");
 }
+
+/// A write that lands while the undo preview is waiting for confirmation must not
+/// be erased by the undo's rewrite (which was computed before it arrived): the
+/// undo refuses, writes nothing, and asks to be re-run.
+#[test]
+fn undo_refuses_when_the_log_changed_while_its_prompt_was_open() {
+    let dir = fresh_dir("undo-prompt-race");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a"]);
+    ta(&dir, &["create", "b"]);
+    let out = ta_with_prompt_open(&dir, &["undo"], || {
+        ta(&dir, &["create", "landed-during-prompt"]);
+    }, "y");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "undo must fail, got success:\n{stderr}");
+    assert!(stderr.contains("changed since this undo was previewed"), "got: {stderr}");
+    let list = ta(&dir, &["list"]);
+    for id in ["a", "b", "landed-during-prompt"] {
+        assert!(lists_task(&list, id), "{id} must survive:\n{list}");
+    }
+    // Re-running sees the new event and undoes it, the newest.
+    ta(&dir, &["undo", "--force"]);
+    let list = ta(&dir, &["list"]);
+    assert!(!lists_task(&list, "landed-during-prompt") && lists_task(&list, "b"), "{list}");
+}

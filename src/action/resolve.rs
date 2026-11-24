@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::engine::Engine;
 use crate::error::DynError;
-use crate::model::{MutationEvent, OpType, TASK_ID_KEY};
+use crate::model::{OpType, TASK_ID_KEY};
 use crate::storage::{EventStore, FileStore};
 
 /// One tentatively-merged field conflict, as recorded in the merge marker.
@@ -38,6 +38,9 @@ pub struct OrphanEvent {
 pub struct ResolvePlan {
     pub conflicts: Option<Vec<ConflictItem>>,
     pub orphans: Vec<OrphanEvent>,
+    /// The orphans' content identities ([`crate::arrival::content_key`]): pruning
+    /// matches by these, not by seq, which a sync may have renumbered since.
+    orphan_keys: HashSet<String>,
 }
 
 /// Inspect the store - parse the merge marker (if any) and compute the orphaned
@@ -53,6 +56,11 @@ pub fn plan(store: &FileStore) -> Result<ResolvePlan, DynError> {
         &store.config().workflow.closed_statuses,
     );
     let drop: HashSet<u64> = orphan_seqs.iter().copied().collect();
+    let orphan_keys = mutations
+        .iter()
+        .filter(|e| drop.contains(&e.seq))
+        .map(crate::arrival::content_key)
+        .collect();
     let orphans = mutations
         .iter()
         .filter(|e| drop.contains(&e.seq))
@@ -62,7 +70,11 @@ pub fn plan(store: &FileStore) -> Result<ResolvePlan, DynError> {
             task_id: e.task_id.clone(),
         })
         .collect();
-    Ok(ResolvePlan { conflicts, orphans })
+    Ok(ResolvePlan {
+        conflicts,
+        orphans,
+        orphan_keys,
+    })
 }
 
 /// Clear the merge marker (when one was present) and, if `drop_orphans`, prune
@@ -84,13 +96,15 @@ pub fn apply(
     };
 
     let dropped = if drop_orphans && !plan.orphans.is_empty() {
-        let drop: HashSet<u64> = plan.orphans.iter().map(|o| o.seq).collect();
-        let kept: Vec<MutationEvent> = store
-            .load_mutations()?
-            .into_iter()
-            .filter(|e| !drop.contains(&e.seq))
-            .collect();
-        store.replace_mutations(&kept)?;
+        // Under the write lock, against the CURRENT log, by content: a write or
+        // sync that landed while the preview was open is kept, and a renumbered
+        // orphan is still found.
+        store.rewrite_mutations(&|current| {
+            Ok(current
+                .into_iter()
+                .filter(|e| !plan.orphan_keys.contains(&crate::arrival::content_key(e)))
+                .collect())
+        })?;
         plan.orphans.len()
     } else {
         0

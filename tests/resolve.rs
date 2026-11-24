@@ -70,3 +70,38 @@ fn resolve_orphans_requires_confirmation() {
     ta(&dir, &["resolve", "--force"]);
     assert!(rows(&log) < before, "--force drops the orphan");
 }
+
+/// Orphan pruning applies against the CURRENT log under the write lock and
+/// matches the orphan by content: while the confirmation prompt is open a sync
+/// lands an event AND restacks the log so the new event takes the orphan's seq.
+/// Pruning by the previewed seq would drop the new event and keep the orphan.
+#[test]
+fn resolve_keeps_a_write_that_lands_while_its_prompt_is_open() {
+    let dir = fresh_dir("resolve-prompt-race");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["delete", "a"]);
+    let log = dir.join(".taska").join("mutations.jsonl");
+    append_orphan_update(&log, "a");
+    let before = rows(&log);
+    let out = ta_with_prompt_open(&dir, &["resolve"], || {
+        ta(&dir, &["create", "landed-during-prompt"]);
+        // Restack as a merge would: the new event moves in front of the orphan
+        // and takes its seq.
+        let text = std::fs::read_to_string(&log).unwrap();
+        let mut lines: Vec<serde_json::Value> =
+            text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let n = lines.len();
+        let (orphan_seq, new_seq) = (lines[n - 2]["seq"].clone(), lines[n - 1]["seq"].clone());
+        lines.swap(n - 2, n - 1);
+        lines[n - 2]["seq"] = orphan_seq;
+        lines[n - 1]["seq"] = new_seq;
+        let body: String = lines.iter().map(|v| format!("{v}\n")).collect();
+        std::fs::write(&log, body).unwrap();
+    }, "y");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(rows(&log), before, "orphan dropped (-1), concurrent create kept (+1)");
+    let list = run(ta_bin(), &dir, &["list"]);
+    assert!(lists_task(&String::from_utf8_lossy(&list.stdout), "landed-during-prompt"));
+    assert!(!String::from_utf8_lossy(&list.stderr).contains("orphaned event"));
+}

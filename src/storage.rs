@@ -245,6 +245,34 @@ impl FileStore {
         crate::arrival::number(&path, log, prune)
     }
 
+    /// Rewrite the log atomically: under the write lock, read the CURRENT log,
+    /// let `edit` turn it into the new one, write that, and prune the arrivals of
+    /// events that left it - returning the watch cursor. A command that previews
+    /// a rewrite and asks for confirmation (`undo`, `resolve`) applies through
+    /// here, so a write or a sync that lands while the prompt is open can't be
+    /// silently overwritten by a log computed before it arrived: `edit` sees it.
+    pub fn rewrite_mutations(
+        &self,
+        edit: &dyn Fn(Vec<MutationEvent>) -> Result<Vec<MutationEvent>, DynError>,
+    ) -> Result<u64, DynError> {
+        let mut locked_file = self.open_log_locked(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false), // we truncate explicitly under the lock, below
+        )?;
+        let current = read_log_strict(&mut locked_file)?;
+        let events = edit(current)?;
+        locked_file.set_len(0)?;
+        locked_file.seek(SeekFrom::Start(0))?;
+        for event in &events {
+            writeln!(locked_file, "{}", serde_json::to_string(event)?)?;
+        }
+        locked_file.flush()?;
+        Ok(self.number(&events, true)?.cursor)
+    }
+
     /// Whether the data lives somewhere other than beside `config.toml` - a
     /// `[store] dir` that resolves to a different, existing directory.
     pub fn data_relocated(&self) -> bool {

@@ -45,6 +45,9 @@ pub struct UndoPlan {
     /// The log to write on [`apply`] - the truncated tail, or the committed
     /// prefix plus compensating events.
     new_log: Vec<MutationEvent>,
+    /// The log this plan was computed from. [`apply`] refuses to write if the
+    /// log changed since (a write or a sync landed while the preview was open).
+    base: Vec<MutationEvent>,
 }
 
 impl UndoPlan {
@@ -187,6 +190,7 @@ pub fn plan(
         changes,
         rewrites_committed_history,
         new_log,
+        base: mutations,
     }))
 }
 
@@ -321,8 +325,21 @@ fn select_targets(
 
 /// Apply a planned undo: rewrite the log to the planned result, returning the
 /// watch cursor the rewrite leaves (taken under the same lock).
+///
+/// The plan was computed (and previewed) outside the write lock, so the log is
+/// re-read under it: if anything changed since - a concurrent write, a sync that
+/// merged in or renumbered events - nothing is written and the caller is asked
+/// to re-run, rather than overwriting events the plan never saw.
 pub fn apply(store: &FileStore, plan: &UndoPlan) -> Result<u64, DynError> {
-    store.replace_mutations(&plan.new_log)
+    store.rewrite_mutations(&|current| {
+        if current == plan.base {
+            Ok(plan.new_log.clone())
+        } else {
+            Err("the log changed since this undo was previewed (a write or a sync landed in \
+                 between); nothing was undone - run `ta undo` again to see the new preview"
+                .into())
+        }
+    })
 }
 
 /// Produce DRAFT events (seq 0; the caller assigns real seqs) that transform the
