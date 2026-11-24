@@ -635,3 +635,120 @@ fn concurrent_numeric_adds_commute_across_merge() {
         "set union in canonical order: {shown}"
     );
 }
+
+/// Regression: a merge restacks THEIR concurrent events onto fresh seqs above the
+/// fork, so a branch that already holds one of those events at its ORIGINAL seq
+/// disagrees with the merged branch about what sits at that seq. The next merge
+/// between them takes the ancestor's max seq as the fork and treats everything at
+/// or below it as shared history - so the event the merged side holds at the
+/// rewritten seq is silently dropped, and the renumbered copy above the fork is
+/// appended a second time.
+///
+/// Graph (all plain `git merge`, no hand edits):
+///   init: base@1
+///   main:    + a1           -> base@1 a1@2
+///   feature: + c1           -> base@1 c1@2          (y forks here)
+///   main  <- merge feature  -> base@1 a1@2 c1@3     (c1 renumbered 2 -> 3)
+///   y:       + y1           -> base@1 c1@2 y1@3
+///   y     <- merge main     -> must hold base, a1, c1, y1, each exactly once
+#[test]
+fn merge_after_a_restacked_merge_keeps_every_event_exactly_once() {
+    let dir = fresh_dir("merge-restacked-seq");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "base"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    git(&dir, &["branch", "feature"]);
+    ta(&dir, &["create", "a1"]);
+    git(&dir, &["commit", "-aqm", "a1 on main"]);
+
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["create", "c1"]);
+    git(&dir, &["commit", "-aqm", "c1 on feature"]);
+    git(&dir, &["branch", "y"]);
+
+    // main absorbs feature: c1 is restacked above main's a1.
+    git(&dir, &["checkout", "-q", "main"]);
+    git(&dir, &["merge", "-q", "feature", "-m", "main <- feature"]);
+
+    // y (forked from feature, so it has c1 at its original seq) adds y1...
+    git(&dir, &["checkout", "-q", "y"]);
+    ta(&dir, &["create", "y1"]);
+    git(&dir, &["commit", "-aqm", "y1 on y"]);
+
+    // ...then pulls main. The merge base is feature's commit.
+    let merge = run("git", &dir, &["merge", "main", "-m", "y <- main"]);
+    assert!(
+        merge.status.success(),
+        "merge should auto-resolve:\n{}",
+        String::from_utf8_lossy(&merge.stderr)
+    );
+
+    let list = ta(&dir, &["list"]);
+    for id in ["base", "a1", "c1", "y1"] {
+        assert!(lists_task(&list, id), "{id} lost by the merge:\n{list}");
+    }
+
+    // Each Create must appear exactly once in the merged log.
+    let log = std::fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    for id in ["base", "a1", "c1", "y1"] {
+        let creates = log
+            .lines()
+            .filter(|l| l.contains("\"op\":\"Create\"") && l.contains(&format!("\"task_id\":\"{id}\"")))
+            .count();
+        assert_eq!(creates, 1, "{id} created {creates} times in the merged log:\n{log}");
+    }
+}
+
+/// A committed `ta undo` on one branch records the undone event's seq in
+/// `_meta.undoes`. When the merge restacks that branch's events onto new seqs, the
+/// compensation must be re-pointed at the undone event's NEW seq - otherwise it
+/// names whatever event now sits at the old one (here, the other branch's work).
+///
+///   init:    base@1 (committed)
+///   main:    + other               -> other@2
+///   feature: t status=b @2, committed; `ta undo` -> compensation @3 (undoes 2)
+///   main  <- merge feature         -> other@2, update@3, compensation@4 (undoes 3)
+#[test]
+fn merge_repoints_an_undo_at_its_targets_restacked_seq() {
+    let dir = fresh_dir("merge-undo-repoint");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "base", &format!("{STATUS_FIELD}=a")]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    git(&dir, &["branch", "feature"]);
+    ta(&dir, &["create", "other"]);
+    git(&dir, &["commit", "-aqm", "other on main"]);
+
+    git(&dir, &["checkout", "-q", "feature"]);
+    ta(&dir, &["update", "base", &format!("{STATUS_FIELD}=b")]);
+    git(&dir, &["commit", "-aqm", "update on feature"]);
+    ta(&dir, &["undo", "--force"]); // committed, so it appends a compensation
+    git(&dir, &["commit", "-aqm", "undo on feature"]);
+
+    git(&dir, &["checkout", "-q", "main"]);
+    git(&dir, &["merge", "-q", "feature", "-m", "main <- feature"]);
+
+    let log = std::fs::read_to_string(dir.join(".taska/mutations.jsonl")).unwrap();
+    let events: Vec<serde_json::Value> = log
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let update = events
+        .iter()
+        .find(|e| e["op"] == "Update" && e["_meta"].is_null())
+        .expect("the update on feature");
+    let undo = events
+        .iter()
+        .find(|e| !e["_meta"]["undoes"].is_null())
+        .expect("the compensation");
+    assert_eq!(
+        undo["_meta"]["undoes"], update["seq"],
+        "the compensation must name the update's merged seq:\n{log}"
+    );
+    let list = ta(&dir, &["list"]);
+    assert!(lists_task(&list, "other"), "other survives:\n{list}");
+}

@@ -89,43 +89,20 @@ fn merge_logs(
     let ours = read_log(ours_path)?;
     let theirs = read_log(theirs_path)?;
 
-    // The last sequence number both branches share. Everything above it on each
-    // side is that branch's concurrent work since the fork.
-    let fork = anc.iter().map(|e| e.seq).max().unwrap_or(0);
-
-    // Removals are symmetric. An ancestor event a branch no longer carries -
-    // above that branch's compaction watermark, so it wasn't merely folded into
-    // the baseline - was reverted or hand-removed on that branch. The merge
-    // honors BOTH sides' removals (a union), so a revert converges to the same
-    // result regardless of merge direction. Ours' shared tail already lacks ours'
-    // removals; here we also drop the events theirs removed.
-    let removed_by_theirs = removed_seqs(&anc, &theirs);
-    let shared_tail: Vec<&MutationEvent> = ours
-        .iter()
-        .filter(|e| e.seq <= fork && !removed_by_theirs.contains(&e.seq))
-        .collect();
-    let ours_concurrent: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
-    let theirs_concurrent: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
-
-    // A shared seq with *different* content on different sides is not a clean
-    // revert - it's reuse of a freed seq (undo of a shared event) or a hand-edit,
-    // and the merge can't trust it. Warn loudly; git surfaces driver stderr.
-    let mismatches = content_mismatches(fork, &anc, &ours, &theirs);
-    if mismatches > 0 {
-        eprintln!(
-            "taska: warning: {mismatches} event(s) reuse a shared seq with different content \
-             (undo/seq-reuse or a hand-edit) - the merge may be unreliable; inspect the log."
-        );
-    }
+    // Events are matched across the three logs by CONTENT, not by seq: a merge
+    // restacks the other branch's events onto fresh seqs, so the same event can
+    // sit at different seqs on different branches, and a seq alone says nothing
+    // about which event it holds. See `split`.
+    let split = split(&anc, &ours, &theirs);
 
     // A shared event present on one side but reverted on the other (compared only
     // above BOTH branches' watermarks, so a baseline fold is never mistaken for a
     // revert) means the shared prefix was rewritten - usually a `git revert`. The
-    // removal-union above already reconciles it convergently by honoring the
+    // removal-union in `split` reconciles it convergently by honoring the
     // removal, but that silently drops events the other branch still had, so we
     // surface it. (A revert BELOW the higher watermark stays invisible - see
     // `removed_seqs` and the `revert_below_the_watermark_is_a_known_limitation` test.)
-    let rewritten = rewritten_shared_seqs(fork, &ours, &theirs);
+    let rewritten = rewritten_shared_seqs(&anc, &ours, &theirs);
     if !rewritten.is_empty() {
         eprintln!(
             "taska: warning: {} shared event(s) were reverted on one branch but kept on the \
@@ -140,18 +117,12 @@ fn merge_logs(
     // marks the path unmerged.
     let strategy = Strategy::for_policy(on_conflict);
     let plan = resolve(
-        &summarize(&ours_concurrent),
-        &summarize(&theirs_concurrent),
+        &summarize(&split.ours_concurrent()),
+        &summarize(&split.theirs_concurrent),
         strategy,
     );
 
-    let merged = assemble(
-        &shared_tail,
-        &ours_concurrent,
-        &theirs_concurrent,
-        &plan,
-        fork,
-    );
+    let merged = assemble(&split.ours, &split.theirs_concurrent, &theirs, &plan);
     write_log(output_path, &merged)?;
 
     if on_conflict == OnConflict::Surface && !plan.conflicts.is_empty() {
@@ -187,69 +158,132 @@ fn removed_seqs(anc: &[MutationEvent], branch: &[MutationEvent]) -> HashSet<u64>
         .map(|e| e.seq)
         .min()
         .map_or(0, |m| m.saturating_sub(1));
-    let present: HashSet<u64> = branch.iter().map(|e| e.seq).collect();
+    let present: HashSet<String> = branch.iter().map(content_key).collect();
     anc.iter()
-        .filter(|e| e.seq > watermark && !present.contains(&e.seq))
+        .filter(|e| e.seq > watermark && !present.contains(&content_key(e)))
         .map(|e| e.seq)
         .collect()
 }
 
-/// Shared-region seqs (`<= fork`) present on exactly one side, compared only
+/// Ancestor events present (by content) on exactly one side, compared only
 /// *above both branches' compaction watermarks* - the region both still hold in
-/// their logs. A mismatch there means the shared prefix was rewritten on one
-/// branch (a `git revert` of an event the other kept). Restricting to above both
-/// watermarks is what keeps this sound: anything either side folded into its
-/// baseline sits below the higher watermark and is excluded, so ordinary
-/// compaction never trips it. The blind spot is a revert *below* that watermark
-/// (see `removed_seqs`).
-fn rewritten_shared_seqs(fork: u64, ours: &[MutationEvent], theirs: &[MutationEvent]) -> Vec<u64> {
-    let watermark = |log: &[MutationEvent]| {
-        log.iter()
-            .map(|e| e.seq)
-            .min()
-            .map_or(0, |m| m.saturating_sub(1))
-    };
+/// their logs. Such an event was removed on one branch (a `git revert` of an
+/// event the other kept). Restricting to above both watermarks is what keeps this
+/// sound: anything either side folded into its baseline sits below the higher
+/// watermark and is excluded, so ordinary compaction never trips it. The blind
+/// spot is a revert *below* that watermark (see `removed_seqs`). Returns the
+/// ancestor seqs of those events.
+fn rewritten_shared_seqs(
+    anc: &[MutationEvent],
+    ours: &[MutationEvent],
+    theirs: &[MutationEvent],
+) -> Vec<u64> {
     let lo = watermark(ours).max(watermark(theirs));
-    let in_window = |log: &[MutationEvent]| -> HashSet<u64> {
-        log.iter()
-            .map(|e| e.seq)
-            .filter(|&s| s > lo && s <= fork)
-            .collect()
-    };
-    let mut diff: Vec<u64> = in_window(ours)
-        .symmetric_difference(&in_window(theirs))
-        .copied()
+    let keys = |log: &[MutationEvent]| -> HashSet<String> { log.iter().map(content_key).collect() };
+    let (in_ours, in_theirs) = (keys(ours), keys(theirs));
+    let mut diff: Vec<u64> = anc
+        .iter()
+        .filter(|e| e.seq > lo)
+        .filter(|e| {
+            let k = content_key(e);
+            in_ours.contains(&k) != in_theirs.contains(&k)
+        })
+        .map(|e| e.seq)
         .collect();
     diff.sort_unstable();
     diff
 }
 
-/// Count shared-region (`seq <= fork`) seqs that carry *different* content on
-/// different sides - the dangerous "same seq, different event" case (undo
-/// seq-reuse or a hand-edit), as opposed to a clean revert.
-fn content_mismatches(
-    fork: u64,
-    anc: &[MutationEvent],
-    ours: &[MutationEvent],
-    theirs: &[MutationEvent],
-) -> usize {
-    let mut seen: HashMap<u64, String> = HashMap::new();
-    let mut bad: HashSet<u64> = HashSet::new();
-    for log in [anc, ours, theirs] {
-        for event in log.iter().filter(|e| e.seq <= fork) {
-            let content = serde_json::to_string(event).unwrap_or_default();
-            match seen.get(&event.seq).cloned() {
-                Some(prev) if prev != content => {
-                    bad.insert(event.seq);
-                }
-                None => {
-                    seen.insert(event.seq, content);
-                }
-                _ => {}
+/// A branch's compaction watermark: everything at or below it may have been
+/// folded into its baseline, so its absence from the log says nothing.
+fn watermark(log: &[MutationEvent]) -> u64 {
+    log.iter()
+        .map(|e| e.seq)
+        .min()
+        .map_or(0, |m| m.saturating_sub(1))
+}
+
+/// An event's identity across branches: its full content except the parts that
+/// are positions in ONE branch's log - `seq` itself, and an undo compensation's
+/// `_meta.undoes` (the seq of the event it undoes, which the merge driver rewrites
+/// when it restacks that event). Everything else (timestamp to the nanosecond, op,
+/// task, payload, the rest of `_meta`) is what the writer recorded and survives
+/// every merge unchanged.
+fn content_key(event: &MutationEvent) -> String {
+    let mut value = serde_json::to_value(event).unwrap_or(Value::Null);
+    if let Value::Object(map) = &mut value {
+        map.remove("seq");
+        if let Some(Value::Object(meta)) = map.get_mut(crate::model::META_KEY) {
+            meta.remove(crate::model::UNDOES_META_KEY);
+            if meta.is_empty() {
+                map.remove(crate::model::META_KEY);
             }
         }
     }
-    bad.len()
+    value.to_string()
+}
+
+/// The three-way partition the merge works from, matched by content.
+struct Split<'a> {
+    /// Ours' events in ours' order, minus the ancestor events theirs removed;
+    /// each flagged `true` when it is ours' concurrent work (not in the ancestor).
+    ours: Vec<(&'a MutationEvent, bool)>,
+    /// Theirs' events that neither the ancestor nor ours already holds.
+    theirs_concurrent: Vec<&'a MutationEvent>,
+}
+
+impl<'a> Split<'a> {
+    fn ours_concurrent(&self) -> Vec<&'a MutationEvent> {
+        self.ours
+            .iter()
+            .filter(|(_, concurrent)| *concurrent)
+            .map(|(e, _)| *e)
+            .collect()
+    }
+}
+
+/// Partition the logs by event content. An event in the ancestor is shared; an
+/// ours event not in the ancestor is ours' concurrent work; a theirs event in
+/// neither the ancestor nor ours is theirs' concurrent work. Matching by content
+/// (rather than splitting at the ancestor's max seq) is what keeps an event that
+/// an earlier merge restacked onto a different seq from being mistaken for
+/// shared history and dropped, or counted as new and duplicated.
+fn split<'a>(
+    anc: &[MutationEvent],
+    ours: &'a [MutationEvent],
+    theirs: &'a [MutationEvent],
+) -> Split<'a> {
+    let anc_keys: HashSet<String> = anc.iter().map(content_key).collect();
+    let removed_by_theirs: HashSet<u64> = removed_seqs(anc, theirs);
+    let removed_keys: HashSet<String> = anc
+        .iter()
+        .filter(|e| removed_by_theirs.contains(&e.seq))
+        .map(content_key)
+        .collect();
+    let ours_keys: HashSet<String> = ours.iter().map(content_key).collect();
+
+    let ours = ours
+        .iter()
+        .filter_map(|e| {
+            let k = content_key(e);
+            if removed_keys.contains(&k) {
+                None
+            } else {
+                Some((e, !anc_keys.contains(&k)))
+            }
+        })
+        .collect();
+    let theirs_concurrent = theirs
+        .iter()
+        .filter(|e| {
+            let k = content_key(e);
+            !anc_keys.contains(&k) && !ours_keys.contains(&k)
+        })
+        .collect();
+    Split {
+        ours,
+        theirs_concurrent,
+    }
 }
 
 /// `ta git-merge-baseline %O %A %B` - keep our baseline.
@@ -773,37 +807,60 @@ fn event(
 // Assembly
 // ---------------------------------------------------------------------------
 
-/// Build the merged log: shared history, then both branches' concurrent events
-/// (minus any Delete the resolution dropped), then the resolution events - all
-/// above the fork renumbered onto a fresh contiguous tail.
+/// Build the merged log: ours' events in ours' order with their seqs unchanged
+/// (minus any Delete the resolution dropped), then theirs' concurrent events,
+/// then the resolution events - the appended ones numbered onto a fresh,
+/// strictly-increasing tail above ours' last seq. Ours is never renumbered.
+///
+/// An appended undo compensation names the event it undoes by THEIRS' seq
+/// (`_meta.undoes`), which can differ from that event's seq here - it may have been
+/// restacked by this merge, or sit at another seq in ours after an earlier one. So
+/// each appended `undoes` is re-pointed, by content, at the undone event's seq in
+/// the merged log; one whose target isn't in the merged log (folded into a
+/// baseline) keeps its value.
 fn assemble(
-    shared_tail: &[&MutationEvent],
-    ours_concurrent: &[&MutationEvent],
+    ours: &[(&MutationEvent, bool)],
     theirs_concurrent: &[&MutationEvent],
+    theirs: &[MutationEvent],
     plan: &Plan,
-    fork: u64,
 ) -> Vec<MutationEvent> {
-    let mut merged: Vec<MutationEvent> = shared_tail.iter().map(|e| (*e).clone()).collect();
-
-    let kept = |events: &[&MutationEvent], is_ours: bool, out: &mut Vec<MutationEvent>| {
-        for event in events {
-            let dropped = matches!(event.op, OpType::Delete)
-                && plan
-                    .drop_deletes
-                    .contains(&(is_ours, event.task_id.clone()));
-            if !dropped {
-                out.push((*event).clone());
-            }
-        }
+    let dropped = |event: &MutationEvent, is_ours: bool| {
+        matches!(event.op, OpType::Delete)
+            && plan
+                .drop_deletes
+                .contains(&(is_ours, event.task_id.clone()))
     };
-    kept(ours_concurrent, true, &mut merged);
-    kept(theirs_concurrent, false, &mut merged);
-    merged.extend(plan.resolutions.iter().cloned());
+    let mut merged: Vec<MutationEvent> = ours
+        .iter()
+        .filter(|(e, concurrent)| !(*concurrent && dropped(e, true)))
+        .map(|(e, _)| (*e).clone())
+        .collect();
+    let next = ours.iter().map(|(e, _)| e.seq).max().unwrap_or(0) + 1;
 
-    // Renumber everything above the fork into a contiguous, strictly-increasing
-    // tail so the log keeps its core invariant.
-    for (seq, event) in (fork + 1..).zip(merged.iter_mut().skip(shared_tail.len())) {
+    let mut appended: Vec<MutationEvent> = theirs_concurrent
+        .iter()
+        .filter(|e| !dropped(e, false))
+        .map(|e| (*e).clone())
+        .collect();
+    appended.extend(plan.resolutions.iter().cloned());
+    for (seq, event) in (next..).zip(appended.iter_mut()) {
         event.seq = seq;
+    }
+    merged.extend(appended);
+
+    // Re-point appended undo compensations at their targets' merged seqs.
+    let theirs_key_at: HashMap<u64, String> = theirs.iter().map(|e| (e.seq, content_key(e))).collect();
+    let merged_seq_of: HashMap<String, u64> = merged.iter().map(|e| (content_key(e), e.seq)).collect();
+    for event in merged.iter_mut().filter(|e| e.seq >= next) {
+        let Some(target) = event.undoes() else {
+            continue;
+        };
+        if let Some(&seq) = theirs_key_at
+            .get(&target)
+            .and_then(|key| merged_seq_of.get(key))
+        {
+            event.set_undoes(seq);
+        }
     }
     merged
 }
@@ -892,6 +949,23 @@ mod tests {
         }
     }
 
+    /// The driver's core, minus I/O: split by content, resolve, assemble.
+    fn merge_events(
+        anc: &[MutationEvent],
+        ours: &[MutationEvent],
+        theirs: &[MutationEvent],
+        strategy: Strategy,
+    ) -> (Vec<MutationEvent>, Plan) {
+        let split = split(anc, ours, theirs);
+        let plan = resolve(
+            &summarize(&split.ours_concurrent()),
+            &summarize(&split.theirs_concurrent),
+            strategy,
+        );
+        let merged = assemble(&split.ours, &split.theirs_concurrent, theirs, &plan);
+        (merged, plan)
+    }
+
     /// Merge two concurrent logs that share the `anc` prefix, returning the
     /// final materialized fields of `task`.
     fn merge_to_fields(
@@ -901,16 +975,7 @@ mod tests {
         policy: OnConflict,
         task: &str,
     ) -> Map<String, Value> {
-        let fork = anc.iter().map(|e| e.seq).max().unwrap_or(0);
-        let shared: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq <= fork).collect();
-        let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
-        let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
-        let plan = resolve(
-            &summarize(&oc),
-            &summarize(&tc),
-            Strategy::for_policy(policy),
-        );
-        let merged = assemble(&shared, &oc, &tc, &plan, fork);
+        let merged = merge_events(anc, ours, theirs, Strategy::for_policy(policy)).0;
         let state = Engine::materialize_state(Vec::new(), merged, &[DONE_STATUS.to_string()]);
         state
             .get(task)
@@ -925,16 +990,7 @@ mod tests {
         ours: &[MutationEvent],
         theirs: &[MutationEvent],
     ) -> Vec<String> {
-        let fork = anc.iter().map(|e| e.seq).max().unwrap_or(0);
-        let removed = removed_seqs(anc, theirs);
-        let shared: Vec<&MutationEvent> = ours
-            .iter()
-            .filter(|e| e.seq <= fork && !removed.contains(&e.seq))
-            .collect();
-        let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
-        let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
-        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
-        let merged = assemble(&shared, &oc, &tc, &plan, fork);
+        let merged = merge_events(anc, ours, theirs, Strategy::Ours).0;
         let mut ids: Vec<String> =
             Engine::materialize_state(Vec::new(), merged, &[DONE_STATUS.to_string()])
                 .into_keys()
@@ -1084,15 +1140,7 @@ mod tests {
         );
 
         // Reconstruct the merged log (ours = kept) and replay it for the orphan.
-        let fork = anc.iter().map(|e| e.seq).max().unwrap_or(0);
-        let shared: Vec<&MutationEvent> = kept
-            .iter()
-            .filter(|e| e.seq <= fork && !removed.contains(&e.seq))
-            .collect();
-        let oc: Vec<&MutationEvent> = Vec::new();
-        let tc: Vec<&MutationEvent> = Vec::new();
-        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
-        let merged = assemble(&shared, &oc, &tc, &plan, fork);
+        let merged = merge_events(&anc, &kept, &reverted, Strategy::Ours).0;
 
         let (state, orphans) =
             Engine::materialize_report(Vec::new(), merged, &[DONE_STATUS.to_string()]);
@@ -1143,7 +1191,7 @@ mod tests {
         // And the above-watermark detector cannot see it either (it is below the
         // higher watermark), which is exactly why it stays a limitation.
         assert!(
-            rewritten_shared_seqs(3, &kept, &reverted).is_empty(),
+            rewritten_shared_seqs(&anc, &kept, &reverted).is_empty(),
             "the below-watermark revert is outside the detector's window"
         );
     }
@@ -1165,11 +1213,10 @@ mod tests {
             anc[3].clone(),
             anc[4].clone(),
         ]; // c (seq 3) gone
-        let kept = anc;
-        let fork = 5;
-        assert_eq!(rewritten_shared_seqs(fork, &kept, &reverted), vec![3]);
+        let kept = anc.clone();
+        assert_eq!(rewritten_shared_seqs(&anc, &kept, &reverted), vec![3]);
         assert_eq!(
-            rewritten_shared_seqs(fork, &reverted, &kept),
+            rewritten_shared_seqs(&anc, &reverted, &kept),
             vec![3],
             "symmetric - flagged regardless of side"
         );
@@ -1191,8 +1238,11 @@ mod tests {
             ev(5, 0, OpType::Create, "e", &[]),
             ev(6, 0, OpType::Create, "f", &[]),
         ];
+        let anc: Vec<MutationEvent> = (1..=5)
+            .map(|s| ev(s, 0, OpType::Create, &["a", "b", "c", "d", "e"][s as usize - 1], &[]))
+            .collect();
         assert!(
-            rewritten_shared_seqs(5, &ours, &theirs).is_empty(),
+            rewritten_shared_seqs(&anc, &ours, &theirs).is_empty(),
             "compaction to different depths must not be flagged as a revert"
         );
     }
@@ -1252,20 +1302,11 @@ mod tests {
                 &[(TARGET_KEY, json!("Y")), (REL_KEY, json!(INFO))],
             ),
         ];
-        let fork = 1;
-        let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
-        let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
-        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
+        let (merged, plan) = merge_events(&anc, &ours, &theirs, Strategy::Ours);
         assert!(
             plan.conflicts.is_empty(),
             "distinct typed edges to the same task must not conflict"
         );
-        let removed = removed_seqs(&anc, &theirs);
-        let shared: Vec<&MutationEvent> = ours
-            .iter()
-            .filter(|e| e.seq <= fork && !removed.contains(&e.seq))
-            .collect();
-        let merged = assemble(&shared, &oc, &tc, &plan, fork);
         let state = Engine::materialize_state(Vec::new(), merged, &[DONE_STATUS.to_string()]);
         assert_eq!(
             state["X"].relationships[BLOCKER],
@@ -1280,13 +1321,50 @@ mod tests {
     }
 
     #[test]
-    fn content_mismatch_detects_seq_reuse() {
-        let anc = vec![ev(1, 0, OpType::Create, "a", &[])];
-        // Same seq 1 but a different event (a reused freed seq).
-        let reused = vec![ev(1, 0, OpType::Create, "different", &[])];
-        assert_eq!(content_mismatches(1, &anc, &reused, &anc), 1);
-        // Identical content across all sides is fine.
-        assert_eq!(content_mismatches(1, &anc, &anc, &anc), 0);
+    fn an_appended_undo_is_repointed_at_its_targets_merged_seq() {
+        // anc: base@1. ours adds o@2. theirs adds x@2 then undoes it at 3
+        // (undoes = 2, theirs' numbering). Merged: base@1 o@2 x@3 undo@4, and the
+        // undo must now name seq 3 - NOT 2, which is ours' `o` here.
+        let base = ev(1, 0, OpType::Create, "base", &[]);
+        let anc = vec![base.clone()];
+        let ours = vec![base.clone(), ev(2, 1, OpType::Create, "o", &[])];
+        let x = ev(2, 2, OpType::Update, "base", &[(STATUS_KEY, json!("x"))]);
+        let mut undo = ev(3, 3, OpType::Update, "base", &[(STATUS_KEY, Value::Null)]);
+        undo.set_undoes(2);
+        let theirs = vec![base, x, undo];
+
+        let merged = merge_events(&anc, &ours, &theirs, Strategy::Ours).0;
+        let seqs: Vec<(u64, &str)> = merged.iter().map(|e| (e.seq, e.task_id.as_str())).collect();
+        assert_eq!(seqs, vec![(1, "base"), (2, "o"), (3, "base"), (4, "base")]);
+        assert_eq!(merged[3].undoes(), Some(3), "undo re-pointed at x's merged seq");
+
+        // Its identity is unchanged by the rewrite, so a later merge with theirs
+        // still recognizes it (no duplicate undo).
+        assert_eq!(content_key(&merged[3]), content_key(&theirs[2]));
+        let again = merge_events(&theirs, &merged, &theirs, Strategy::Ours).0;
+        assert_eq!(again.len(), merged.len(), "nothing duplicated on re-merge");
+    }
+
+    #[test]
+    fn an_event_restacked_by_an_earlier_merge_is_matched_by_content() {
+        // anc (feature): base@1 c1@2. theirs (main, after merging feature): base@1
+        // a1@2 c1@3 - c1 restacked. ours (y, forked from feature): base@1 c1@2 y1@3.
+        // Seq 2 holds different events on the two sides; matching by content must
+        // keep a1 (theirs' work), y1 (ours'), and c1 exactly once.
+        let base = ev(1, 0, OpType::Create, "base", &[]);
+        let c1 = ev(2, 2, OpType::Create, "c1", &[]);
+        let a1 = ev(2, 1, OpType::Create, "a1", &[]);
+        let anc = vec![base.clone(), c1.clone()];
+        let mut c1_restacked = c1.clone();
+        c1_restacked.seq = 3;
+        let theirs = vec![base.clone(), a1, c1_restacked];
+        let ours = vec![base, c1, ev(3, 3, OpType::Create, "y1", &[])];
+
+        let merged = merge_events(&anc, &ours, &theirs, Strategy::Ours).0;
+        let ids: Vec<&str> = merged.iter().map(|e| e.task_id.as_str()).collect();
+        assert_eq!(ids, vec!["base", "c1", "y1", "a1"], "each event exactly once");
+        let seqs: Vec<u64> = merged.iter().map(|e| e.seq).collect();
+        assert_eq!(seqs, vec![1, 2, 3, 4], "ours keeps its seqs; theirs appended above");
     }
 
     #[test]
@@ -1369,17 +1447,7 @@ mod tests {
         ];
 
         // ours deleted -> with `ours`, the task is gone.
-        let fork = 1;
-        let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
-        let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
-        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Ours);
-        let merged = assemble(
-            &ours.iter().filter(|e| e.seq <= fork).collect::<Vec<_>>(),
-            &oc,
-            &tc,
-            &plan,
-            fork,
-        );
+        let merged = merge_events(&anc, &ours, &theirs, Strategy::Ours).0;
         let state = Engine::materialize_state(Vec::new(), merged, &[DONE_STATUS.to_string()]);
         assert!(
             !state.contains_key("X"),
@@ -1406,12 +1474,7 @@ mod tests {
             anc[0].clone(),
             ev(2, 0, OpType::Update, "X", &[(STATUS_KEY, json!("b"))]),
         ];
-        let fork = 1;
-        let shared: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq <= fork).collect();
-        let oc: Vec<&MutationEvent> = ours.iter().filter(|e| e.seq > fork).collect();
-        let tc: Vec<&MutationEvent> = theirs.iter().filter(|e| e.seq > fork).collect();
-        let plan = resolve(&summarize(&oc), &summarize(&tc), Strategy::Theirs);
-        let merged = assemble(&shared, &oc, &tc, &plan, fork);
+        let merged = merge_events(&anc, &ours, &theirs, Strategy::Theirs).0;
 
         // The resolution Update carries `_meta` explaining the pick.
         let res = merged

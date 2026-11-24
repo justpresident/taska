@@ -22,10 +22,13 @@ seq op       task   payload
 4   Update   db     {"status":"closed"}                  # replay -> db.status = closed
 ```
 
-`seq` is the **authoritative order** - replay, compaction, and merge all key off
-it; the wall-clock `timestamp` is informational (only a tiebreaker for the
+`seq` is the **authoritative order within one log** - replay and compaction key
+off it; the wall-clock `timestamp` is informational (only a tiebreaker for the
 `latest` merge strategy). New seqs are minted under a write lock as `max(seq)+1`,
-so concurrent writers never collide.
+so concurrent writers never collide. A seq is a *position in this branch's log*,
+not an identity: a merge restacks the events it brings in onto fresh seqs, so the
+same event can sit at different seqs on different branches. The merge therefore
+matches events by **content** (everything but `seq`).
 
 `seq` is **strictly increasing but not necessarily contiguous**: a `git revert`
 that drops committed events leaves gaps, which is normal and supported. Only an
@@ -54,23 +57,28 @@ identical. Because hg has no committed half (no `.gitattributes` equivalent), th
 whole registration is per-clone - every clone must run `ta init` (a store command
 also silently re-writes the block if it's missing).
 
-1. **Fork.** `fork = max(seq in the common ancestor %O)`. Everything `<= fork` is
-   shared history; everything `> fork` is a branch's concurrent work.
-2. **Keep ours' shared tail.** Take ours' events `<= fork`.
-3. **Restack theirs' concurrent events.** Take theirs' events `> fork` and append
-   them, **renumbered** into a fresh contiguous tail starting at `fork+1`.
+1. **Match by content.** An event's identity is its content minus `seq` (and
+   minus an undo's `_meta.undoes`, itself a seq). An event in the ancestor is
+   shared history; an event of ours not in the ancestor is ours' concurrent work;
+   an event of theirs in neither the ancestor nor ours is theirs' concurrent work.
+2. **Keep ours unchanged.** Ours' events stay in ours' order with ours' seqs
+   (minus the ancestor events theirs reverted - see below).
+3. **Restack theirs' concurrent events.** Append them on a fresh tail above ours'
+   last seq, **renumbered**. An appended undo compensation's `_meta.undoes` is
+   re-pointed at the undone event's merged seq.
 4. **Resolve contradictions per-field** with explicit appended resolution events
    (see below).
 
 ```
-ancestor %O:  1 2 3                      fork = 3
+ancestor %O:  1 2 3
 ours    %A:   1 2 3   4(status=open)
 theirs  %B:   1 2 3   4(owner=alice)
 merged:       1 2 3   4(status=open) 5(owner=alice)   # theirs' 4 restacked to 5
 ```
 
-Because only *concurrent* events are restacked and renumbered, two branches that
-each appended converge to the same set regardless of merge direction.
+Matching by content (not by "everything above the ancestor's max seq") is what
+keeps an event that an *earlier* merge restacked onto a different seq from being
+mistaken for shared history and dropped, or counted as new and duplicated.
 
 ### Conflicts and `on_conflict`
 
@@ -105,8 +113,8 @@ taska treats reverts as first-class:
   compares presence only *above both* branches' watermarks, so ordinary
   compaction is never mistaken for a revert.
 - **Seq reuse.** A revert frees its seq; the next `ta create` reuses it
-  (`max(seq)+1`). If both branches then put *different* events at that seq, the
-  merge warns about the content mismatch instead.
+  (`max(seq)+1`). Since the merge matches events by content, two different events
+  that share a seq on different branches are simply two events.
 
 ## Compaction and the baseline
 
