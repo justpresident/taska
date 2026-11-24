@@ -61,7 +61,7 @@ $ cargo install --path taska
 
 Run `ta init` once per clone (inside a git repository) to create the `.taska/` store and register the merge driver in your **local** git config. It also commits the new store, `.gitattributes`, and the agent-integration block in one commit, so the store is version-controlled from the first command (pass `--no-commit` to skip that and stage nothing). Run from a subdirectory, it creates the store at the repo root (an existing store anywhere up the tree is reused).
 
-**Mercurial (and Sapling) are supported too:** in an `hg` repo, `ta init` registers the same merge protection as hg merge tools in `.hg/hgrc` (`ta hg-merge`) and commits the store, exactly as it does under git. Because Mercurial has no committed equivalent of `.gitattributes`, that registration is entirely per-clone - run `ta init` in every clone (any `ta` command also re-registers it silently if it's missing).
+**Mercurial (and Sapling) are supported too:** in an `hg` repo, `ta init` registers the same merge protection as hg merge tools in `.hg/hgrc` (`ta hg-merge`) and commits the store, exactly as it does under git. Because Mercurial has no committed equivalent of `.gitattributes`, that registration is entirely per-clone - run `ta init` in every clone (any `ta` command also re-registers it silently if it's missing). Classic Mercurial doesn't read `.gitignore` either, so taska also lists the store's per-clone files in the repository's `.hgignore`.
 
 In the session below, only the lowercase verbs (`create`, `dep`, `list`, ...) are literal taska syntax. Everything else is yours - task ids like `migrate-db` and fields like `status=open priority=3` are arbitrary, and taska defines none of them:
 
@@ -420,7 +420,8 @@ Dates work for free: the computed timestamps are RFC 3339 strings, so a lexicogr
   mutations.jsonl   # the append-only event log
   baseline.jsonl    # compacted snapshot (state of events folded so far)
   config.toml       # configuration
-  .gitignore        # ignores the transient merge-conflict marker
+  .gitignore        # ignores this clone's own files: the transient
+                    # merge-conflict marker and arrivals.jsonl (watch cursors)
 .gitattributes      # registers the merge driver for the log files
 ```
 

@@ -110,6 +110,36 @@ fn init_no_commit_leaves_the_store_uncommitted() {
     assert!(status.contains(".taska/"), "store left untracked: {status}");
 }
 
+/// The per-clone files are git-ignored, and a store whose `.gitignore` predates
+/// `arrivals.jsonl` (taska's old one-line body, or the user's own file) gets
+/// the missing line from its next command.
+#[test]
+fn per_clone_files_are_gitignored_even_in_an_older_store() {
+    let dir = fresh_dir("gitignore-per-clone");
+    init_repo(&dir);
+    ta(&dir, &["init", "--no-commit"]);
+    let gitignore = dir.join(".taska/.gitignore");
+    assert_eq!(
+        fs::read_to_string(&gitignore).unwrap(),
+        "merge-conflict.json\narrivals.jsonl\n"
+    );
+
+    for (old, upgraded) in [
+        (
+            "merge-conflict.json\n",
+            "merge-conflict.json\narrivals.jsonl\n",
+        ),
+        ("target/", "target/\nmerge-conflict.json\narrivals.jsonl\n"),
+    ] {
+        fs::write(&gitignore, old).unwrap();
+        ta(&dir, &["list"]);
+        assert_eq!(fs::read_to_string(&gitignore).unwrap(), upgraded);
+    }
+    ta(&dir, &["create", "t"]);
+    let status = git(&dir, &["status", "--porcelain", "--ignored"]);
+    assert!(status.contains("!! .taska/arrivals.jsonl"), "{status}");
+}
+
 #[test]
 fn init_commit_skips_gitignored_paths() {
     // A repo may gitignore a file init would otherwise commit (here the agent

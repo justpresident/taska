@@ -194,6 +194,48 @@ fn hg_merge_tool_unions_divergent_appends() {
     }
 }
 
+/// The data dir's per-clone files never reach a commit: classic hg reads no
+/// `.gitignore`, so taska lists them, rooted, in the checkout's `.hgignore` -
+/// written and committed by `ta init`, and restored by any later command.
+#[test]
+fn hg_ignores_the_per_clone_files() {
+    if !hg_available() {
+        eprintln!("skipping: classic mercurial (`hg`) not on PATH");
+        return;
+    }
+    let dir = fresh_dir("hg-ignore");
+    init_hg(&dir);
+    assert!(
+        hg_ok(&dir, &["files"]).lines().any(|l| l == ".hgignore"),
+        "init commits .hgignore"
+    );
+
+    ta(&dir, &["create", "t"]);
+    fs::write(dir.join(".taska/merge-conflict.json"), "{}").unwrap();
+    fs::create_dir(dir.join("elsewhere")).unwrap();
+    fs::write(dir.join("elsewhere/arrivals.jsonl"), "").unwrap();
+    hg_ok(&dir, &["add", ".taska", "elsewhere"]);
+    let status = hg_ok(&dir, &["status", "--added", "--unknown", "--ignored"]);
+    for path in [".taska/arrivals.jsonl", ".taska/merge-conflict.json"] {
+        assert!(
+            status.contains(&format!("I {path}")),
+            "{path} ignored:\n{status}"
+        );
+    }
+    assert!(
+        status.contains("A elsewhere/arrivals.jsonl"),
+        "only the store's own file is ignored, not a namesake:\n{status}"
+    );
+    fs::remove_file(dir.join(".taska/merge-conflict.json")).unwrap();
+
+    // A clone whose .hgignore lacks the lines (a store from before them) gets
+    // them back from its next command.
+    fs::remove_file(dir.join(".hgignore")).unwrap();
+    ta(&dir, &["list"]);
+    let status = hg_ok(&dir, &["status", "--ignored"]);
+    assert!(status.contains("I .taska/arrivals.jsonl"), "{status}");
+}
+
 /// The taska tools merge the log and the baseline, nothing else. With no
 /// `ui.merge`, hg falls back to any usable `[merge-tools]` entry for a file no
 /// `[merge-patterns]` line matches, so unless the tools are `disabled` a

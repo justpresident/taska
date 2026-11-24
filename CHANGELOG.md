@@ -16,6 +16,13 @@ git log.
   unmerged without conflict markers. The tools are now marked `disabled`,
   which takes them out of that fallback but not out of their own patterns. The
   next `ta` command in each clone rewrites the `.hg/hgrc` block.
+- **Mercurial: the store's per-clone files are ignored.** Classic hg doesn't
+  read `.gitignore`, so the merge-conflict marker could be committed by `hg add
+  .taska` or `hg commit -A`. taska now lists the data directory's per-clone
+  files in the repository's `.hgignore`, as rooted `rootglob:` lines (`ta init`
+  creates and commits the file; any `ta` command adds missing lines).
+  `.gitignore` gets the same upkeep: a data directory's own `.gitignore` that
+  lacks one of the files gets the line appended.
 
 ## [1.5.1] - 2026-11-23
 

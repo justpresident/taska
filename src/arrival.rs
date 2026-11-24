@@ -14,8 +14,9 @@
 //! with nothing skipped or repeated.
 //!
 //! The numbers live in [`ARRIVALS_FILE`] beside the log in the store's data
-//! directory. They are per-clone by definition, so the file is git-ignored there,
-//! never committed. On a store that has no file yet, the existing events are
+//! directory. They are per-clone by definition, so the file is never committed:
+//! it is one of [`crate::storage::PER_CLONE_FILES`], which
+//! [`crate::scm::ensure_ignored`] keeps in the SCM's ignore files. On a store that has no file yet, the existing events are
 //! seeded with their own seqs, so cursors handed out before this file existed
 //! stay valid; a log that has never been merged keeps arrival == seq.
 //!
@@ -26,7 +27,7 @@
 //! kept as a bare `{"n": N}` entry, and the next new event is numbered above it.
 
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::Path;
 
@@ -200,40 +201,13 @@ pub fn max_of(numbers: &[u64]) -> u64 {
     numbers.iter().copied().max().unwrap_or(0)
 }
 
-/// Make sure the data directory's `.gitignore` keeps [`ARRIVALS_FILE`] out of
-/// git: a taska-written ignore file from before this file existed is replaced
-/// with the current one; a user's own gets the line appended. A directory with
-/// no `.gitignore` is left alone (`ta init` writes one).
-pub fn ensure_ignored(
-    gitignore: &Path,
-    current_body: &str,
-    legacy_body: &str,
-) -> Result<(), DynError> {
-    let Ok(body) = fs::read_to_string(gitignore) else {
-        return Ok(());
-    };
-    if body.lines().any(|l| l.trim() == ARRIVALS_FILE) {
-        return Ok(());
-    }
-    if body == legacy_body {
-        fs::write(gitignore, current_body)?;
-    } else {
-        let sep = if body.is_empty() || body.ends_with('\n') {
-            ""
-        } else {
-            "\n"
-        };
-        fs::write(gitignore, format!("{body}{sep}{ARRIVALS_FILE}\n"))?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::OpType;
     use chrono::{DateTime, Utc};
     use serde_json::Map;
+    use std::fs;
 
     fn ev(seq: u64, mins: i64, task: &str) -> MutationEvent {
         let base = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
@@ -314,29 +288,5 @@ mod tests {
         // The next event is numbered above the high-water, not reusing 3.
         let next = [truncated, &[ev(3, 9, "d")]].concat();
         assert_eq!(number(&path, &next, false).unwrap().numbers, vec![1, 2, 4]);
-    }
-
-    #[test]
-    fn ensure_ignored_upgrades_the_legacy_body_and_appends_to_a_users_file() {
-        let dir = scratch("ignore").parent().unwrap().to_path_buf();
-        let gi = dir.join(".gitignore");
-        fs::write(&gi, "merge-conflict.json\n").unwrap();
-        ensure_ignored(
-            &gi,
-            "merge-conflict.json\narrivals.jsonl\n",
-            "merge-conflict.json\n",
-        )
-        .unwrap();
-        assert_eq!(
-            fs::read_to_string(&gi).unwrap(),
-            "merge-conflict.json\narrivals.jsonl\n"
-        );
-
-        fs::write(&gi, "target/").unwrap();
-        ensure_ignored(&gi, "x", "merge-conflict.json\n").unwrap();
-        assert_eq!(
-            fs::read_to_string(&gi).unwrap(),
-            "target/\narrivals.jsonl\n"
-        );
     }
 }

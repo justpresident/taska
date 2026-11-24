@@ -829,9 +829,10 @@ pub fn run() -> Result<(), DynError> {
 /// Heal-or-warn on SCM merge protection before every store-backed command.
 /// `ensure_scm_health` silently re-registers this clone's merge drivers (git's
 /// per-clone config once `.gitattributes` declares them; mercurial's whole
-/// `.hg/hgrc` block, which has no committed half); the residual warning printed
-/// here covers only what it can't fix (missing `.gitattributes` entries, or a
-/// failed git-config / `.hg/hgrc` write), each pointing at its remedy.
+/// `.hg/hgrc` block, which has no committed half) and keeps the per-clone files
+/// in the ignore files; the residual warning printed here covers only what it
+/// can't fix (missing `.gitattributes` entries, or a failed git-config /
+/// `.hg/hgrc` / ignore-file write), each pointing at its remedy.
 /// Warning-only, unlike the enforce gates: the store itself is healthy, it's the
 /// clone's merge protection that may be incomplete.
 fn warn_scm_health(store: &FileStore) {

@@ -112,8 +112,15 @@ pub const BASELINE_FILE: &str = "baseline.jsonl";
 /// place both the merge driver (which knows only the merged file's path) and
 /// `ta resolve` can derive.
 pub const CONFLICT_MARKER_FILE: &str = "merge-conflict.json";
-/// The ignore file keeping the transient conflict marker out of version control.
-const GITIGNORE_FILE: &str = ".gitignore";
+/// The data directory's per-clone files: the conflict marker and the arrivals.
+///
+/// They hold THIS clone's state and are never versioned. `ta init` writes them
+/// into the data directory's [`GITIGNORE_FILE`], and
+/// [`crate::scm::ensure_ignored`] keeps every ignore file that applies listing
+/// them.
+pub const PER_CLONE_FILES: [&str; 2] = [CONFLICT_MARKER_FILE, crate::arrival::ARRIVALS_FILE];
+/// The data directory's ignore file, read by git (and Sapling).
+pub const GITIGNORE_FILE: &str = ".gitignore";
 
 /// JSONL-on-disk event store rooted at a repo's `.taska` directory.
 ///
@@ -187,7 +194,7 @@ impl FileStore {
         let data_dir = store.data_dir.clone()?;
         fs::create_dir_all(&data_dir)?;
 
-        // The merge-conflict marker is transient per-clone state, never history.
+        // The per-clone files are this clone's state, never history.
         let gitignore = data_dir.join(GITIGNORE_FILE);
         if !gitignore.exists() {
             fs::write(&gitignore, gitignore_body())?;
@@ -231,24 +238,15 @@ impl FileStore {
         Ok(dir)
     }
 
-    /// Number `log`'s events in this clone's arrivals file (creating it, and
-    /// keeping it git-ignored, on first use); `prune` drops entries for events no
-    /// longer in the log. See [`crate::arrival`].
+    /// Number `log`'s events in this clone's arrivals file (creating it on first
+    /// use); `prune` drops entries for events no longer in the log. See
+    /// [`crate::arrival`].
     fn number(
         &self,
         log: &[MutationEvent],
         prune: bool,
     ) -> Result<crate::arrival::Numbered, DynError> {
-        let dir = self.data_dir()?;
-        let path = dir.join(crate::arrival::ARRIVALS_FILE);
-        if !path.exists() {
-            // Per-clone state: keep it out of git before it first appears.
-            crate::arrival::ensure_ignored(
-                &dir.join(GITIGNORE_FILE),
-                &gitignore_body(),
-                LEGACY_GITIGNORE_BODY,
-            )?;
-        }
+        let path = self.data_dir()?.join(crate::arrival::ARRIVALS_FILE);
         crate::arrival::number(&path, log, prune)
     }
 
@@ -288,7 +286,7 @@ impl FileStore {
     }
 
     /// The taska-owned files in the data directory: the log, the baseline, and
-    /// the `.gitignore` keeping the conflict marker untracked - that last one only
+    /// the `.gitignore` keeping the per-clone files untracked - that last one only
     /// while it is exactly what [`Self::provision`] writes, since a data directory
     /// may be shared (even the project root) and its `.gitignore` the user's.
     pub fn data_files(&self) -> Result<Vec<PathBuf>, DynError> {
@@ -366,17 +364,12 @@ impl FileStore {
     }
 }
 
-/// The `.gitignore` [`FileStore::provision`] writes into a data directory.
+/// The `.gitignore` [`FileStore::provision`] writes into a data directory: one
+/// line per [`PER_CLONE_FILES`] entry. An older one lacking a line gets it
+/// appended ([`crate::scm::ensure_ignored`]), which makes it this body again.
 fn gitignore_body() -> String {
-    format!(
-        "{CONFLICT_MARKER_FILE}\n{}\n",
-        crate::arrival::ARRIVALS_FILE
-    )
+    PER_CLONE_FILES.map(|file| format!("{file}\n")).concat()
 }
-
-/// The ignore file `ta init` wrote before arrival numbers existed; upgraded to
-/// [`gitignore_body`] the first time the arrivals file is created.
-const LEGACY_GITIGNORE_BODY: &str = "merge-conflict.json\n";
 
 /// Whether two existing paths name the same directory, however each is spelled
 /// (relative, symlinked, `..`).

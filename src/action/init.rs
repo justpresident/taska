@@ -77,9 +77,9 @@ const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
 /// is also where provisioning creates the log files - re-running `init` is how a
 /// changed `[store] dir` is applied.
 ///
-/// With `commit`, the store, the SCM's committed registration files (git's
-/// `.gitattributes`; nothing for mercurial, whose registration lives in the
-/// untracked `.hg/hgrc`), and any agent file this run wrote are committed as one
+/// With `commit`, the store, the SCM's committed files outside it (git's
+/// `.gitattributes`; mercurial's `.hgignore` - its merge-tool registration lives
+/// in the untracked `.hg/hgrc`), and any agent file this run wrote are committed as one
 /// path-scoped commit so the store is version-controlled from the first command;
 /// it no-ops cleanly outside a repo or when nothing changed (see
 /// [`scm::commit_paths`]). Works under both git and mercurial - the commit helper

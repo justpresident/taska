@@ -21,6 +21,9 @@
 //! re-writable, since `.hg/hgrc` is untracked and the tool command is the same
 //! taska-owned constant.
 //!
+//! Both SCMs also keep the data directory's per-clone files
+//! ([`PER_CLONE_FILES`]) out of version control - see [`ensure_ignored`].
+//!
 //! Everything here is keyed off the store's **data directory** (`[store] dir`,
 //! where the log and baseline live), not the config: the SCM that versions the
 //! data files is the one whose merges need the drivers, and whose committed log
@@ -31,12 +34,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::error::DynError;
-use crate::storage::{FileStore, BASELINE_FILE, MUTATIONS_FILE, STORE_DIR_NAME};
+use crate::storage::{
+    FileStore, BASELINE_FILE, GITIGNORE_FILE, MUTATIONS_FILE, PER_CLONE_FILES, STORE_DIR_NAME,
+};
 
 const LOG_DRIVER: &str = "taska-merge-driver";
 const BASELINE_DRIVER: &str = "taska-baseline-keep-ours";
 /// The per-directory git attributes file the driver mappings live in.
 const GITATTRIBUTES_FILE: &str = ".gitattributes";
+/// Mercurial's repository-wide ignore file, at the checkout root.
+const HGIGNORE_FILE: &str = ".hgignore";
 
 /// Mercurial merge-tool names (the hgrc analogue of the git driver names).
 const HG_LOG_TOOL: &str = "taska-merge";
@@ -54,10 +61,13 @@ const HG_BLOCK_END: &str = "# END TASKA MERGE TOOLS";
 /// For git this writes the `.gitattributes` entries (see [`GitAttributes`])
 /// plus the local `git config` driver definitions; for mercurial it splices the
 /// managed `[merge-patterns]`/`[merge-tools]` block into per-clone `.hg/hgrc`.
+/// Either way it first makes the ignore files list the per-clone files
+/// ([`ensure_ignored`]).
 /// Idempotent and safe to call at any time (attribute/config lines and the hgrc
 /// block are only added if absent). Best-effort - a plain directory (no SCM)
 /// warns rather than failing, so `ta init` still works.
 pub fn setup(data_dir: &Path) -> Result<(), DynError> {
+    ensure_ignored(data_dir)?;
     match detect_scm(data_dir) {
         Some((Scm::Git, root)) => {
             let attrs = GitAttributes::for_data_dir(data_dir, root);
@@ -118,14 +128,17 @@ pub fn commit_paths(repo_root: &Path, paths: &[PathBuf], message: &str) -> Optio
     }
 }
 
-/// The merge-driver registration files `init` should commit alongside the store
+/// The SCM files outside the store that `init` should commit alongside the store
 /// whose data lives in `data_dir`.
 ///
 /// For the detected SCM: git's `.gitattributes` is the *committed* half of its
-/// driver setup, so it belongs in the commit; mercurial's whole registration
-/// lives in the untracked, per-clone `.hg/hgrc`, so it contributes nothing
-/// committable (and blindly listing `.gitattributes` would sweep an unrelated
-/// pre-existing one into the taska commit). Empty for a plain directory.
+/// driver setup, so it belongs in the commit (the data directory's `.gitignore`
+/// travels with the data files). Mercurial's merge-tool registration lives in
+/// the untracked, per-clone `.hg/hgrc`, so its only committed file is the
+/// checkout's `.hgignore`, where [`ensure_ignored`] lists the per-clone files.
+/// Each SCM names only the file it writes: blindly listing `.gitattributes`
+/// under hg would sweep an unrelated pre-existing one into the taska commit.
+/// Empty for a plain directory.
 pub fn committed_registration_paths(data_dir: &Path) -> Vec<PathBuf> {
     match detect_scm(data_dir) {
         Some((Scm::Git, root)) => {
@@ -133,8 +146,79 @@ pub fn committed_registration_paths(data_dir: &Path) -> Vec<PathBuf> {
                 .dir
                 .join(GITATTRIBUTES_FILE)]
         }
-        Some((Scm::Mercurial, _)) | None => Vec::new(),
+        Some((Scm::Mercurial, root)) => vec![root.join(HGIGNORE_FILE)],
+        None => Vec::new(),
     }
+}
+
+/// Keep the data directory's per-clone files ([`PER_CLONE_FILES`]) out of the
+/// SCM versioning `data_dir`, by appending the lines an ignore file is missing:
+///
+/// - The data directory's `.gitignore`, read by git and Sapling. It is
+///   directory-local, so the lines are the bare file names. `ta init` writes it
+///   ([`FileStore::provision`]), so a missing one was removed on purpose and is
+///   left alone.
+/// - Under mercurial, which reads no `.gitignore`, also the checkout's
+///   `.hgignore`. That file is repository-wide, so each line is a `rootglob:`
+///   pattern for the data directory's path from the checkout root: it ignores
+///   the store's own file, not a namesake elsewhere in the repository. Created
+///   when absent - hg has no per-directory ignore file to put the lines in.
+///
+/// A line already present is not repeated, and nothing else in either file is
+/// touched. Run by [`setup`] and, so that a store from before a per-clone file
+/// existed picks it up, by [`ensure_scm_health`] on every store command.
+pub fn ensure_ignored(data_dir: &Path) -> Result<(), DynError> {
+    add_missing_lines(
+        &data_dir.join(GITIGNORE_FILE),
+        &PER_CLONE_FILES.map(String::from),
+        false,
+    )?;
+    if let Some((Scm::Mercurial, root)) = detect_scm(data_dir) {
+        add_missing_lines(
+            &root.join(HGIGNORE_FILE),
+            &hgignore_lines(&root_relative(data_dir, root)),
+            true,
+        )?;
+    }
+    Ok(())
+}
+
+/// The `.hgignore` lines for the per-clone files of a data directory at
+/// `data_prefix` (relative to the hg root, `""` at the root).
+fn hgignore_lines(data_prefix: &str) -> [String; PER_CLONE_FILES.len()] {
+    let prefix = if data_prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{data_prefix}/")
+    };
+    PER_CLONE_FILES.map(|file| format!("rootglob:{prefix}{file}"))
+}
+
+/// Append to the file at `path` each of `lines` it doesn't hold yet (compared
+/// trimmed), starting on a fresh line. A missing file is created when `create`,
+/// else left alone, as is an unreadable one.
+fn add_missing_lines(path: &Path, lines: &[String], create: bool) -> Result<(), DynError> {
+    let mut body = match std::fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(e) if create && e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => return Ok(()),
+    };
+    let missing: Vec<&String> = lines
+        .iter()
+        .filter(|line| !body.lines().any(|have| have.trim() == line.as_str()))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    if !body.is_empty() && !body.ends_with('\n') {
+        body.push('\n');
+    }
+    for line in missing {
+        body.push_str(line);
+        body.push('\n');
+    }
+    std::fs::write(path, body)?;
+    Ok(())
 }
 
 /// Whether `a` and `b` lie in the same SCM checkout (`false` when either is in
@@ -285,9 +369,10 @@ fn git_commit_paths(repo_root: &Path, paths: &[PathBuf], message: &str) -> Optio
 /// hg has no staging area, so this is add-then-commit-these-paths. Non-existent
 /// paths are dropped first (in an hg repo there's no `.gitattributes`, but `init`
 /// still passes it), since `hg add` of a missing file fails the batch. Ignored
-/// paths need no special handling: taska writes no `.hgignore`, and an explicitly
-/// named path is added regardless. `hg commit <paths>` is inherently path-scoped,
-/// so unrelated working-tree changes are untouched.
+/// paths need no special handling: `hg add` of a directory skips the ignored
+/// files in it (the per-clone files in the store), and an explicitly named path
+/// is added regardless. `hg commit <paths>` is inherently path-scoped, so
+/// unrelated working-tree changes are untouched.
 fn hg_commit_paths(repo_root: &Path, paths: &[PathBuf], message: &str) -> Option<String> {
     use std::ffi::OsStr;
 
@@ -425,6 +510,11 @@ pub fn scm_root(start: &Path) -> Option<&Path> {
 /// fails: a missing `.gitattributes` entry (an explicit `ta init` must rewrite
 /// that committed file), a failed git-config write, or a failed `.hg/hgrc` write.
 ///
+/// It also keeps the per-clone files listed in the ignore files
+/// ([`ensure_ignored`]), so a store from before one of them existed picks it up
+/// before the file first appears; that only ever appends ignore lines, so it is
+/// silent too, warning only when the write fails.
+///
 /// Detection walks up from the data directory and is ordered cheapest-first: no
 /// SCM anywhere costs only stats and stays quiet (plain-dir use is deliberate -
 /// e.g. data kept outside version control; `ta init` warned once); mercurial
@@ -435,6 +525,15 @@ pub fn scm_root(start: &Path) -> Option<&Path> {
 /// registration writes.
 pub fn ensure_scm_health(data_dir: &Path) -> Option<String> {
     let (scm, scm_root) = detect_scm(data_dir)?;
+    // Before the driver checks, whose warnings return early: a failed write
+    // here is reported only when the drivers are fine.
+    let ignore_warning = ensure_ignored(data_dir).err().map(|e| {
+        format!(
+            "could not add {} to the ignore file ({e}); add them by hand so this \
+             clone's own state is never committed",
+            PER_CLONE_FILES.join(" and ")
+        )
+    });
     match scm {
         // Mercurial has no committed half - the whole registration lives in the
         // untracked, per-clone `.hg/hgrc` - so heal it silently (like git's local
@@ -490,7 +589,7 @@ pub fn ensure_scm_health(data_dir: &Path) -> Option<String> {
             }
         }
     }
-    None
+    ignore_warning
 }
 
 /// Whether both merge-driver definitions resolve in git config for the repo
@@ -722,6 +821,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn add_missing_lines_appends_only_what_is_missing() {
+        let dir = scratch("ignore-lines");
+        let lines = PER_CLONE_FILES.map(String::from);
+        let file = dir.join(".gitignore");
+
+        // taska's own body from before arrivals.jsonl becomes today's body.
+        std::fs::write(&file, "merge-conflict.json\n").unwrap();
+        add_missing_lines(&file, &lines, false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "merge-conflict.json\narrivals.jsonl\n"
+        );
+        // A user's own file, without a final newline, keeps its content.
+        std::fs::write(&file, "target/").unwrap();
+        add_missing_lines(&file, &lines, false).unwrap();
+        let body = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(body, "target/\nmerge-conflict.json\narrivals.jsonl\n");
+        // Idempotent, and a line counts as present however it's indented.
+        std::fs::write(&file, format!("  {}\n", lines.join("\n"))).unwrap();
+        add_missing_lines(&file, &lines, false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "  merge-conflict.json\narrivals.jsonl\n"
+        );
+
+        // A missing file is created only when asked.
+        let absent = dir.join("absent");
+        add_missing_lines(&absent, &lines, false).unwrap();
+        assert!(!absent.exists());
+        add_missing_lines(&absent, &lines, true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&absent).unwrap(),
+            "merge-conflict.json\narrivals.jsonl\n"
+        );
+    }
+
+    #[test]
+    fn hgignore_lines_are_rooted_at_the_data_dir() {
+        assert_eq!(
+            hgignore_lines(".taska"),
+            [
+                "rootglob:.taska/merge-conflict.json",
+                "rootglob:.taska/arrivals.jsonl"
+            ]
+        );
+        assert_eq!(
+            hgignore_lines("crates/app/.taska")[1],
+            "rootglob:crates/app/.taska/arrivals.jsonl"
+        );
+        assert_eq!(hgignore_lines("")[1], "rootglob:arrivals.jsonl");
     }
 
     #[test]

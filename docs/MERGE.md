@@ -57,7 +57,9 @@ matches never picks a taska tool for the rest of the repo). hg passes ours (`$lo
 as separate files, unlike git's in-place `%A`; everything below is otherwise
 identical. Because hg has no committed half (no `.gitattributes` equivalent), the
 whole registration is per-clone - every clone must run `ta init` (a store command
-also silently re-writes the block if it's missing).
+also silently re-writes the block if it's missing). The one committed file is the
+checkout's `.hgignore`, where taska lists the data directory's per-clone files
+(rooted `rootglob:` lines), since classic hg reads no `.gitignore`.
 
 1. **Match by content.** An event's identity is its content minus `seq` (and
    minus an undo's `_meta.undoes`, itself a seq). An event in the ancestor is
@@ -92,7 +94,8 @@ keeps two numbers apart, and labels them in every output:
   reports the high-water one.
 - **`[cursor:N]`** - a watch cursor: this clone's *arrival* number for the newest
   event it holds. Each event is numbered (in `arrivals.jsonl` beside the log,
-  git-ignored) the first time this clone's log holds it, and keeps that number
+  never committed: listed in the data directory's `.gitignore` and, under hg, the
+  `.hgignore`) the first time this clone's log holds it, and keeps that number
   however a merge renumbers its seq. Every mutation prints the cursor it leaves,
   computed under the write lock; `ta watch --since` takes one and closes with
   one; `ta history` closes with one; `ta status --cursor` reports one. So a
