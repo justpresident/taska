@@ -412,3 +412,40 @@ fn init_warns_about_data_left_beside_the_config() {
     assert!(!String::from_utf8_lossy(&out.stderr).contains("store.dir points elsewhere"));
     assert!(lists_task(&ta(&proj, &["list"]), "t"));
 }
+
+/// `ta resolve`'s advice follows the data. In the project it says to stage and
+/// commit; for data versioned in another repo, nothing in the project is
+/// committed and the merge may have run elsewhere (a sync tool's scratch clone),
+/// so it names the data directory and says to finish the merge where it ran.
+#[test]
+fn resolve_advice_follows_the_data() {
+    let commit_advice = "stage the files and commit";
+
+    let (_root, proj) = project("store-dir-resolve-in-project");
+    assert!(!conflicting_merge(&proj).status.success());
+    let here = ta(&proj, &["resolve"]);
+    assert!(here.contains(commit_advice), "{here}");
+
+    let (root, proj) = project("store-dir-resolve-elsewhere");
+    let tasks_repo = root.join("tasks-repo");
+    fs::create_dir_all(&tasks_repo).unwrap();
+    init_repo(&tasks_repo);
+    set_store_dir(&proj, "../../tasks-repo/proj");
+    ta(&proj, &["init", "--no-commit"]);
+    ta(&proj, &["create", "t", &format!("{STATUS_KEY}=open")]);
+    git(&tasks_repo, &["add", "-A"]);
+    git(&tasks_repo, &["commit", "-qm", "init"]);
+    git(&tasks_repo, &["branch", "feature"]);
+    ta(&proj, &["update", "t", &format!("{STATUS_KEY}=main")]);
+    git(&tasks_repo, &["commit", "-aqm", "main edit"]);
+    git(&tasks_repo, &["checkout", "-q", "feature"]);
+    ta(&proj, &["update", "t", &format!("{STATUS_KEY}=feature")]);
+    git(&tasks_repo, &["commit", "-aqm", "feature edit"]);
+    git(&tasks_repo, &["checkout", "-q", "main"]);
+    let merge = run("git", &tasks_repo, &["merge", "feature", "-m", "merge"]);
+    assert!(!merge.status.success(), "default `surface` fails the merge");
+    let elsewhere = ta(&proj, &["resolve"]);
+    assert!(!elsewhere.contains(commit_advice), "{elsewhere}");
+    assert!(elsewhere.contains("outside this project") && elsewhere.contains("tasks-repo"), "{elsewhere}");
+    assert!(elsewhere.contains("finish the merge where it ran"), "{elsewhere}");
+}

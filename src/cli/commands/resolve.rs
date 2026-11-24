@@ -18,7 +18,7 @@ use crate::storage::FileStore;
 /// first. With neither a marker nor an orphan, there is nothing to do.
 pub fn cmd_resolve(store: &FileStore, force: bool) -> Result<(), DynError> {
     let resolution = plan(store)?;
-    render_conflicts(resolution.conflicts.as_deref());
+    render_conflicts(store, resolution.conflicts.as_deref())?;
 
     // The orphan prune is the only step the user confirms; clearing the marker
     // just acknowledges the already-written merge.
@@ -41,14 +41,15 @@ pub fn cmd_resolve(store: &FileStore, force: bool) -> Result<(), DynError> {
     Ok(())
 }
 
-/// Print the tentatively-merged conflicts from the marker (nothing for no marker).
-fn render_conflicts(conflicts: Option<&[ConflictItem]>) {
+/// Print the tentatively-merged conflicts from the marker (nothing for no marker),
+/// then how to finish the merge - which depends on where the data lives.
+fn render_conflicts(store: &FileStore, conflicts: Option<&[ConflictItem]>) -> Result<(), DynError> {
     let Some(items) = conflicts else {
-        return;
+        return Ok(());
     };
     if items.is_empty() {
         println!("Merge marker present but lists no conflicts.");
-        return;
+        return Ok(());
     }
     println!(
         "{} field conflict(s) were merged tentatively (keeping ours):",
@@ -65,11 +66,26 @@ fn render_conflicts(conflicts: Option<&[ConflictItem]>) {
             }
         }
     }
-    println!(
-        "\nThe tentative merge is already written to the log. To accept it, stage the \
-         files and commit; to pick differently, edit the log or re-merge with a \
-         different `on_conflict` strategy."
-    );
+    if crate::scm::data_in_checkout(store) {
+        println!(
+            "\nThe tentative merge is already written to the log. To accept it, stage the \
+             files and commit; to pick differently, edit the log or re-merge with a \
+             different `on_conflict` strategy."
+        );
+    } else {
+        // The data is versioned outside this project, so nothing here is staged or
+        // committed, and the merge may not have run in the data directory at all
+        // (a sync tool can merge in a scratch clone). Clearing the marker is the
+        // acknowledgement; whatever ran the merge finishes it.
+        println!(
+            "\nThese conflicts are now acknowledged. The data lives outside this project, \
+             in {}: finish the merge where it ran (commit there if you merged by hand, \
+             or re-run the tool that stopped on the conflict). To pick a different \
+             value, `ta update` the field once the merge is in.",
+            store.data_dir()?.display()
+        );
+    }
+    Ok(())
 }
 
 /// Name every orphaned event that would be dropped, before touching the log.
