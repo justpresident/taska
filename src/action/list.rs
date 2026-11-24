@@ -495,17 +495,37 @@ fn compile_criteria(raw: &[String]) -> Result<Vec<Criterion>, DynError> {
     Ok(compiled)
 }
 
-/// Reject write-guard (`--if`) conditions spelled with a bare `=`: in a write
-/// command `key=value` ASSIGNS, so a guard's equality must be `==` - otherwise a
-/// condition written after one `--if` (which takes a single value) silently
-/// becomes an assignment. Read filters (`list`/`watch`/`history`) assign nothing
-/// and keep accepting `=`.
-pub(crate) fn reject_bare_equals(guard: &[String]) -> Result<(), DynError> {
+/// Validate write-guard (`--if`) conditions, one per `--if`:
+///
+/// - equality is spelled `==`: in a write command `key=value` ASSIGNS, so a
+///   condition written with `=` after one `--if` (which takes a single value)
+///   would silently become an assignment;
+/// - one condition per `--if`: a value that itself holds another condition
+///   (`--if "owner==me status==open"`) would otherwise be compared as the literal
+///   string `me status==open` and just fail the guard. A JSON-quoted value is
+///   taken literally, so `--if 'note=="a==b"'` still works.
+///
+/// Read filters (`list`/`watch`/`history`) assign nothing and keep accepting `=`.
+pub(crate) fn validate_guard(guard: &[String]) -> Result<(), DynError> {
     for raw in guard {
-        if let Ok((field, FilterOp::Eq, value, "=")) = split_criterion_spelled(raw) {
+        let Ok((field, _, value, spelled)) = split_criterion_spelled(raw) else {
+            continue; // a malformed criterion keeps its own parse error
+        };
+        if spelled == "=" {
             return Err(format!(
                 "`--if {raw}`: a condition's equality is `==` (`--if {field}=={value}`); a bare \
                  `=` assigns a field. Give each condition its own `--if`."
+            )
+            .into());
+        }
+        let nested = ["==", "!=", "=~", "!~", ">=", "<="]
+            .iter()
+            .any(|op| value.contains(op));
+        if nested && !value.trim_start().starts_with('"') {
+            return Err(format!(
+                "`--if {raw}` holds more than one condition: give each its own `--if` \
+                 (`--if a==1 --if b==2`). To compare against a value containing an operator, \
+                 quote it as JSON: `--if '{field}{spelled}\"...\"'`."
             )
             .into());
         }

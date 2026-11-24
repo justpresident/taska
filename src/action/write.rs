@@ -107,7 +107,7 @@ pub fn update(
     allow_new_fields: bool,
     guard: &[String],
 ) -> Result<WriteOutcome, DynError> {
-    crate::action::list::reject_bare_equals(guard)?;
+    crate::action::list::validate_guard(guard)?;
     let config = store.config().clone();
     let new_fields = RefCell::new(Vec::new());
     let appended = store.append_checked(&|baseline, log| {
@@ -142,7 +142,7 @@ pub fn delete(
     id: &str,
     guard: &[String],
 ) -> Result<WriteOutcome, DynError> {
-    crate::action::list::reject_bare_equals(guard)?;
+    crate::action::list::validate_guard(guard)?;
     let draft = MutationEvent::new(OpType::Delete, id, Map::new());
     let config = store.config().clone();
     let appended = store.append_checked(&|baseline, log| {

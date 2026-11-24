@@ -1106,12 +1106,23 @@ fn conditions_use_double_equals_and_never_pass_for_assignments() {
         fails(&["update", "t", token], "looks like a condition");
     }
     fails(&["delete", "t", "--if", "owner=x"], "equality is `==`");
+    // Two conditions inside ONE `--if` value, however they are joined.
+    let both = format!("owner==x {STATUS_FIELD}==open");
+    let comma = format!("owner==x,{STATUS_FIELD}==open");
+    let ne = format!("owner==x {STATUS_FIELD}!=done");
+    for guard in [both.as_str(), comma.as_str(), ne.as_str()] {
+        fails(&["update", "t", &done, "--if", guard], "holds more than one condition");
+    }
     assert_eq!(before, log(), "every rejected command wrote nothing");
 
     // The right spellings work: `==` guards, and `==` also filters in `list`.
     ta(&dir, &["update", "t", &done, "--if", "owner==x", "--if", &format!("{STATUS_FIELD}==open")]);
     assert!(lists_task(&ta(&dir, &["list", "owner==x"]), "t"));
     assert!(lists_task(&ta(&dir, &["list", "owner=x"]), "t"), "read filters keep `=`");
+    // A value that really contains an operator is compared JSON-quoted.
+    ta(&dir, &["update", "t", "note=\"a==b\"", "--new-field"]);
+    ta(&dir, &["update", "t", "owner=y", "--if", "note==\"a==b\""]);
+    assert!(lists_task(&ta(&dir, &["list", "owner==y"]), "t"));
     // A value that really starts with `~` can be set JSON-quoted.
     ta(&dir, &["update", "t", "dir=\"~/work\"", "--new-field"]);
     assert!(ta(&dir, &["show", "t"]).contains("~/work"));
