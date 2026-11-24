@@ -35,7 +35,18 @@ pub fn cmd_resolve(store: &FileStore, force: bool) -> Result<(), DynError> {
     if dropped > 0 {
         println!("Dropped {dropped} orphaned event(s) from the log.");
     }
-    if !cleared && dropped == 0 {
+    let revived = if drop_orphans {
+        resolution.orphans.len() - dropped
+    } else {
+        0
+    };
+    if revived > 0 {
+        println!(
+            "Kept {revived} of them: the log changed while the prompt was open, and they apply \
+             to a task again."
+        );
+    }
+    if !cleared && dropped == 0 && revived == 0 {
         println!("Nothing to resolve (no merge conflicts and no orphaned events).");
     }
     Ok(())

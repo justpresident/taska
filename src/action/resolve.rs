@@ -8,6 +8,7 @@
 //! the side effects a frontend has decided on (clear the marker, drop the
 //! confirmed orphans).
 
+use std::cell::Cell;
 use std::collections::HashSet;
 
 use serde_json::Value;
@@ -83,7 +84,11 @@ pub fn plan(store: &FileStore) -> Result<ResolvePlan, DynError> {
 ///
 /// Clearing the marker only acknowledges the already-written tentative merge, so
 /// it isn't gated on the orphan decision. Dropping an orphan is state-neutral (it
-/// applies to nothing), so it's safe once the frontend has confirmed.
+/// applies to nothing), so it's safe once the frontend has confirmed - provided
+/// it still IS an orphan. The plan was made outside the write lock, so the drop
+/// re-checks under it, against the current log: a confirmed event is dropped
+/// only while it is still orphaned there. A rewrite during the prompt (a `git
+/// revert` of the change that orphaned it) can make it apply to a task again.
 pub fn apply(
     store: &FileStore,
     plan: &ResolvePlan,
@@ -97,16 +102,28 @@ pub fn apply(
     };
 
     let dropped = if drop_orphans && !plan.orphans.is_empty() {
-        // Under the write lock, against the CURRENT log, by content: a write or
-        // sync that landed while the preview was open is kept, and a renumbered
-        // orphan is still found.
+        // Under the write lock, against the CURRENT log: a write or sync that
+        // landed while the preview was open is kept, a renumbered orphan is still
+        // found (by content), and one that applies to a task again is kept. The
+        // baseline is stable under the log lock (compaction holds it too).
+        let dropped = Cell::new(0);
+        let closed = &store.config().workflow.closed_statuses;
         store.rewrite_mutations(&|current| {
-            Ok(current
+            let (_, orphaned) =
+                Engine::materialize_report(store.load_baseline()?, current.clone(), closed);
+            let orphaned: HashSet<u64> = orphaned.into_iter().collect();
+            let total = current.len();
+            let kept: Vec<_> = current
                 .into_iter()
-                .filter(|e| !plan.orphan_keys.contains(&crate::arrival::content_key(e)))
-                .collect())
+                .filter(|e| {
+                    !(orphaned.contains(&e.seq)
+                        && plan.orphan_keys.contains(&crate::arrival::content_key(e)))
+                })
+                .collect();
+            dropped.set(total - kept.len());
+            Ok(kept)
         })?;
-        plan.orphans.len()
+        dropped.get()
     } else {
         0
     };

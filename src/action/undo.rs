@@ -48,6 +48,9 @@ pub struct UndoPlan {
     /// The log this plan was computed from. [`apply`] refuses to write if the
     /// log changed since (a write or a sync landed while the preview was open).
     base: Vec<MutationEvent>,
+    /// How many of `base`'s events were committed when the plan chose what to
+    /// truncate and what to compensate. [`apply`] refuses if that changed too.
+    committed_count: usize,
 }
 
 impl UndoPlan {
@@ -191,6 +194,7 @@ pub fn plan(
         rewrites_committed_history,
         new_log,
         base: mutations,
+        committed_count,
     }))
 }
 
@@ -326,21 +330,32 @@ fn select_targets(
 /// Apply a planned undo: rewrite the log to the planned result, returning the
 /// watch cursor the rewrite leaves (taken under the same lock).
 ///
-/// The plan was computed (and previewed) outside the write lock, so the log is
-/// re-read under it: if anything changed since - a concurrent write, a sync that
-/// merged in or renumbered events - nothing is written and the caller is asked
-/// to re-run, rather than overwriting events the plan never saw.
+/// The plan was computed (and previewed) outside the write lock, so what it rests
+/// on is re-checked under the lock, and if anything changed nothing is written
+/// and the caller is asked to re-run:
+/// - the log itself - a concurrent write, or a sync that merged in or renumbered
+///   events the plan never saw, would otherwise be overwritten;
+/// - how much of it is committed - a commit can land without changing the log,
+///   and would turn the plan's truncation of an uncommitted event into a silent
+///   rewrite of committed history.
 pub fn apply(store: &FileStore, plan: &UndoPlan) -> Result<u64, DynError> {
+    let data_dir = store.data_dir()?;
     store.rewrite_mutations(&|current| {
-        if current == plan.base {
-            Ok(plan.new_log.clone())
-        } else {
-            Err(
+        if current != plan.base {
+            return Err(
                 "the log changed since this undo was previewed (a write or a sync landed in \
                  between); nothing was undone - run `ta undo` again to see the new preview"
                     .into(),
-            )
+            );
         }
+        if crate::scm::committed_mutation_count(data_dir) != plan.committed_count {
+            return Err(
+                "a commit landed since this undo was previewed, which changes what it may \
+                 truncate; nothing was undone - run `ta undo` again to see the new preview"
+                    .into(),
+            );
+        }
+        Ok(plan.new_log.clone())
     })
 }
 

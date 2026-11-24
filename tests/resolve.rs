@@ -123,3 +123,45 @@ fn resolve_keeps_a_write_that_lands_while_its_prompt_is_open() {
     ));
     assert!(!String::from_utf8_lossy(&list.stderr).contains("orphaned event"));
 }
+
+/// `resolve` drops a confirmed orphan only while it still IS one. A rewrite of
+/// the log during the prompt - here the Delete that orphaned the Update goes
+/// away, as a `git revert` of that delete would - makes the Update apply to a
+/// task again, and dropping it then would silently undo a live change.
+#[test]
+fn resolve_keeps_an_orphan_that_came_back_to_life_while_its_prompt_was_open() {
+    let dir = fresh_dir("resolve-prompt-revived");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a", &format!("{STATUS_FIELD}=open")]);
+    ta(&dir, &["delete", "a"]);
+    let log = dir.join(".taska").join("mutations.jsonl");
+    append_orphan_update(&log, "a");
+    let out = ta_with_prompt_open(
+        &dir,
+        &["resolve"],
+        || {
+            let text = std::fs::read_to_string(&log).unwrap();
+            let kept: String = text
+                .lines()
+                .filter(|l| !l.contains("\"Delete\""))
+                .map(|l| format!("{l}\n"))
+                .collect();
+            std::fs::write(&log, kept).unwrap();
+        },
+        "y",
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("Kept 1 of them") && !stdout.contains("Dropped"),
+        "{stdout}"
+    );
+    let shown = ta(&dir, &["show", "a"]);
+    assert!(
+        shown
+            .lines()
+            .any(|l| l.starts_with(&format!("{STATUS_FIELD}:"))
+                && l.split_whitespace().nth(1) == Some("x")),
+        "the revived update still applies:\n{shown}"
+    );
+}

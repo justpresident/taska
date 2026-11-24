@@ -445,6 +445,37 @@ fn undo_refuses_when_the_log_changed_while_its_prompt_was_open() {
     );
 }
 
+/// Whether undo truncates or compensates depends on what is committed, and a
+/// commit can land while the prompt is open without changing the log. The
+/// preview said "truncate the uncommitted `b`"; after the commit that would
+/// silently rewrite committed history, so undo refuses instead.
+#[test]
+fn undo_refuses_when_a_commit_lands_while_its_prompt_is_open() {
+    let dir = fresh_dir("undo-prompt-commit");
+    init_renamed_open(&dir);
+    ta(&dir, &["create", "a"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", "a"]);
+    ta(&dir, &["create", "b"]);
+    let log = dir.join(".taska/mutations.jsonl");
+    let out = ta_with_prompt_open(
+        &dir,
+        &["undo"],
+        || {
+            git(&dir, &["commit", "-q", "-am", "b"]);
+        },
+        "y",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "undo must fail:\n{stderr}");
+    assert!(stderr.contains("a commit landed"), "got: {stderr}");
+    assert_eq!(rows(&log), 2, "nothing truncated");
+    // Re-running sees `b` committed and compensates it instead.
+    ta_tty(&dir, &["undo", "--force"]);
+    assert_eq!(rows(&log), 3, "compensated, not truncated");
+    assert!(!lists_task(&ta(&dir, &["list"]), "b"));
+}
+
 /// `undo` is for a human at a terminal: without one it refuses - even with
 /// `--force`, which only skips the prompt - names the alternative, and writes
 /// nothing. (Every other undo test runs it on a pseudo-terminal.)
