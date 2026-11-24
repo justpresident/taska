@@ -106,10 +106,13 @@ pub fn arrivals(path: &Path, log: &[MutationEvent]) -> Result<Vec<u64>, DynError
 /// log (undo, resolve, compaction).
 pub fn number(path: &Path, log: &[MutationEvent], prune: bool) -> Result<Numbered, DynError> {
     let fresh = !path.exists();
+    // Read-write, not append: `rewrite` truncates through this handle, which a
+    // Windows append handle (opened without FILE_WRITE_DATA) can't do.
     let mut file = OpenOptions::new()
         .read(true)
-        .append(true)
+        .write(true)
         .create(true)
+        .truncate(false)
         .open(path)?;
     // Concurrent readers may both see a new event; the lock makes one of them
     // number it and the other read that number back.
@@ -158,6 +161,7 @@ pub fn number(path: &Path, log: &[MutationEvent], prune: bool) -> Result<Numbere
     if prune || known.len() > 2 * log.len() + PRUNE_SLACK {
         rewrite(&mut file, log, &numbers, max)?;
     } else if !new.is_empty() {
+        file.seek(SeekFrom::End(0))?;
         for entry in &new {
             writeln!(file, "{}", serde_json::to_string(entry)?)?;
         }
@@ -194,6 +198,7 @@ fn rewrite(
         body.push('\n');
     }
     file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
     file.write_all(body.as_bytes())?;
     file.flush()?;
     Ok(())
