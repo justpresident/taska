@@ -68,9 +68,11 @@ pub struct HistoryEntry {
     pub merge_strategy: Option<String>,
 }
 
-/// A `history` read: the matching events oldest-first, the watch cursor they run
-/// up to (an arrival number, not a seq), and - when compaction has folded older events into the baseline - the
-/// last seq that history can no longer show.
+/// A `history` read.
+///
+/// The matching events oldest-first, the watch cursor they run up to (an
+/// arrival number, not a seq), and - when compaction has folded older events
+/// into the baseline - the last seq that history can no longer show.
 pub struct HistoryOutcome {
     pub cursor: u64,
     pub entries: Vec<HistoryEntry>,

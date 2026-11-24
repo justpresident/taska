@@ -1222,15 +1222,8 @@ mod tests {
             ev(6, 0, OpType::Create, "f", &[]),
         ];
         let anc: Vec<MutationEvent> = (1..=5)
-            .map(|s| {
-                ev(
-                    s,
-                    0,
-                    OpType::Create,
-                    &["a", "b", "c", "d", "e"][s as usize - 1],
-                    &[],
-                )
-            })
+            .zip(["a", "b", "c", "d", "e"])
+            .map(|(s, id)| ev(s, 0, OpType::Create, id, &[]))
             .collect();
         assert!(
             rewritten_shared_seqs(&anc, &ours, &theirs).is_empty(),

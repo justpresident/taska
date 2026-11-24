@@ -24,9 +24,11 @@ use crate::model::{
 use crate::schema::vet_events;
 use crate::storage::{Appended, EventStore};
 
-/// Add or remove the `name=target` edges on `task`, returning the stored edges
-/// actually written (none = every edge was already present/absent) and the watch
-/// cursor the write leaves (see [`crate::storage::Appended`]).
+/// Add or remove the `name=target` edges on `task`.
+///
+/// Returns the stored edges actually written (none = every edge was already
+/// present/absent) and the watch cursor the write leaves (see
+/// [`crate::storage::Appended`]).
 ///
 /// Each `name` resolves to one or more canonical stored edges (typically one,
 /// but removing a symmetric edge clears both sides). The structural checks (one

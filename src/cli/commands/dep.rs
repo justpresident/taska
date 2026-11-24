@@ -122,16 +122,16 @@ fn dep_write(
 ) -> Result<(), DynError> {
     let written = crate::action::dep::apply_edges(store, task, edges, op, types)?;
     let color = crate::format::want_color(false);
-    if !written.events.is_empty() {
+    if written.events.is_empty() {
+        // Nothing was appended, so there is no cursor to report.
+        println!("no changes on {}", crate::format::task_ref(task, color));
+    } else {
         println!(
             "{} {verb} {} edge(s) on {}",
             crate::format::cursor_tag(written.cursor, color),
             written.events.len(),
             crate::format::task_ref(task, color)
         );
-    } else {
-        // Nothing was appended, so there is no cursor to report.
-        println!("no changes on {}", crate::format::task_ref(task, color));
     }
     Ok(())
 }

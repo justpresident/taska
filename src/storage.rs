@@ -25,11 +25,13 @@ use crate::model::{MutationEvent, TaskState, OP_KEY, REL_KEY, TARGET_KEY};
 pub type EventBuilder<'a> =
     dyn Fn(&[TaskState], &[MutationEvent]) -> Result<Vec<MutationEvent>, DynError> + 'a;
 
-/// What a verified append wrote: the events (empty = nothing to do), and the
-/// watch cursor the write leaves - the highest per-clone arrival number (see
-/// [`crate::arrival`]) over the log INCLUDING these events, taken under the same
-/// write lock as the append, so no other write can land between the two. It is
-/// the value `ta watch --since` takes; 0 when nothing was written.
+/// What a verified append wrote: the events, and the watch cursor it leaves.
+///
+/// The events are empty when there was nothing to do. The cursor is the highest
+/// per-clone arrival number (see [`crate::arrival`]) over the log INCLUDING
+/// these events, taken under the same write lock as the append, so no other
+/// write can land between the two. It is the value `ta watch --since` takes; 0
+/// when nothing was written.
 pub struct Appended {
     pub events: Vec<MutationEvent>,
     pub cursor: u64,

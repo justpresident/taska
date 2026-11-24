@@ -925,6 +925,7 @@ fn refuse_if_legacy(store: &FileStore) -> Result<(), DynError> {
 
 /// Dispatch a command that operates on an already-resolved, already-validated
 /// store. Handlers depend only on the `EventStore` abstraction.
+#[allow(clippy::too_many_lines)] // one flat arm per store command
 fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), DynError> {
     match command {
         Commands::Create {

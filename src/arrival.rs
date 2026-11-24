@@ -40,8 +40,10 @@ use crate::model::MutationEvent;
 /// The arrival-number file, beside the log in the store's data directory.
 pub const ARRIVALS_FILE: &str = "arrivals.jsonl";
 
-/// An event's identity across branches: its full content except the parts that
-/// are positions in ONE branch's log - `seq` itself, and an undo compensation's
+/// An event's identity across branches.
+///
+/// That is its full content except the parts that are positions in ONE
+/// branch's log - `seq` itself, and an undo compensation's
 /// `_meta.undoes` (the seq of the event it undoes, which the merge driver rewrites
 /// when it restacks that event). Everything else (timestamp to the nanosecond, op,
 /// task, payload, the rest of `_meta`) is what the writer recorded and survives
@@ -87,8 +89,9 @@ pub struct Numbered {
     pub cursor: u64,
 }
 
-/// The arrival number of every event in `log`, in log order, recording numbers
-/// for events this clone has not seen before. `path` is the store's
+/// The arrival number of every event in `log`, in log order.
+///
+/// Records numbers for events this clone has not seen before. `path` is the store's
 /// [`ARRIVALS_FILE`]; the file is created (seeded from the log's seqs) on first
 /// use, appended to as new events arrive, and rewritten without stale entries
 /// once compaction has folded most of what it records into the baseline.
@@ -96,9 +99,11 @@ pub fn arrivals(path: &Path, log: &[MutationEvent]) -> Result<Vec<u64>, DynError
     Ok(number(path, log, false)?.numbers)
 }
 
-/// [`arrivals`] plus the cursor. With `prune`, the file is rewritten to hold only
-/// the events still in `log` plus the high-water marker - for callers that just
-/// removed events from the log (undo, resolve, compaction).
+/// [`arrivals`] plus the cursor.
+///
+/// With `prune`, the file is rewritten to hold only the events still in `log`
+/// plus the high-water marker - for callers that just removed events from the
+/// log (undo, resolve, compaction).
 pub fn number(path: &Path, log: &[MutationEvent], prune: bool) -> Result<Numbered, DynError> {
     let fresh = !path.exists();
     let mut file = OpenOptions::new()
@@ -132,21 +137,20 @@ pub fn number(path: &Path, log: &[MutationEvent], prune: bool) -> Result<Numbere
     let mut new = Vec::new();
     for event in log {
         let k = digest(event);
-        let n = match known.get(&k) {
-            Some(&n) => n,
-            None => {
-                // Seed a brand-new file with the events' own seqs, so existing
-                // seq cursors keep meaning the same events.
-                let n = if fresh {
-                    event.seq.max(max + 1)
-                } else {
-                    max + 1
-                };
-                max = n;
-                known.insert(k.clone(), n);
-                new.push(Entry { n, k });
-                n
-            }
+        let n = if let Some(&n) = known.get(&k) {
+            n
+        } else {
+            // Seed a brand-new file with the events' own seqs, so existing seq
+            // cursors keep meaning the same events.
+            let n = if fresh {
+                event.seq.max(max + 1)
+            } else {
+                max + 1
+            };
+            max = n;
+            known.insert(k.clone(), n);
+            new.push(Entry { n, k });
+            n
         };
         numbers.push(n);
     }
@@ -202,6 +206,7 @@ pub fn max_of(numbers: &[u64]) -> u64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // unwrap is the conventional assertion style in tests
 mod tests {
     use super::*;
     use crate::model::OpType;
