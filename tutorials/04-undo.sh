@@ -65,8 +65,8 @@ run ta show deploy
 # -------------------------------------------------------------------------
 # 4. The confirmation prompt (run WITHOUT --force), on an UNSET.
 # -------------------------------------------------------------------------
-say "Unset a field with '=null' (the null-unset convention removes 'priority')."
-run ta update deploy priority=null
+say "Unset a field with an empty value ('priority=' removes it)."
+run ta update deploy priority=
 say "Without --force, undo asks y/N and defaults to NO. The preview shows it WOULD"
 say "re-add 'priority'; we answer 'n' to decline, so nothing changes."
 # Feed 'n' so the prompt is answered unattended too; the decline is expected.

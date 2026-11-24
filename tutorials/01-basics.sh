@@ -35,9 +35,9 @@ run ta show deploy-api
 say "'ta list owner=alice' finds deploy-api while the field is set."
 run ta list owner=alice
 
-say "Unset a field with the null convention: 'ta update <id> owner=null'."
-say "(null is JSON null, not the string \"null\" - it removes the key entirely.)"
-run ta update deploy-api owner=null
+say "Unset a field by giving it an empty value: 'ta update <id> owner='."
+say "(Empty means unset: the key is removed from the task, not stored as \"\".)"
+run ta update deploy-api owner=
 
 say "'ta show' confirms the owner field is gone - it no longer exists on the task."
 run ta show deploy-api
@@ -48,4 +48,4 @@ run ta list --full
 say "And 'ta list owner=alice' now finds nothing - the field is truly unset, not blank."
 run ta list owner=alice
 
-say "That's the read surface: list / show, each with --columns / --full / --format, and field=null to delete a field."
+say "That's the read surface: list / show, each with --columns / --full / --format, and 'field=' to clear a field."
