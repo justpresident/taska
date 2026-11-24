@@ -52,7 +52,8 @@ by `ta init`). `%A` is *ours* (the branch merged into), `%B` is *theirs*.
 The same core also backs **Mercurial** (and Sapling): `ta init` writes a
 `[merge-patterns]`/`[merge-tools]` block to the per-clone `.hg/hgrc` so hg invokes
 `ta hg-merge $base $local $other $output` (`premerge = False`, so hg never
-text-merges the JSONL). hg passes ours (`$local`) and the destination (`$output`)
+text-merges the JSONL; `disabled = True`, so hg's fallback for files no pattern
+matches never picks a taska tool for the rest of the repo). hg passes ours (`$local`) and the destination (`$output`)
 as separate files, unlike git's in-place `%A`; everything below is otherwise
 identical. Because hg has no committed half (no `.gitattributes` equivalent), the
 whole registration is per-clone - every clone must run `ta init` (a store command

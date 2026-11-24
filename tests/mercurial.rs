@@ -194,6 +194,42 @@ fn hg_merge_tool_unions_divergent_appends() {
     }
 }
 
+/// The taska tools merge the log and the baseline, nothing else. With no
+/// `ui.merge`, hg falls back to any usable `[merge-tools]` entry for a file no
+/// `[merge-patterns]` line matches, so unless the tools are `disabled` a
+/// conflicting source file would be handed to `ta hg-merge-baseline`.
+#[test]
+fn hg_merges_other_files_with_its_own_tool() {
+    if !hg_available() {
+        eprintln!("skipping: classic mercurial (`hg`) not on PATH");
+        return;
+    }
+    let dir = fresh_dir("hg-other-file");
+    init_hg(&dir);
+
+    fs::write(dir.join("notes.txt"), "base\n").unwrap();
+    hg_ok(&dir, &["add", "notes.txt"]);
+    hg_ok(&dir, &["commit", "-m", "base"]);
+    let base = base_rev(&dir);
+    fs::write(dir.join("notes.txt"), "main\n").unwrap();
+    hg_ok(&dir, &["commit", "-m", "main"]);
+    hg_ok(&dir, &["update", "-q", "-r", &base]);
+    fs::write(dir.join("notes.txt"), "feature\n").unwrap();
+    hg_ok(&dir, &["commit", "-m", "feature"]);
+
+    let merge = hg(&dir, &["merge", "--debug"]);
+    let log = String::from_utf8_lossy(&merge.stdout);
+    assert!(
+        log.contains("picked tool ':merge' for notes.txt"),
+        "hg's internal merge handles notes.txt:\n{log}"
+    );
+    let merged = fs::read_to_string(dir.join("notes.txt")).unwrap();
+    assert!(
+        merged.contains("<<<<<<<") && merged.contains("main") && merged.contains("feature"),
+        "a real text conflict, with markers: {merged}"
+    );
+}
+
 #[test]
 fn hg_surface_conflict_fails_merge_and_resolve_clears_it() {
     if !hg_available() {

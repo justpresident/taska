@@ -570,12 +570,18 @@ fn root_relative(data_dir: &Path, scm_root: &Path) -> String {
 }
 
 /// The taska-managed `.hg/hgrc` block: a `[merge-patterns]` mapping the log and
-/// baseline to their tools, and a `[merge-tools]` definition for each. `premerge
-/// = False` is load-bearing - it stops hg from text-merging the JSONL (which
-/// could resolve an append cleanly and never call our restacker, or worse leave
-/// conflict markers), so the tool always runs on the raw ours/base/other. The
-/// tool `executable` is `ta`, the same taska-owned constant the git driver uses.
-/// `data_prefix` is the data directory relative to the checkout root.
+/// baseline to their tools, and a `[merge-tools]` definition for each. Two tool
+/// settings are load-bearing:
+/// - `premerge = False` stops hg from text-merging the JSONL (which could resolve
+///   an append cleanly and never call our restacker, or worse leave conflict
+///   markers), so the tool always runs on the raw ours/base/other.
+/// - `disabled = True` keeps the tools to their patterns. Without `ui.merge`, hg
+///   merges a file no `[merge-patterns]` line matches with the highest-priority
+///   usable `[merge-tools]` entry, which would hand every other conflicting file
+///   in the repo to `ta`; that fallback skips disabled tools, the patterns don't.
+///
+/// The tool `executable` is `ta`, the same taska-owned constant the git driver
+/// uses. `data_prefix` is the data directory relative to the checkout root.
 fn hg_block(data_prefix: &str) -> String {
     let p = if data_prefix.is_empty() {
         String::new()
@@ -591,9 +597,11 @@ fn hg_block(data_prefix: &str) -> String {
          {HG_LOG_TOOL}.executable = ta\n\
          {HG_LOG_TOOL}.args = hg-merge $base $local $other $output\n\
          {HG_LOG_TOOL}.premerge = False\n\
+         {HG_LOG_TOOL}.disabled = True\n\
          {HG_BASELINE_TOOL}.executable = ta\n\
          {HG_BASELINE_TOOL}.args = hg-merge-baseline $base $local $other $output\n\
          {HG_BASELINE_TOOL}.premerge = False\n\
+         {HG_BASELINE_TOOL}.disabled = True\n\
          {HG_BLOCK_END}"
     )
 }
@@ -717,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn hg_block_defines_tools_patterns_and_disables_premerge() {
+    fn hg_block_defines_tools_patterns_and_disables_premerge_and_fallback() {
         let b = hg_block(".taska");
         assert!(b.starts_with(HG_BLOCK_BEGIN) && b.ends_with(HG_BLOCK_END));
         assert!(b.contains(".taska/mutations.jsonl = taska-merge"));
@@ -727,6 +735,9 @@ mod tests {
         // premerge off is load-bearing: hg must always hand the raw file to `ta`.
         assert!(b.contains("taska-merge.premerge = False"));
         assert!(b.contains("taska-baseline.premerge = False"));
+        // ...and disabled, so hg's no-pattern fallback never picks them.
+        assert!(b.contains("taska-merge.disabled = True"));
+        assert!(b.contains("taska-baseline.disabled = True"));
     }
 
     #[test]

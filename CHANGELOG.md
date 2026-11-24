@@ -7,6 +7,16 @@ git log.
 
 ## [Unreleased]
 
+### Fixed
+- **Mercurial: taska's merge tools merge only the task log and baseline.** With
+  no `ui.merge` set, hg merges a file its `[merge-patterns]` don't cover with
+  the highest-priority tool in `[merge-tools]`, and that was taska's. So in an
+  hg repo with a taska store, a conflict in any other file (source code, a
+  README) went to `ta hg-merge-baseline`, which failed and left the file
+  unmerged without conflict markers. The tools are now marked `disabled`,
+  which takes them out of that fallback but not out of their own patterns. The
+  next `ta` command in each clone rewrites the `.hg/hgrc` block.
+
 ## [1.5.1] - 2026-11-23
 
 A fix for stores that keep their data outside the repository. Nothing changes
