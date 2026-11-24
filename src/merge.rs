@@ -31,6 +31,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+use crate::arrival::content_key;
 use crate::config::OnConflict;
 use crate::error::DynError;
 use crate::model::{edge_rel, edge_target, MutationEvent, OpType, TaskState, REL_KEY, TARGET_KEY};
@@ -201,26 +202,6 @@ fn watermark(log: &[MutationEvent]) -> u64 {
         .map(|e| e.seq)
         .min()
         .map_or(0, |m| m.saturating_sub(1))
-}
-
-/// An event's identity across branches: its full content except the parts that
-/// are positions in ONE branch's log - `seq` itself, and an undo compensation's
-/// `_meta.undoes` (the seq of the event it undoes, which the merge driver rewrites
-/// when it restacks that event). Everything else (timestamp to the nanosecond, op,
-/// task, payload, the rest of `_meta`) is what the writer recorded and survives
-/// every merge unchanged.
-fn content_key(event: &MutationEvent) -> String {
-    let mut value = serde_json::to_value(event).unwrap_or(Value::Null);
-    if let Value::Object(map) = &mut value {
-        map.remove("seq");
-        if let Some(Value::Object(meta)) = map.get_mut(crate::model::META_KEY) {
-            meta.remove(crate::model::UNDOES_META_KEY);
-            if meta.is_empty() {
-                map.remove(crate::model::META_KEY);
-            }
-        }
-    }
-    value.to_string()
 }
 
 /// The three-way partition the merge works from, matched by content.

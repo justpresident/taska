@@ -31,17 +31,18 @@ pub struct WatchUpdate {
 
 /// One [`poll`] snapshot: the matching changes and the cursor they cover.
 pub struct WatchPoll {
-    /// The log's high-water `seq` in the very read the diff was computed from -
-    /// so `--since <cursor>` resumes exactly after it, skipping and repeating
-    /// nothing. A separate `ta status --current` can't promise that: a write may
-    /// land between the two reads.
+    /// The highest per-clone arrival number (see [`crate::arrival`]) in the very
+    /// read the diff was computed from - so `--since <cursor>` resumes exactly
+    /// after it, skipping and repeating nothing, even across merges. A separate
+    /// `ta status --cursor` can't promise that: a write may land between the two
+    /// reads. Not a seq.
     pub cursor: u64,
     pub updates: Vec<WatchUpdate>,
 }
 
 /// The tasks that changed since `since` and match the filter, plus the cursor.
 ///
-/// Changed = touched by an event with `seq > since`; each comes with its
+/// Changed = touched by an event whose arrival number is `> since`; each comes with its
 /// before/after state (ordered by id). `updates` is empty when nothing new
 /// matches.
 ///
@@ -70,22 +71,25 @@ pub fn poll(
     let baseline = store.load_baseline()?;
     let muts = store.load_mutations()?;
 
-    // Compaction watermark: if the window we need (seq > since) dips below the
+    // Cursors are per-clone arrival numbers, not seqs: a merge can restack an
+    // unseen event below the old high-water seq (see `crate::arrival`).
+    let arrived = store.arrivals(&muts)?;
+
+    // Compaction watermark: if the window we need (arrival > since) dips below the
     // oldest retained event, those events were folded into the baseline and can't
     // be diffed. A once-in-a-store-lifetime edge; error rather than mislead.
-    if let Some(first) = muts.first() {
-        if since < first.seq.saturating_sub(1) {
+    if let Some(&first) = arrived.iter().min() {
+        if since < first.saturating_sub(1) {
             return Err(format!(
-                "cursor seq {since} predates the retained log (oldest is {}); those \
-                 events were compacted - re-sync with `ta status --current`",
-                first.seq
+                "cursor {since} predates the retained log (oldest is {first}); those \
+                 events were compacted - re-sync with `ta status --cursor`"
             )
             .into());
         }
     }
 
     // Fast path: nothing newer than the cursor.
-    let cursor = muts.last().map_or(0, |e| e.seq);
+    let cursor = crate::arrival::cursor(&arrived);
     if since >= cursor {
         return Ok(WatchPoll {
             cursor,
@@ -96,7 +100,12 @@ pub fn poll(
     // State at the cursor vs now, display-shaped for consistent field names in the
     // filter and diff - but WITHOUT the timestamp/computed-column injection `read`
     // adds, so a diff shows only real mutations.
-    let since_muts: Vec<_> = muts.iter().filter(|e| e.seq <= since).cloned().collect();
+    let since_muts: Vec<_> = muts
+        .iter()
+        .zip(&arrived)
+        .filter(|(_, &n)| n <= since)
+        .map(|(e, _)| e.clone())
+        .collect();
     let mut before = materialize(config, &baseline, &since_muts);
     let mut after = materialize(config, &baseline, &muts);
     // Names checked against THIS snapshot (a frontend may skip `validate`).
@@ -114,8 +123,9 @@ pub fn poll(
     // Only tasks actually touched by a newer event can have changed.
     let touched: BTreeSet<&str> = muts
         .iter()
-        .filter(|e| e.seq > since)
-        .map(|e| e.task_id.as_str())
+        .zip(&arrived)
+        .filter(|(_, &n)| n > since)
+        .map(|(e, _)| e.task_id.as_str())
         .collect();
 
     // Matching either side counts: entering the set, leaving it (including by
@@ -278,7 +288,7 @@ mod tests {
         );
         assert_eq!(
             polled.cursor, 10,
-            "the cursor is the snapshot's high-water seq"
+            "the cursor is the snapshot's highest arrival (seq, in the in-memory store)"
         );
         assert!(
             poll(&store, &[], false, false, u64::MAX, &[])

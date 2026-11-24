@@ -162,16 +162,19 @@ enum Commands {
     /// Watch for tasks matching a filter to change past a cursor, then print a diff
     ///
     /// Blocks until a task matching the (list-style) criteria is created, updated,
-    /// or deleted with `seq` greater than `--since`, then prints a per-task diff of
-    /// what changed and exits 0. A task counts if it matched at the cursor OR
-    /// matches now, so leaving the filter (e.g. `status=in_progress` -> `closed`)
-    /// is reported like entering it. On the first change it waits `--holdout` to
-    /// batch a burst. The diff ends with the cursor it was computed at
-    /// (`[seq:N]`; `{"cursor": N, "changes": [...]}` in json) - the next
+    /// or deleted by an event that arrived after the `--since` cursor, then prints
+    /// a per-task diff of what changed and exits 0. A task counts if it matched at
+    /// the cursor OR matches now, so leaving the filter (e.g. `status=in_progress`
+    /// -> `closed`) is reported like entering it. On the first change it waits
+    /// `--holdout` to batch a burst. The diff ends with the cursor it was computed
+    /// at (`[cursor:N]`; `{"cursor": N, "changes": [...]}` in json) - the next
     /// `--since`, so a loop resumes with nothing skipped or repeated. If nothing
     /// matches before `--timeout`, prints `No updates yet` to stderr and exits 1.
-    /// Seed the first `--since` from `ta status --current` (or the `[seq:N]` any
-    /// mutation prints).
+    ///
+    /// A cursor is NOT a seq: it is this clone's arrival number for the newest
+    /// event it holds, which a merge never renumbers (seqs it can). Seed the
+    /// first `--since` from the `[cursor:N]` your own write printed (atomic with
+    /// the write - nothing can slip in between) or from `ta status --cursor`.
     Watch {
         /// Filter criteria, same grammar as `ta list` (`field=value`, `field=~regex`,
         /// `field!=value`, comparisons, or bare task ids); with none given, every
@@ -185,9 +188,10 @@ enum Commands {
         /// Only report tasks ready to work on: not done and every dependency done.
         #[arg(long)]
         ready: bool,
-        /// Only report changes after this mutation seq (from `ta status --current`
-        /// or the `[seq:N]` any mutation prints).
-        #[arg(long)]
+        /// Only report changes that arrived after this cursor (the `[cursor:N]` a
+        /// mutation, `ta watch` or `ta history` prints, or `ta status --cursor`).
+        /// Not a seq.
+        #[arg(long, value_name = "CURSOR")]
         since: u64,
         /// How long to block waiting for a change, e.g. `9m`, `1m30s`, `1h`.
         /// The default stays under common 10-minute foreground caps; for longer
@@ -211,9 +215,10 @@ enum Commands {
     ///
     /// `watch`'s past-tense twin: instead of waiting for new changes, replays the
     /// retained log and prints every event of the tasks `ta list` would select -
-    /// a `[seq:N] <time> <op> <id>` header plus that event's `-`/`+` diff - then
-    /// the cursor, the `--since` a following `ta watch` continues from without
-    /// gaps. Undo
+    /// a `[seq:N] <time> <op> <id>` header plus that event's `-`/`+` diff (the
+    /// seq is the event's position in this log, what `ta undo --seq` takes) -
+    /// then a `[cursor:N]` watch cursor, the `--since` a following `ta watch`
+    /// continues from without gaps. Undo
     /// compensations and merge resolutions are annotated. Compacted events are
     /// gone; history starts at the oldest retained one.
     History {
@@ -281,11 +286,17 @@ enum Commands {
     },
     /// Summary counts: total, per-status, blocked, ready, closed
     Status {
-        /// Print only the store's current high-water mutation `seq` - the cursor
-        /// `ta watch --since` takes - instead of the counts. Seeds a watch loop:
-        /// `SINCE=$(ta status --current)`.
-        #[arg(long)]
+        /// Print only the log's high-water `seq` instead of the counts - a log
+        /// position (what `ta history --since` and `ta undo --seq` take), NOT a
+        /// watch cursor: a merge can renumber seqs. For `ta watch` use `--cursor`.
+        #[arg(long, conflicts_with = "cursor")]
         current: bool,
+        /// Print only the watch cursor instead of the counts: this clone's highest
+        /// arrival number, the value `ta watch --since` takes. Seeds a watch loop
+        /// that starts without a write: `SINCE=$(ta status --cursor)` (a write
+        /// prints its own `[cursor:N]`).
+        #[arg(long)]
+        cursor: bool,
         #[command(flatten)]
         output: OutputArgs,
     },
@@ -335,7 +346,9 @@ enum Commands {
     /// its own compensations). `--seq S` targets a specific event; `--count N`
     /// undoes N events from the start point, going older.
     Undo {
-        /// Undo the specific event at this seq (default: the most recent undoable event)
+        /// Undo the specific event at this seq - its position in this log, as
+        /// `ta history` lists it (not a watch cursor). Default: the most recent
+        /// undoable event.
         #[arg(long)]
         seq: Option<u64>,
         /// How many events to undo, walking back from the start point (default 1)
@@ -977,7 +990,11 @@ fn dispatch_store_command(command: Commands, store: &FileStore) -> Result<(), Dy
             json,
             toml: _,
         } => cmd_edit(store, &id, create, json),
-        Commands::Status { current, output } => cmd_status(store, current, &output),
+        Commands::Status {
+            current,
+            cursor,
+            output,
+        } => cmd_status(store, current, cursor, &output),
         Commands::Prime { output } => {
             cmd_prime(store, crate::scm::data_in_checkout(store), &output)
         }

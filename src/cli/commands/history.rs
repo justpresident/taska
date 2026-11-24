@@ -1,16 +1,17 @@
 //! `ta history` - the per-event log of matching tasks, oldest-first.
 //!
 //! A thin shell over [`crate::action::history`]: each event renders as a
-//! `[seq:N] <time> <op> <id>` header plus that event's `-`/`+` lines (the
-//! shared `format::state_diff` view `watch` and `undo` print), closed by the
-//! cursor - the `--since` a following `ta watch` continues from.
+//! `[seq:N] <time> <op> <id>` header (the event's position in this log, what
+//! `ta undo --seq` takes) plus that event's `-`/`+` lines (the shared
+//! `format::state_diff` view `watch` and `undo` print), closed by a `[cursor:N]`
+//! watch cursor - the `--since` a following `ta watch` continues from.
 
 use serde_json::{json, Value};
 
 use crate::action::history::{history, op_label, HistoryEntry, HistoryQuery};
 use crate::error::DynError;
 use crate::format::{
-    render_args, render_diff_lines, seq_tag, state_diff, task_ref, want_color, OutputArgs,
+    cursor_tag, render_args, render_diff_lines, seq_tag, state_diff, task_ref, want_color, OutputArgs,
 };
 use crate::storage::EventStore;
 
@@ -59,7 +60,7 @@ fn annotation(entry: &HistoryEntry) -> String {
 /// Header + diff per entry, blank-line separated, closed by the cursor.
 fn to_human(entries: &[HistoryEntry], cursor: u64, color: bool) -> String {
     if entries.is_empty() {
-        return format!("(no history)\n{}", seq_tag(cursor, color));
+        return format!("(no history)\n{}", cursor_tag(cursor, color));
     }
     let blocks: Vec<String> = entries
         .iter()
@@ -80,9 +81,9 @@ fn to_human(entries: &[HistoryEntry], cursor: u64, color: bool) -> String {
             }
         })
         .collect();
-    // A blank line keeps the closing cursor from reading as part of the last
-    // entry, whose header also starts with a `[seq:N]`.
-    format!("{}\n\n{}", blocks.join("\n\n"), seq_tag(cursor, color))
+    // A blank line keeps the closing `[cursor:N]` from reading as part of the
+    // last entry, whose header starts with that event's `[seq:N]`.
+    format!("{}\n\n{}", blocks.join("\n\n"), cursor_tag(cursor, color))
 }
 
 /// `{cursor, events: [{seq, timestamp, op, id, removed, added, undoes?, merge?}]}`.

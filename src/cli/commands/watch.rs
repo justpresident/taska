@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::action::watch::{poll, validate};
 use crate::error::DynError;
-use crate::format::{render_args, render_diff_lines, seq_tag, state_diff, want_color, OutputArgs};
+use crate::format::{cursor_tag, render_args, render_diff_lines, state_diff, want_color, OutputArgs};
 use crate::storage::EventStore;
 
 /// How often to re-check the log while blocking.
@@ -122,7 +122,7 @@ fn collect(
 }
 
 /// The changed tasks as human diff blocks: `id:` then the colored `-`/`+` lines,
-/// blocks separated by a blank line, closed by the `[seq:N]` cursor every
+/// blocks separated by a blank line, closed by the `[cursor:N]` cursor every
 /// mutation prints.
 fn watch_to_human(changed: &[ChangedTask], cursor: u64, color: bool) -> String {
     let blocks = changed
@@ -136,7 +136,7 @@ fn watch_to_human(changed: &[ChangedTask], cursor: u64, color: bool) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    format!("{blocks}\n{}", seq_tag(cursor, color))
+    format!("{blocks}\n{}", cursor_tag(cursor, color))
 }
 
 /// The snapshot as `{cursor, changes: [{id, removed, added}, ...]}`.

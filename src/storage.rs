@@ -25,6 +25,16 @@ use crate::model::{MutationEvent, TaskState, OP_KEY, REL_KEY, TARGET_KEY};
 pub type EventBuilder<'a> =
     dyn Fn(&[TaskState], &[MutationEvent]) -> Result<Vec<MutationEvent>, DynError> + 'a;
 
+/// What a verified append wrote: the events (empty = nothing to do), and the
+/// watch cursor the write leaves - the highest per-clone arrival number (see
+/// [`crate::arrival`]) over the log INCLUDING these events, taken under the same
+/// write lock as the append, so no other write can land between the two. It is
+/// the value `ta watch --since` takes; 0 when nothing was written.
+pub struct Appended {
+    pub events: Vec<MutationEvent>,
+    pub cursor: u64,
+}
+
 /// The persistence operations the application relies on.
 pub trait EventStore {
     /// The store's loaded configuration. On the trait so command handlers can
@@ -35,6 +45,12 @@ pub trait EventStore {
     fn load_baseline(&self) -> Result<Vec<TaskState>, DynError>;
     /// Read every event from the active mutation log.
     fn load_mutations(&self) -> Result<Vec<MutationEvent>, DynError>;
+    /// The per-clone arrival number of every event in `log` (see
+    /// [`crate::arrival`]) - the numbers cursors are made of. A store with no
+    /// arrivals file (the in-memory test store) uses each event's own seq.
+    fn arrivals(&self, log: &[MutationEvent]) -> Result<Vec<u64>, DynError> {
+        Ok(log.iter().map(|e| e.seq).collect())
+    }
     /// A cheap change fingerprint of the mutation log - `(len, mtime)` of the log
     /// file - so a poller (`watch`) can skip a full read+parse when nothing moved.
     /// `None` for a store that can't stat it (e.g. the in-memory test store), which
@@ -50,20 +66,27 @@ pub trait EventStore {
     /// lock, so the check can't race a concurrent writer (a TOCTOU that could,
     /// e.g., create the same task twice). This default is a non-atomic
     /// read->build->append, fine for single-threaded in-memory stores. Returns the
-    /// events written (empty = nothing to do).
-    fn append_checked(&self, build: &EventBuilder) -> Result<Vec<MutationEvent>, DynError> {
+    /// events written and the cursor the write leaves (see [`Appended`]).
+    fn append_checked(&self, build: &EventBuilder) -> Result<Appended, DynError> {
         let baseline = self.load_baseline()?;
         let log = self.load_mutations()?;
-        let events = build(&baseline, &log)?;
-        self.append_events(&events)?;
-        Ok(events)
+        let built = build(&baseline, &log)?;
+        if built.is_empty() {
+            return Ok(Appended { events: built, cursor: 0 });
+        }
+        self.append_events(&built)?;
+        let log = self.load_mutations()?;
+        let events = log[log.len() - built.len()..].to_vec();
+        let cursor = crate::arrival::cursor(&self.arrivals(&log)?);
+        Ok(Appended { events, cursor })
     }
     /// Replace the baseline with `baseline` and rewrite the log to contain
     /// exactly `retained` (the recent events kept for merge reconciliation).
     fn compact(&self, baseline: &[TaskState], retained: &[MutationEvent]) -> Result<(), DynError>;
-    /// Rewrite the mutation log to contain exactly `events`, leaving the baseline
+    /// Rewrite the mutation log to contain exactly `events`, returning the watch
+    /// cursor over the rewritten log (taken under the same lock), leaving the baseline
     /// untouched. Used to drop no-op (orphaned) events during `ta resolve`.
-    fn replace_mutations(&self, events: &[MutationEvent]) -> Result<(), DynError>;
+    fn replace_mutations(&self, events: &[MutationEvent]) -> Result<u64, DynError>;
 }
 
 /// The store directory walk-up discovery looks for and `ta init` creates.
@@ -287,8 +310,12 @@ impl FileStore {
 
 /// The `.gitignore` [`FileStore::provision`] writes into a data directory.
 fn gitignore_body() -> String {
-    format!("{CONFLICT_MARKER_FILE}\n")
+    format!("{CONFLICT_MARKER_FILE}\n{}\n", crate::arrival::ARRIVALS_FILE)
 }
+
+/// The ignore file `ta init` wrote before arrival numbers existed; upgraded to
+/// [`gitignore_body`] the first time the arrivals file is created.
+const LEGACY_GITIGNORE_BODY: &str = "merge-conflict.json\n";
 
 /// Whether two existing paths name the same directory, however each is spelled
 /// (relative, symlinked, `..`).
@@ -362,6 +389,20 @@ impl EventStore for FileStore {
         read_events(&self.mutations_path()?)
     }
 
+    fn arrivals(&self, log: &[MutationEvent]) -> Result<Vec<u64>, DynError> {
+        let dir = self.data_dir()?;
+        let path = dir.join(crate::arrival::ARRIVALS_FILE);
+        if !path.exists() {
+            // Per-clone state: keep it out of git before it first appears.
+            crate::arrival::ensure_ignored(
+                &dir.join(GITIGNORE_FILE),
+                &gitignore_body(),
+                LEGACY_GITIGNORE_BODY,
+            )?;
+        }
+        crate::arrival::arrivals(&path, log)
+    }
+
     fn log_fingerprint(&self) -> Option<(u64, std::time::SystemTime)> {
         let meta = fs::metadata(self.mutations_path().ok()?).ok()?;
         Some((meta.len(), meta.modified().ok()?))
@@ -403,15 +444,15 @@ impl EventStore for FileStore {
     /// log we can't fully read risks a duplicate seq. The baseline is read under
     /// the same lock; it is stable because [`FileStore::compact`] also holds this
     /// lock across its baseline swap.
-    fn append_checked(&self, build: &EventBuilder) -> Result<Vec<MutationEvent>, DynError> {
+    fn append_checked(&self, build: &EventBuilder) -> Result<Appended, DynError> {
         let mut locked_file =
             self.open_log_locked(OpenOptions::new().read(true).append(true).create(true))?;
 
-        let log = read_log_strict(&mut locked_file)?;
+        let mut log = read_log_strict(&mut locked_file)?;
         let baseline = self.load_baseline()?;
         let events = build(&baseline, &log)?;
         if events.is_empty() {
-            return Ok(events);
+            return Ok(Appended { events, cursor: 0 });
         }
         let start = log.iter().map(|e| e.seq).max().map_or(1, |m| m + 1);
         let mut sequenced = Vec::with_capacity(events.len());
@@ -422,7 +463,14 @@ impl EventStore for FileStore {
             sequenced.push(event);
         }
         locked_file.flush()?;
-        Ok(sequenced)
+        // Number the new events while the write lock is still held: nothing can
+        // land between this write and the cursor it reports.
+        log.extend(sequenced.iter().cloned());
+        let cursor = crate::arrival::cursor(&self.arrivals(&log)?);
+        Ok(Appended {
+            events: sequenced,
+            cursor,
+        })
     }
 
     /// Unlike normal writes this *does* rewrite the log - that is the whole
@@ -460,7 +508,7 @@ impl EventStore for FileStore {
     /// concurrent `append_events` can't slip an event in mid-rewrite. Unlike
     /// `compact` it never touches the baseline - dropping no-op orphans is
     /// state-neutral, so there is nothing to fold.
-    fn replace_mutations(&self, events: &[MutationEvent]) -> Result<(), DynError> {
+    fn replace_mutations(&self, events: &[MutationEvent]) -> Result<u64, DynError> {
         let mut locked_file = self.open_log_locked(
             OpenOptions::new()
                 .read(true)
@@ -475,7 +523,7 @@ impl EventStore for FileStore {
             writeln!(locked_file, "{}", serde_json::to_string(event)?)?;
         }
         locked_file.flush()?;
-        Ok(())
+        Ok(crate::arrival::cursor(&self.arrivals(events)?))
     }
 }
 

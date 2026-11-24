@@ -28,7 +28,8 @@ off it; the wall-clock `timestamp` is informational (only a tiebreaker for the
 so concurrent writers never collide. A seq is a *position in this branch's log*,
 not an identity: a merge restacks the events it brings in onto fresh seqs, so the
 same event can sit at different seqs on different branches. The merge therefore
-matches events by **content** (everything but `seq`).
+matches events by **content** (everything but `seq`), and `ta watch` cursors are
+per-clone **arrival** numbers rather than seqs (see "Seqs and cursors" below).
 
 `seq` is **strictly increasing but not necessarily contiguous**: a `git revert`
 that drops committed events leaves gaps, which is normal and supported. Only an
@@ -79,6 +80,28 @@ merged:       1 2 3   4(status=open) 5(owner=alice)   # theirs' 4 restacked to 5
 Matching by content (not by "everything above the ancestor's max seq") is what
 keeps an event that an *earlier* merge restacked onto a different seq from being
 mistaken for shared history and dropped, or counted as new and duplicated.
+
+### Seqs and cursors
+
+Because merges renumber, a seq can't serve as a resume point across merges. taska
+keeps two numbers apart, and labels them in every output:
+
+- **`[seq:N]`** - an event's position in this log. `ta history` lists events by
+  it, `ta history --since` and `ta undo --seq` take it, `ta status --current`
+  reports the high-water one.
+- **`[cursor:N]`** - a watch cursor: this clone's *arrival* number for the newest
+  event it holds. Each event is numbered (in `arrivals.jsonl` beside the log,
+  git-ignored) the first time this clone's log holds it, and keeps that number
+  however a merge renumbers its seq. Every mutation prints the cursor it leaves,
+  computed under the write lock; `ta watch --since` takes one and closes with
+  one; `ta history` closes with one; `ta status --cursor` reports one. So a
+  watch loop never skips an event a merge inserted below the old high-water seq,
+  nor repeats one it moved above it.
+
+When the clone doing the merge has nothing unpublished, ours (the published log)
+is unchanged and theirs is purely appended. Tools that sync a shared board (merge
+local commits *onto* the published branch, e.g. `git pull --rebase`) keep the
+published history's seqs stable for everyone.
 
 ### Conflicts and `on_conflict`
 

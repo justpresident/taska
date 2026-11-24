@@ -22,10 +22,11 @@ use crate::model::{
     is_done, parse_sort, task_cmp, MutationEvent, OpType, SortKey, TaskState, REL_KEY, TARGET_KEY,
 };
 use crate::schema::vet_events;
-use crate::storage::EventStore;
+use crate::storage::{Appended, EventStore};
 
-/// Add or remove the `name=target` edges on `task`, returning the number of
-/// stored edges actually written (0 = every edge was already present/absent).
+/// Add or remove the `name=target` edges on `task`, returning the stored edges
+/// actually written (none = every edge was already present/absent) and the watch
+/// cursor the write leaves (see [`crate::storage::Appended`]).
 ///
 /// Each `name` resolves to one or more canonical stored edges (typically one,
 /// but removing a symmetric edge clears both sides). The structural checks (one
@@ -38,7 +39,7 @@ pub fn apply_edges(
     edges: &[String],
     op: &OpType,
     types: &BTreeMap<String, RelationshipDef>,
-) -> Result<Vec<MutationEvent>, DynError> {
+) -> Result<Appended, DynError> {
     let removing = matches!(op, OpType::RemoveEdge);
     let mut resolved: Vec<(String, String, String)> = Vec::new();
     for edge in edges {
@@ -62,14 +63,14 @@ pub fn apply_edges(
     let blockers = store.config().relationships.blocker_types();
     let hierarchy = store.config().relationships.hierarchy_types();
     let config = store.config().clone();
-    let written = store.append_checked(&|baseline, log| {
+    let appended = store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
         if !removing {
             validate_blocker_additions(&resolved, &state, &blockers, &hierarchy)?;
         }
         vet_events(&events, &state, &config)
     })?;
-    Ok(written)
+    Ok(appended)
 }
 
 /// Reject blocker-edge additions that would break the structural invariants:

@@ -44,11 +44,12 @@ fn each_event_gets_its_own_diff_oldest_first() {
         out.contains("- status: todo"),
         "each event's own before: {out}"
     );
-    // Closed by the cursor a `watch --since` continues from.
-    let cursor = ta(&dir, &["status", "--current"]);
+    // Closed by the watch cursor a `watch --since` continues from - a
+    // `[cursor:N]`, never a `[seq:N]` (the entries' seqs are log positions).
+    let cursor = ta(&dir, &["status", "--cursor"]);
     assert_eq!(
         out.lines().last(),
-        Some(format!("[seq:{}]", cursor.trim()).as_str()),
+        Some(format!("[cursor:{}]", cursor.trim()).as_str()),
         "{out}"
     );
 }
@@ -164,7 +165,7 @@ fn an_empty_history_still_reports_the_cursor() {
     ta(&dir, &["create", "api", &st("todo")]);
     let out = ta(&dir, &["history", "--since", "1"]);
     assert!(
-        out.contains("(no history)") && out.contains("[seq:1]"),
+        out.contains("(no history)") && out.contains("[cursor:1]"),
         "{out}"
     );
 }

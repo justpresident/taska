@@ -3,9 +3,12 @@
 //!
 //! The counts come from [`crate::action::status`]; this file is just their
 //! presentation (the aligned human table and the JSON object), with the read's
-//! `seq` cursor as a trailing `Seq` line / `seq` field. `--current` is a separate,
-//! state-free shortcut: it prints ONLY that `seq` (the cursor `ta watch --since`
-//! takes) and skips materialization entirely.
+//! high-water `seq` as a trailing `Seq` line / `seq` field. Two state-free
+//! shortcuts skip materialization: `--current` prints ONLY that `seq` (a log
+//! position: what `ta history --since` and `ta undo --seq` speak), and `--cursor`
+//! prints ONLY the watch cursor (this clone's highest arrival number, see
+//! [`crate::arrival`]) - the value `ta watch --since` takes. They differ once a
+//! merge has restacked the log.
 
 use serde_json::Value;
 
@@ -18,16 +21,31 @@ use crate::storage::EventStore;
 pub fn cmd_status(
     store: &impl EventStore,
     current: bool,
+    cursor: bool,
     output: &OutputArgs,
 ) -> Result<(), DynError> {
-    // `--current`: just the log's high-water `seq` (the cursor `ta watch --since`
-    // takes), without materializing state. 0 on an empty log.
+    // `--current`: just the log's high-water `seq` (a log position, NOT a watch
+    // cursor), without materializing state. 0 on an empty log.
     if current {
         let seq = store.load_mutations()?.last().map_or(0, |e| e.seq);
         for line in render_args(
             output,
             || seq.to_string(),
             || serde_json::json!({ "seq": seq }),
+        ) {
+            println!("{line}");
+        }
+        return Ok(());
+    }
+    // `--cursor`: just the watch cursor - this clone's highest arrival number -
+    // for a watcher that starts without writing first. 0 on an empty log.
+    if cursor {
+        let log = store.load_mutations()?;
+        let cursor = crate::arrival::cursor(&store.arrivals(&log)?);
+        for line in render_args(
+            output,
+            || cursor.to_string(),
+            || serde_json::json!({ "cursor": cursor }),
         ) {
             println!("{line}");
         }
@@ -50,7 +68,7 @@ pub fn cmd_status(
 
 /// Human summary: an aligned `Total`, a per-status block (sorted, with an
 /// `(unset)` bucket last), the computed `Ready`/`Blocked`/`Closed` lines, then the
-/// log's high-water `Seq` (the cursor a `ta watch --since` loop takes). Labels are
+/// log's high-water `Seq` (a log position, not a watch cursor). Labels are
 /// bolded when `color`.
 fn render_status_human(s: &StatusSummary, seq: u64, color: bool) -> String {
     // Per-status rows, indented; the no-status bucket sorts last under `(unset)`.
@@ -114,7 +132,7 @@ fn render_status_human(s: &StatusSummary, seq: u64, color: bool) -> String {
 }
 
 /// The summary as a JSON object (a single value; `render_args` renders it for
-/// json/jsonl). `seq` is the log's high-water cursor. Keys serialize in sorted
+/// json/jsonl). `seq` is the log's high-water seq (not a watch cursor). Keys serialize in sorted
 /// order - deterministic for scripting.
 fn status_to_json_value(s: &StatusSummary, seq: u64) -> Value {
     let by_status: serde_json::Map<String, Value> = s

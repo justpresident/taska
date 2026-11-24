@@ -7,7 +7,7 @@
 use crate::action::undo::{apply, plan};
 use crate::cli::confirm;
 use crate::error::DynError;
-use crate::format::{render_state_diff, seq_tag, want_color};
+use crate::format::{cursor_tag, render_state_diff, want_color};
 use crate::storage::FileStore;
 
 /// Undo event(s), walking back through real history.
@@ -54,7 +54,7 @@ pub fn cmd_undo(
         return Ok(());
     }
 
-    apply(store, &undo)?;
+    let cursor = apply(store, &undo)?;
     if undo.rewrites_committed_history {
         eprintln!(
             "DANGER: --remove deleted committed event(s), rewriting shared history. \
@@ -62,7 +62,6 @@ pub fn cmd_undo(
              the removed events were never pushed or pulled elsewhere."
         );
     }
-    let seq = undo.last_seq();
-    println!("{} Undone.", seq_tag(seq, color));
+    println!("{} Undone.", cursor_tag(cursor, color));
     Ok(())
 }

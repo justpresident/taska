@@ -22,9 +22,9 @@ use crate::storage::EventStore;
 pub struct Session {
     pub state: HashMap<String, TaskState>,
     pub warnings: Vec<Warning>,
-    /// The log's high-water `seq` at read time - the cursor this state is as-of
-    /// (0 on an empty store). The same value `status --current` prints and a
-    /// `ta watch --since` loop advances.
+    /// The log's high-water `seq` at read time - the log position this state is
+    /// as-of (0 on an empty store), the value `status --current` prints. A log
+    /// position, NOT a watch cursor (see [`crate::arrival`]).
     pub seq: u64,
 }
 
@@ -60,7 +60,7 @@ pub fn read(store: &impl EventStore) -> Result<Session, DynError> {
     let baseline = store.load_baseline()?;
     let mutations = store.load_mutations()?;
     // The log is strictly increasing by `seq`, so the last event carries the
-    // high-water mark - the cursor this read is as-of.
+    // high-water mark - the log position this read is as-of.
     let seq = mutations.last().map_or(0, |e| e.seq);
     let (mut state, orphans) =
         Engine::materialize_report(baseline, mutations, &config.workflow.closed_statuses);

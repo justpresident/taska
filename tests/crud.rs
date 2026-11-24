@@ -940,14 +940,15 @@ fn every_mutation_reports_its_cursor() {
     let dir = fresh_dir("mutation-cursor");
     init_renamed_open(&dir);
 
-    // Every write prints the `[seq:N]` cursor `ta watch --since` and
-    // `ta status --current` speak, so an agent can chain them without a
-    // follow-up `status` call - and prints it the same way whichever verb wrote.
+    // Every write prints the `[cursor:N]` watch cursor it leaves - what
+    // `ta watch --since` and `ta status --cursor` speak - so an agent can chain a
+    // watch onto its own write with nothing slipping in between, and prints it
+    // the same way whichever verb wrote. It is a cursor, never a `[seq:N]`.
     let seq_of = |out: &str| -> u64 {
         let tag = out
-            .split("[seq:")
+            .split("[cursor:")
             .nth(1)
-            .unwrap_or_else(|| panic!("no `[seq:N]` cursor in output: {out:?}"));
+            .unwrap_or_else(|| panic!("no `[cursor:N]` in output: {out:?}"));
         tag.split(']')
             .next()
             .and_then(|n| n.parse().ok())
@@ -980,12 +981,12 @@ fn every_mutation_reports_its_cursor() {
     // must not invent one.
     let noop_update = ta(&dir, &["update", "a", "note=x"]);
     assert!(
-        !noop_update.contains("[seq:"),
+        !noop_update.contains("[cursor:"),
         "a no-op update reports no cursor: {noop_update:?}"
     );
     let noop_dep = ta(&dir, &["dep", "remove", "a", &format!("{BLOCKER}=b")]);
     assert!(
-        !noop_dep.contains("[seq:"),
+        !noop_dep.contains("[cursor:"),
         "a no-op dep remove reports no cursor: {noop_dep:?}"
     );
 

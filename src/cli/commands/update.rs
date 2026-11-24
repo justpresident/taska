@@ -2,7 +2,7 @@
 
 use crate::cli::parse_field_ops;
 use crate::error::DynError;
-use crate::format::{seq_tag, task_ref, want_color};
+use crate::format::{cursor_tag, task_ref, want_color};
 use crate::schema::{canonicalize_field_pairs, canonicalize_fields};
 use crate::storage::EventStore;
 
@@ -30,10 +30,9 @@ pub fn cmd_update(
     if outcome.written.is_empty() {
         println!("{} already up to date - no changes", task_ref(id, color));
     } else {
-        let seq = outcome.written.last().map_or(0, |e| e.seq);
         println!(
             "{} Updated task {}",
-            seq_tag(seq, color),
+            cursor_tag(outcome.cursor, color),
             task_ref(id, color)
         );
     }

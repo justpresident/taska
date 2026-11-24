@@ -110,8 +110,8 @@ pub fn cmd_dep_group(
 }
 
 /// Add or remove the `name=target` edges via [`crate::action::dep::apply_edges`],
-/// reporting how many stored edges changed - with the `[seq:N]` cursor every
-/// other mutation prints, since this is a write like any other.
+/// reporting how many stored edges changed - with the `[cursor:N]` every other
+/// mutation prints, since this is a write like any other.
 fn dep_write(
     store: &impl EventStore,
     task: &str,
@@ -122,11 +122,11 @@ fn dep_write(
 ) -> Result<(), DynError> {
     let written = crate::action::dep::apply_edges(store, task, edges, op, types)?;
     let color = crate::format::want_color(false);
-    if let Some(last) = written.last() {
+    if !written.events.is_empty() {
         println!(
             "{} {verb} {} edge(s) on {}",
-            crate::format::seq_tag(last.seq, color),
-            written.len(),
+            crate::format::cursor_tag(written.cursor, color),
+            written.events.len(),
             crate::format::task_ref(task, color)
         );
     } else {

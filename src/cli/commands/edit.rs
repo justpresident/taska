@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 use crate::action::edit::{EditForm, EditMode, Preview};
 use crate::cli::{confirm, confirm_with_default};
 use crate::error::DynError;
-use crate::format::{seq_tag, task_ref, want_color};
+use crate::format::{cursor_tag, task_ref, want_color};
 use crate::storage::EventStore;
 
 pub fn cmd_edit(
@@ -86,18 +86,17 @@ pub fn cmd_edit(
     // append through the shared write path.
     let outcome = form.apply(store, payload, allow_new_fields)?;
     // The gate can still drop every event as a no-op (a value another writer
-    // already set, say), and a write that didn't happen has no seq to report.
-    let Some(last) = outcome.written.last() else {
+    // already set, say), and a write that didn't happen has no cursor to report.
+    if outcome.written.is_empty() {
         println!("{}", nothing_written(mode, id));
         return Ok(());
-    };
-    let seq = last.seq;
+    }
     let color = want_color(false);
     let verb = match mode {
         EditMode::Update => "Updated task",
         EditMode::Create => "Created task",
     };
-    println!("{} {verb} {}", seq_tag(seq, color), task_ref(id, color));
+    println!("{} {verb} {}", cursor_tag(outcome.cursor, color), task_ref(id, color));
     Ok(())
 }
 

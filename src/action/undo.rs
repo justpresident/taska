@@ -319,10 +319,10 @@ fn select_targets(
     Ok(selected)
 }
 
-/// Apply a planned undo: rewrite the log to the planned result.
-pub fn apply(store: &FileStore, plan: &UndoPlan) -> Result<(), DynError> {
-    store.replace_mutations(&plan.new_log)?;
-    Ok(())
+/// Apply a planned undo: rewrite the log to the planned result, returning the
+/// watch cursor the rewrite leaves (taken under the same lock).
+pub fn apply(store: &FileStore, plan: &UndoPlan) -> Result<u64, DynError> {
+    store.replace_mutations(&plan.new_log)
 }
 
 /// Produce DRAFT events (seq 0; the caller assigns real seqs) that transform the

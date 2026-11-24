@@ -25,12 +25,14 @@ use crate::storage::EventStore;
 
 /// The result of a write.
 ///
-/// The events actually appended (empty = nothing changed), and the brand-new
-/// field names the write introduced (for the redundant `--new-field` warning -
+/// The events actually appended (empty = nothing changed), the watch cursor the
+/// write leaves (see [`crate::storage::Appended`]; 0 when nothing was written),
+/// and the brand-new field names the write introduced (for the redundant `--new-field` warning -
 /// non-empty only when `allow_new_fields` let them in, or the store was empty
 /// under the typo-guard grace).
 pub struct WriteOutcome {
     pub written: Vec<MutationEvent>,
+    pub cursor: u64,
     pub new_fields: Vec<String>,
 }
 
@@ -51,7 +53,7 @@ pub fn create(
     let draft = create_draft(store.config(), id, payload);
     let config = store.config().clone();
     let new_fields = RefCell::new(Vec::new());
-    let written = store.append_checked(&|baseline, log| {
+    let appended = store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
         let mut events = vec![draft.clone()];
         coerce_event_fields(&mut events, raw, &state, &config);
@@ -62,7 +64,8 @@ pub fn create(
         Ok(out)
     })?;
     Ok(WriteOutcome {
-        written,
+        written: appended.events,
+        cursor: appended.cursor,
         new_fields: new_fields.into_inner(),
     })
 }
@@ -106,7 +109,7 @@ pub fn update(
 ) -> Result<WriteOutcome, DynError> {
     let config = store.config().clone();
     let new_fields = RefCell::new(Vec::new());
-    let written = store.append_checked(&|baseline, log| {
+    let appended = store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
         let introduced = ops
             .set
@@ -122,7 +125,8 @@ pub fn update(
         Ok(out)
     })?;
     Ok(WriteOutcome {
-        written,
+        written: appended.events,
+        cursor: appended.cursor,
         new_fields: new_fields.into_inner(),
     })
 }
@@ -139,13 +143,14 @@ pub fn delete(
 ) -> Result<WriteOutcome, DynError> {
     let draft = MutationEvent::new(OpType::Delete, id, Map::new());
     let config = store.config().clone();
-    let written = store.append_checked(&|baseline, log| {
+    let appended = store.append_checked(&|baseline, log| {
         let state = materialize(&config, baseline, log);
         ensure_guard(&state, log, std::iter::empty(), id, guard, &config)?;
         vet_events(std::slice::from_ref(&draft), &state, &config)
     })?;
     Ok(WriteOutcome {
-        written,
+        written: appended.events,
+        cursor: appended.cursor,
         new_fields: Vec::new(),
     })
 }

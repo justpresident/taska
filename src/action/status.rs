@@ -33,8 +33,9 @@ pub struct StatusSummary {
     pub closed: usize,
 }
 
-/// A `status` read: the summary, the log's high-water `seq` (the cursor the state
-/// is as-of), plus any read [`Warning`]s.
+/// A `status` read: the summary, the log's high-water `seq` the state is as-of
+/// (a log position - see [`crate::arrival`] for the watch cursor, which is
+/// not a seq), plus any read [`Warning`]s.
 pub struct StatusOutcome {
     pub summary: StatusSummary,
     pub seq: u64,

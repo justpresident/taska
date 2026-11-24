@@ -35,16 +35,25 @@ const SGR_ID: &str = "36"; // cyan
 const SGR_STATUS: &str = "32"; // green
 const SGR_DONE: &str = "2"; // dim - reserved for "this task is done/inactive"
 const SGR_GATING: &str = "1"; // bold
-/// Grey, for the `[seq:N]` cursor. Deliberately NOT `SGR_DONE`: dim carries the
-/// "inactive" meaning everywhere else, and a dim prefix on a fresh mutation would
-/// read as if the task it names were already closed.
+/// Grey, for the `[seq:N]` and `[cursor:N]` tags. Deliberately NOT `SGR_DONE`:
+/// dim carries the "inactive" meaning everywhere else, and a dim prefix on a
+/// fresh mutation would read as if the task it names were already closed.
 const SGR_SEQ: &str = "90"; // bright black / grey
 
-/// The `[seq:N]` cursor a write command prints - the value `ta watch --since`
-/// and `ta status --current` speak. Metadata about the log rather than about the
+/// A `[seq:N]` tag: an event's position in THIS log - what `ta history` lists,
+/// `ta status --current` reports, and `ta undo --seq` takes. Merges can renumber
+/// seqs, so a seq is never a watch cursor. Metadata about the log rather than the
 /// task, so it is grey and stays out of the way of the line it prefixes.
 pub(crate) fn seq_tag(seq: u64, color: bool) -> String {
     sgr(&format!("[seq:{seq}]"), SGR_SEQ, color)
+}
+
+/// A `[cursor:N]` tag: a watch cursor - this clone's highest arrival number (see
+/// [`crate::arrival`]) at the moment of a read or write. Every mutation prints the
+/// cursor it leaves, and `ta watch --since` takes it: nothing that lands later can
+/// be skipped, however merges renumber seqs. Grey like [`seq_tag`].
+pub(crate) fn cursor_tag(cursor: u64, color: bool) -> String {
+    sgr(&format!("[cursor:{cursor}]"), SGR_SEQ, color)
 }
 
 /// A task id inside a prose line - a write command's confirmation - painted the

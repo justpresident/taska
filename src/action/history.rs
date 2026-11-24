@@ -9,9 +9,12 @@
 //! what `list <filter>` shows - except that a computed column (a timestamp,
 //! `unblocks`/`blocked_by`/`subtasks`) is rejected as a filter, since the
 //! replayed state never stores one. The frontend renders the per-field diff
-//! (`format::state_diff`, shared with `watch`/`undo`). The returned `cursor` is
-//! the log's high-water seq, so a caller can catch up with `history` and
-//! continue with `watch --since cursor` with nothing skipped or repeated.
+//! (`format::state_diff`, shared with `watch`/`undo`). Events are identified by
+//! their `seq` (what `undo --seq` takes) and `since` is a seq. The returned
+//! `cursor` is instead a WATCH cursor - this clone's highest arrival number (see
+//! [`crate::arrival`]) - so a caller can catch up with `history` and continue
+//! with `watch --since cursor` with nothing skipped or repeated, even across
+//! merges.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -65,8 +68,8 @@ pub struct HistoryEntry {
     pub merge_strategy: Option<String>,
 }
 
-/// A `history` read: the matching events oldest-first, the cursor they run up
-/// to, and - when compaction has folded older events into the baseline - the
+/// A `history` read: the matching events oldest-first, the watch cursor they run
+/// up to (an arrival number, not a seq), and - when compaction has folded older events into the baseline - the
 /// last seq that history can no longer show.
 pub struct HistoryOutcome {
     pub cursor: u64,
@@ -83,7 +86,7 @@ pub fn history(store: &impl EventStore, query: &HistoryQuery) -> Result<HistoryO
     let config = store.config();
     let baseline = store.load_baseline()?;
     let log = store.load_mutations()?;
-    let cursor = log.last().map_or(0, |e| e.seq);
+    let cursor = crate::arrival::cursor(&store.arrivals(&log)?);
     // The watermark: everything at or below it lives only in the baseline.
     let watermark = log.first().map_or(0, |e| e.seq.saturating_sub(1));
     if let Some(since) = query.since {

@@ -24,6 +24,7 @@
 )]
 
 pub mod action;
+pub mod arrival;
 pub mod cli;
 pub mod config;
 pub mod engine;

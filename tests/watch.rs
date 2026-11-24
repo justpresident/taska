@@ -40,10 +40,10 @@ fn watch_reports_matching_changes_since_the_cursor() {
         stdout.contains("+ status: needs-review"),
         "shows the current status as added: {stdout}"
     );
-    let current = ta(&dir, &["status", "--current"]);
+    let current = ta(&dir, &["status", "--cursor"]);
     assert_eq!(
         stdout.lines().last(),
-        Some(format!("[seq:{}]", current.trim()).as_str()),
+        Some(format!("[cursor:{}]", current.trim()).as_str()),
         "the diff closes with the cursor it covers: {stdout}"
     );
 }
@@ -56,7 +56,7 @@ fn watch_times_out_with_exit_1_when_nothing_matches() {
     init_repo(&dir);
     ta(&dir, &["init", "--no-commit"]);
     ta(&dir, &["create", "a"]);
-    let since = ta(&dir, &["status", "--current"]);
+    let since = ta(&dir, &["status", "--cursor"]);
 
     let out = run(
         ta_bin(),
@@ -118,7 +118,7 @@ fn watch_reports_a_deleted_matching_task() {
     ta(&dir, &["init", "--no-commit"]);
     ta(&dir, &["create", "gone"]);
     ta(&dir, &["update", "gone", "status=needs-review"]);
-    let since = ta(&dir, &["status", "--current"]); // cursor after it matches
+    let since = ta(&dir, &["status", "--cursor"]); // cursor after it matches
     ta(&dir, &["delete", "gone"]);
 
     let out = run(
@@ -173,7 +173,7 @@ fn watch_json_emits_structured_deltas() {
     assert!(out.status.success(), "exit 0");
     let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&out.stdout))
         .expect("watch --format json is valid JSON");
-    let current = ta(&dir, &["status", "--current"]);
+    let current = ta(&dir, &["status", "--cursor"]);
     assert_eq!(v["cursor"].to_string(), current.trim(), "cursor: {v}");
     let arr = v["changes"].as_array().expect("a changes array");
     let entry = arr
@@ -256,7 +256,7 @@ fn watch_reports_a_task_leaving_the_filter() {
     ta(&dir, &["init", "--no-commit"]);
     ta(&dir, &["create", "a", "status=in_progress"]);
     ta(&dir, &["create", "other", "status=todo"]);
-    let since = ta(&dir, &["status", "--current"]);
+    let since = ta(&dir, &["status", "--cursor"]);
     ta(&dir, &["update", "a", "status=closed"]);
     ta(&dir, &["update", "other", "status=closed"]); // never matched
 
@@ -300,7 +300,7 @@ fn watch_columns_narrow_both_trigger_and_diff() {
     init_repo(&dir);
     ta(&dir, &["init", "--no-commit"]);
     ta(&dir, &["create", "a", "status=todo", "notes=start"]);
-    let since = ta(&dir, &["status", "--current"]);
+    let since = ta(&dir, &["status", "--cursor"]);
     let watch = |since: &str| {
         run(
             ta_bin(),
@@ -357,7 +357,7 @@ fn watch_columns_deps_reports_edge_changes() {
     ta(&dir, &["init", "--no-commit"]);
     ta(&dir, &["create", "a", "status=todo"]);
     ta(&dir, &["create", "b", "status=todo"]);
-    let since = ta(&dir, &["status", "--current"]);
+    let since = ta(&dir, &["status", "--cursor"]);
     ta(&dir, &["update", "a", "status=in_progress"]);
     ta(&dir, &["dep", "add", "a", "depends_on=b"]);
 
@@ -422,4 +422,59 @@ fn watch_columns_rejects_unwatchable_names_up_front() {
             "rejected before blocking"
         );
     }
+}
+
+/// Regression: a merge on ANOTHER clone restacks this clone's events above the
+/// other side's, so after this clone pulls that merge, the other side's event sits
+/// at a seq at or below what this clone's high-water seq was. The watch cursor is
+/// an arrival number, not a seq, so `watch --since <cursor>` still reports that
+/// event exactly once, and does not re-report this clone's own already-seen event
+/// just because its seq moved.
+///
+///   A (clone):  base@1, then + a1     -> base@1 a1@2
+///   B (clone of A at base): + b1      -> base@1 b1@2   cursor on B covers b1
+///   A pulls B (merge, A is ours)      -> base@1 a1@2 b1@3   (b1 restacked)
+///   B pulls A (fast-forward)
+///   watch --since <B's cursor> on B: a1 is the only unseen change
+#[test]
+fn watch_reports_events_merged_in_below_the_cursor() {
+    let root = fresh_dir("watch-merge-below-cursor");
+    let a = root.join("a");
+    let b = root.join("b");
+    std::fs::create_dir_all(&a).unwrap();
+    init_repo(&a);
+    ta(&a, &["init", "--no-commit"]);
+    ta(&a, &["create", "base"]);
+    git(&a, &["add", "-A"]);
+    git(&a, &["commit", "-qm", "init"]);
+    git(&root, &["clone", "-q", a.to_str().unwrap(), b.to_str().unwrap()]);
+    git(&b, &["config", "user.email", "test@taska.dev"]);
+    git(&b, &["config", "user.name", "Taska Test"]);
+    ta(&b, &["status"]); // registers the merge driver in the clone
+
+    ta(&a, &["create", "a1"]);
+    git(&a, &["commit", "-aqm", "a1 on A"]);
+
+    let wrote = ta(&b, &["create", "b1"]);
+    git(&b, &["commit", "-aqm", "b1 on B"]);
+    let cursor = wrote
+        .split("[cursor:")
+        .nth(1)
+        .and_then(|t| t.split(']').next())
+        .expect("a write prints its cursor")
+        .to_string();
+
+    // A pulls B: b1 is restacked above a1.
+    git(&a, &["pull", "-q", "--no-rebase", "--no-edit", b.to_str().unwrap(), "main"]);
+    // B pulls A's merge (a fast-forward).
+    git(&b, &["pull", "-q", "--ff-only", a.to_str().unwrap(), "main"]);
+
+    let out = run(
+        ta_bin(),
+        &b,
+        &["watch", "--since", &cursor, "--timeout", "3s", "--holdout", "0s"],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("a1:"), "a1 merged in below the cursor was skipped:\n{stdout}");
+    assert!(!stdout.contains("b1:"), "b1 was already seen at the cursor but re-reported:\n{stdout}");
 }
