@@ -36,8 +36,8 @@ pub fn cmd_undo(
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(
             "`ta undo` runs only in an interactive terminal: it is a convenience for \
-                    humans. To correct a mistake from a script or an agent, write the right \
-                    value with `ta update` (or `ta dep`) instead."
+             humans. To correct a mistake from a script or an agent, write the right \
+             value with `ta update` (or `ta dep`) instead."
                 .into(),
         );
     }

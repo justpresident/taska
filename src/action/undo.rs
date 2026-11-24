@@ -8,8 +8,8 @@
 //! committed or buried targets are reversed by appended compensations tagged
 //! `_undoes=<seq>` (the mark that records an original as undone). `apply` writes
 //! that log. Takes a concrete [`FileStore`]: it inspects the SCM
-//! ([`crate::scm::committed_mutation_count`], git or hg) and rewrites the log via
-//! `replace_mutations`.
+//! ([`crate::scm::committed_mutation_count`], git or hg) and rewrites the log
+//! under its lock via [`FileStore::rewrite_mutations`].
 
 use std::collections::{HashMap, HashSet};
 

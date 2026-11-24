@@ -132,8 +132,8 @@ fn render_status_human(s: &StatusSummary, seq: u64, color: bool) -> String {
 }
 
 /// The summary as a JSON object (a single value; `render_args` renders it for
-/// json/jsonl). `seq` is the log's high-water seq (not a watch cursor). Keys serialize in sorted
-/// order - deterministic for scripting.
+/// json/jsonl). `seq` is the log's high-water seq (not a watch cursor). Keys
+/// serialize in sorted order - deterministic for scripting.
 fn status_to_json_value(s: &StatusSummary, seq: u64) -> Value {
     let by_status: serde_json::Map<String, Value> = s
         .by_status

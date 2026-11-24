@@ -16,9 +16,10 @@
 //! The numbers live in [`ARRIVALS_FILE`] beside the log in the store's data
 //! directory. They are per-clone by definition, so the file is never committed:
 //! it is one of [`crate::storage::PER_CLONE_FILES`], which
-//! [`crate::scm::ensure_ignored`] keeps in the SCM's ignore files. On a store that has no file yet, the existing events are
-//! seeded with their own seqs, so cursors handed out before this file existed
-//! stay valid; a log that has never been merged keeps arrival == seq.
+//! [`crate::scm::ensure_ignored`] keeps in the SCM's ignore files. On a store
+//! that has no file yet, the existing events are seeded with their own seqs, so
+//! cursors handed out before this file existed stay valid; a log that has never
+//! been merged keeps arrival == seq.
 //!
 //! The cursor is the file's HIGH-WATER arrival number, not the highest number of
 //! an event still in the log, so it never goes backwards: when events leave the

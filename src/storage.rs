@@ -95,8 +95,10 @@ pub trait EventStore {
     /// exactly `retained` (the recent events kept for merge reconciliation).
     fn compact(&self, baseline: &[TaskState], retained: &[MutationEvent]) -> Result<(), DynError>;
     /// Rewrite the mutation log to contain exactly `events`, returning the watch
-    /// cursor over the rewritten log (taken under the same lock), leaving the baseline
-    /// untouched. Used to drop no-op (orphaned) events during `ta resolve`.
+    /// cursor over the rewritten log (taken under the same lock), leaving the
+    /// baseline untouched. A rewrite computed from an earlier read - previewed,
+    /// then confirmed - goes through [`FileStore::rewrite_mutations`] instead,
+    /// which re-reads the log under the lock.
     fn replace_mutations(&self, events: &[MutationEvent]) -> Result<u64, DynError>;
 }
 

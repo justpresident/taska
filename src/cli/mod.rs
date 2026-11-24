@@ -108,10 +108,10 @@ enum Commands {
         /// Apply ONLY if the task currently matches every condition (the `ta list`
         /// filter grammar, minus computed columns, with equality spelled `==` -
         /// a bare `=` assigns), e.g. `--if status==todo --if owner==`. One
-        /// condition per `--if`. Checked atomically under the store lock (compare-and-swap):
-        /// if it doesn't hold, the write is rejected with exit code 3 - so agents
-        /// can race to claim a task and exactly one wins. Repeatable (all must
-        /// hold).
+        /// condition per `--if`. Checked atomically under the store lock
+        /// (compare-and-swap): if it doesn't hold, the write is rejected with exit
+        /// code 3 - so agents can race to claim a task and exactly one wins.
+        /// Repeatable (all must hold).
         #[arg(long = "if", value_name = "COND", add = ArgValueCompleter::new(complete::criteria))]
         guard: Vec<String>,
     },

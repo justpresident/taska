@@ -42,9 +42,9 @@ pub struct WatchPoll {
 
 /// The tasks that changed since `since` and match the filter, plus the cursor.
 ///
-/// Changed = touched by an event whose arrival number is `> since`; each comes with its
-/// before/after state (ordered by id). `updates` is empty when nothing new
-/// matches.
+/// Changed = touched by an event whose arrival number is `> since`; each comes
+/// with its before/after state (ordered by id). `updates` is empty when nothing
+/// new matches.
 ///
 /// A touched task is reported if it matched the filter at the cursor OR matches
 /// now, so leaving the filtered set is reported like entering it: `status=x`

@@ -2,8 +2,9 @@
 //! and the log's orphaned events.
 //!
 //! This one takes a concrete [`FileStore`]: the merge marker is a file in the
-//! data directory and pruning rewrites the log via `replace_mutations`, neither of
-//! which the [`EventStore`] trait exposes. `plan` only reads; `apply` performs
+//! data directory and pruning rewrites the log under its lock via
+//! [`FileStore::rewrite_mutations`], neither of which the [`EventStore`] trait
+//! exposes. `plan` only reads; `apply` performs
 //! the side effects a frontend has decided on (clear the marker, drop the
 //! confirmed orphans).
 

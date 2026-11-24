@@ -27,9 +27,9 @@ use crate::storage::EventStore;
 ///
 /// The events actually appended (empty = nothing changed), the watch cursor the
 /// write leaves (see [`crate::storage::Appended`]; 0 when nothing was written),
-/// and the brand-new field names the write introduced (for the redundant `--new-field` warning -
-/// non-empty only when `allow_new_fields` let them in, or the store was empty
-/// under the typo-guard grace).
+/// and the brand-new field names the write introduced (for the redundant
+/// `--new-field` warning - non-empty only when `allow_new_fields` let them in,
+/// or the store was empty under the typo-guard grace).
 pub struct WriteOutcome {
     pub written: Vec<MutationEvent>,
     pub cursor: u64,
