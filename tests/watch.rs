@@ -175,6 +175,14 @@ fn watch_json_emits_structured_deltas() {
         .expect("watch --format json is valid JSON");
     let current = ta(&dir, &["status", "--cursor"]);
     assert_eq!(v["cursor"].to_string(), current.trim(), "cursor: {v}");
+    // Each change leads with its id, so a reader that truncates a long change
+    // (a new task carries every field in `added`) still knows which task it is.
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let change = &raw[raw.find("\"changes\"").expect("changes key")..];
+    assert!(
+        change.find("\"id\"") < change.find("\"added\""),
+        "id must come before added: {raw}"
+    );
     let arr = v["changes"].as_array().expect("a changes array");
     let entry = arr
         .iter()

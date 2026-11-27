@@ -60,7 +60,24 @@ pub fn content_key(event: &MutationEvent) -> String {
             }
         }
     }
-    value.to_string()
+    sorted(value).to_string()
+}
+
+/// `value` with every object's keys in sorted order, recursively. Maps keep
+/// insertion order (serde_json's `preserve_order`, so output reads in the order
+/// it was built - `id` first in `watch` JSON), but an event's identity must not
+/// depend on the order its fields were written in. Sorted is also the order
+/// `content_key` produced before, so existing arrival digests stay valid.
+fn sorted(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(entries.into_iter().map(|(k, v)| (k, sorted(v))).collect())
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
+        other => other,
+    }
 }
 
 /// A short, stable digest of [`content_key`] for the arrivals file: 64-bit
@@ -239,6 +256,21 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir.join(ARRIVALS_FILE)
+    }
+
+    #[test]
+    fn content_key_ignores_the_order_fields_were_written_in() {
+        let mut a = ev(1, 0, "t");
+        let mut b = a.clone();
+        a.payload = Map::new();
+        a.payload.insert("title".into(), "x".into());
+        a.payload.insert("owner".into(), "me".into());
+        b.payload = Map::new();
+        b.payload.insert("owner".into(), "me".into());
+        b.payload.insert("title".into(), "x".into());
+        assert_ne!(serde_json::to_string(&a).unwrap(), serde_json::to_string(&b).unwrap());
+        assert_eq!(content_key(&a), content_key(&b));
+        assert!(content_key(&a).find("\"owner\"") < content_key(&a).find("\"title\""));
     }
 
     #[test]
